@@ -1,0 +1,34 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(flutter build macos --debug)",
+      "Bash(~/.zshrc)",
+      "Bash(source ~/.zshrc)",
+      "Bash(flutter analyze --no-fatal-infos)",
+      "Bash(flutter pub get)",
+      "Bash(ffmpeg -i /Users/maugliera/aquaria/app_flutter/aquaria_app/assets/images/clownie-random.mp4 -c copy -an /Users/maugliera/aquaria/app_flutter/aquaria_app/assets/images/clownie-random-silent.mp4 -y)",
+      "Bash(brew list ffmpeg)",
+      "Read(//opt/homebrew/bin/**)",
+      "Bash(xcodebuild -showsdks)",
+      "Bash(xcrun simctl list devices available)",
+      "Bash(ls -lh /Users/maugliera/aquaria/app_flutter/aquaria_app/assets/images/*.mp4)",
+      "Bash(/opt/homebrew/bin/ffmpeg -i /Users/maugliera/Downloads/clownie-random.mp4 -filter_complex \"[0:v]setpts=2.5*PTS[slow];[slow]reverse[rev];[slow][rev]concat=n=2:v=1[out]\" -map \"[out]\" -vcodec libx264 -crf 28 -preset slow -an -movflags +faststart -y /Users/maugliera/aquaria/app_flutter/aquaria_app/assets/images/clownie-random-silent.mp4)",
+      "Bash(/opt/homebrew/bin/ffprobe -v quiet -show_entries format=duration -of csv=p=0 /Users/maugliera/aquaria/app_flutter/aquaria_app/assets/images/clownie-random-silent.mp4)",
+      "Bash(/opt/homebrew/bin/ffmpeg -i /Users/maugliera/Downloads/clownie-random.mp4 -filter_complex \"[0:v]split[fwd][tmp];[tmp]reverse[rev];[fwd][rev]concat=n=2:v=1[joined];[joined]setpts=2.5*PTS[out]\" -map \"[out]\" -vcodec libx264 -crf 28 -preset slow -an -movflags +faststart -y /Users/maugliera/aquaria/app_flutter/aquaria_app/assets/images/clownie-random-silent.mp4)",
+      "Bash(/opt/homebrew/bin/ffprobe -v quiet -show_entries format=duration -of csv=p=0 /Users/maugliera/Downloads/clownie-random-v2.mp4)",
+      "Bash(/opt/homebrew/bin/ffprobe /Users/maugliera/Downloads/clownie-random-v2.mp4)",
+      "Bash(/opt/homebrew/bin/ffprobe -v quiet -show_entries format=duration -of csv=p=0 /Users/maugliera/aquaria/app_flutter/aquaria_app/assets/images/clownie-random-v2.mp4)",
+      "Bash(ls /Users/maugliera/aquaria/app_flutter/aquaria_app/assets/images/*.mp4)",
+      "Bash(/opt/homebrew/bin/ffprobe -v quiet -show_entries format=duration -of csv=p=0 \"/Users/maugliera/aquaria/app_flutter/aquaria_app/assets/images/dropin-silent.mp4\")",
+      "Bash(python3 -c \"import moviepy; print\\(moviepy.__version__\\)\")",
+      "Bash(pip3 install moviepy)",
+      "Bash(/opt/homebrew/bin/ffprobe -v quiet -show_entries format=duration -of csv=p=0 /Users/maugliera/aquaria/app_flutter/aquaria_app/assets/images/dropin-silent.mp4)",
+      "Bash(python3 -c \"from moviepy.video.fx import MultiplySpeed; print\\(''ok''\\)\")",
+      "Bash(flutter run -d emulator-5554)",
+      "Bash(flutter analyze lib/services/notification_service.dart lib/state/tank_store.dart)",
+      "Bash($HOME/Library/Android/sdk/platform-tools/adb devices)",
+      "Bash(flutter install -d RFCXC0WTWKY)",
+      "Bash(flutter run -d RFCXC0WTWKY --dart-define=API_BASE_URL=http://192.168.5.228:8000)"
+    ]
+  }
+}
