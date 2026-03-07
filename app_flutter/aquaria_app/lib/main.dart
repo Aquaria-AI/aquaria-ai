@@ -52,7 +52,7 @@ class _ChatCache {
 //   flutter build ipa --dart-define=API_BASE_URL=https://your-api.railway.app
 const String _kBaseUrl = String.fromEnvironment(
   'API_BASE_URL',
-  defaultValue: 'https://aquaria-production.up.railway.app',
+  defaultValue: 'https://aquaria-ai-production.up.railway.app',
 );
 
 // Brand palette
