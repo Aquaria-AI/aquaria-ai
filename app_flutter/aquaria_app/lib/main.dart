@@ -52,7 +52,7 @@ class _ChatCache {
 //   flutter build ipa --dart-define=API_BASE_URL=https://your-api.railway.app
 const String _kBaseUrl = String.fromEnvironment(
   'API_BASE_URL',
-  defaultValue: 'http://127.0.0.1:8000',
+  defaultValue: 'https://aquaria-production.up.railway.app',
 );
 
 // Brand palette
@@ -2616,7 +2616,11 @@ final _navigatorKey = GlobalKey<NavigatorState>();
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await TankStore.instance.load();
-  await NotificationService.init();
+  try {
+    await NotificationService.init();
+  } catch (e) {
+    debugPrint('[Notifications] init failed: $e');
+  }
   runApp(const AquariaApp());
 }
 
