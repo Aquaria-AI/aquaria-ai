@@ -129,12 +129,12 @@ AppBar _buildAppBar(BuildContext context, String title, {List<Widget>? actions})
       actionsIconTheme: const IconThemeData(color: Colors.white),
       backgroundColor: Colors.transparent,
       actions: [
-        ...(actions ?? []),
         IconButton(
           tooltip: 'Send feedback',
           icon: const Icon(Icons.help_outline_rounded),
           onPressed: () => _showFeedbackSheet(context),
         ),
+        ...(actions ?? []),
       ],
       flexibleSpace: Stack(
         fit: StackFit.expand,
@@ -2710,12 +2710,21 @@ class _AppEntryState extends State<_AppEntry> {
   @override
   void initState() {
     super.initState();
-    _isOnboardingDone().then((done) {
+    _resolveStartScreen().then((screen) {
       if (!mounted) return;
-      Navigator.of(context).pushReplacement(MaterialPageRoute(
-        builder: (_) => done ? const TankListScreen() : const OnboardingScreen(),
-      ));
+      Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => screen));
     });
+  }
+
+  Future<Widget> _resolveStartScreen() async {
+    final store = TankStore.instance;
+    await store.load();
+    if (store.tanks.isNotEmpty) {
+      await _markOnboardingDone();
+      return const TankListScreen();
+    }
+    final done = await _isOnboardingDone();
+    return done ? const TankListScreen() : const OnboardingScreen();
   }
 
   @override
@@ -3913,6 +3922,8 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
       try {
         final parsed = jsonDecode(log.parsedJson!);
         if (parsed is! Map) continue;
+        // Skip tap water logs — they shouldn't affect tank measurements
+        if (parsed['source'] == 'tap_water') continue;
         final m = (parsed['measurements'] as Map?)?.cast<String, dynamic>() ?? {};
         final logDate = DateTime(log.createdAt.toLocal().year,
             log.createdAt.toLocal().month, log.createdAt.toLocal().day);
@@ -3982,6 +3993,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
       try {
         final raw = jsonDecode(log.parsedJson!);
         if (raw is! Map) continue;
+        if (raw['source'] == 'tap_water') continue;
         final m = (raw['measurements'] as Map?)?.cast<String, dynamic>() ?? {};
         for (final e in m.entries) {
           final key = e.key.toLowerCase();
@@ -4022,7 +4034,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
       if (v != null && (v < 1200 || v > 1400)) alerts.add('Magnesium out of range: ${_fmtVal(v)} ppm (normal 1250–1350)');
       // Phosphate
       v = latest['phosphate'] ?? latest['po4'];
-      if (v != null && v > 0.1) alerts.add('Phosphate high: ${_fmtVal(v)} ppm (normal <0.03 for reef)');
+      if (v != null && v > 0.5) alerts.add('Phosphate high: ${_fmtVal(v)} ppm (normal 0.03–0.5 for saltwater)');
       // Potassium
       v = latest['k'] ?? latest['potassium'];
       if (v != null && (v < 350 || v > 450)) alerts.add('Potassium out of range: ${_fmtVal(v)} ppm (normal 380–420)');
@@ -4070,11 +4082,6 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
     return Scaffold(
       appBar: _buildAppBar(context, widget.tank.name, actions: [
           IconButton(
-            tooltip: 'Tank details',
-            onPressed: _openDetail,
-            icon: const Icon(Icons.info_outline),
-          ),
-          IconButton(
             tooltip: 'Edit tank',
             onPressed: () => Navigator.of(context).push(
               MaterialPageRoute(builder: (_) => EditTankFlowScreen(tank: widget.tank)),
@@ -4104,19 +4111,39 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
           Container(
             width: double.infinity,
             color: Theme.of(context).colorScheme.surfaceContainerHighest,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            padding: const EdgeInsets.only(left: 16, top: 8, bottom: 8),
             child: Row(
               children: [
-                Text(
-                  '${widget.tank.gallons} gal • ${widget.tank.waterType.label}',
-                  style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
+                Expanded(
+                  child: Row(
+                    children: [
+                      Text(
+                        '${widget.tank.gallons} gal • ${widget.tank.waterType.label}',
+                        style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
+                      ),
+                      if (_inhabitants.isNotEmpty || _plants.isNotEmpty) ...[
+                        const SizedBox(width: 10),
+                        const Text('·', style: TextStyle(color: Colors.grey)),
+                        const SizedBox(width: 10),
+                        ..._buildInhabitantIcons(),
+                      ],
+                    ],
+                  ),
                 ),
-                if (_inhabitants.isNotEmpty || _plants.isNotEmpty) ...[
-                  const SizedBox(width: 10),
-                  const Text('·', style: TextStyle(color: Colors.grey)),
-                  const SizedBox(width: 10),
-                  ..._buildInhabitantIcons(),
-                ],
+                PopupMenuButton<String>(
+                  tooltip: 'More options',
+                  onSelected: (value) {
+                    if (value == 'tap_water') {
+                      Navigator.of(context).push(MaterialPageRoute(
+                        builder: (_) => TapWaterProfileScreen(tank: widget.tank),
+                      ));
+                    }
+                  },
+                  itemBuilder: (_) => const [
+                    PopupMenuItem(value: 'tap_water', child: Text('Tap Water Profile')),
+                  ],
+                  icon: const Icon(Icons.more_vert, size: 20),
+                ),
               ],
             ),
           ),
@@ -4535,6 +4562,19 @@ class _ChatSheetState extends State<_ChatSheet> {
           final logEntries = (parsed is Map && parsed['logs'] is List)
               ? (parsed['logs'] as List).cast<Map<String, dynamic>>()
               : <Map<String, dynamic>>[];
+          // Detect tap water mentions before saving
+          final isTapWater = RegExp(
+            r'\btap\s+water\b|\bfrom\s+the\s+tap\b|\bsource\s+water\b|\bfaucet\b|\bmunicipal\s+water\b',
+            caseSensitive: false,
+          ).hasMatch(text);
+
+          // Tag entries as tap water before persisting
+          if (isTapWater) {
+            for (final entry in logEntries) {
+              entry['source'] = 'tap_water';
+            }
+          }
+
           for (int i = 0; i < logEntries.length; i++) {
             final entry = logEntries[i];
             final dateStr = entry['date'] as String?;
@@ -4548,6 +4588,45 @@ class _ChatSheetState extends State<_ChatSheet> {
             );
           }
           if (mounted) widget.onLogsChanged();
+
+          // If tap water, also update the tap water profile
+          if (isTapWater) {
+            const logToTapKey = {
+              'pH': 'ph',
+              'GH': 'gh',
+              'KH': 'kh',
+              'ammonia': 'ammonia',
+              'nitrite': 'nitrite',
+              'nitrate': 'nitrate',
+              'potassium': 'potassium',
+              'Potassium': 'potassium',
+              'calcium': 'calcium',
+              'Calcium': 'calcium',
+              'TDS': 'tds',
+              'tds': 'tds',
+            };
+            final tapData = <String, dynamic>{};
+            for (final entry in logEntries) {
+              final measurements = entry['measurements'];
+              if (measurements is Map) {
+                for (final kv in measurements.entries) {
+                  final tapKey = logToTapKey[kv.key];
+                  if (tapKey != null && kv.value != null) {
+                    tapData[tapKey] = kv.value;
+                  }
+                }
+              }
+            }
+            if (tapData.isNotEmpty) {
+              final existing = _tapWaterJson != null
+                  ? Map<String, dynamic>.from(jsonDecode(_tapWaterJson!) as Map)
+                  : <String, dynamic>{};
+              existing.addAll(tapData);
+              final jsonStr = jsonEncode(existing);
+              await TankStore.instance.saveTapWater(tankSnapshot.id, jsonStr);
+              if (mounted) setState(() => _tapWaterJson = jsonStr);
+            }
+          }
 
           // Auto-create notifications for problem observations
           final alerts = _observationAlerts(text);
@@ -4608,14 +4687,8 @@ class _ChatSheetState extends State<_ChatSheet> {
       if (resp.statusCode == 200 && mounted && !_cancelled) {
         final data = jsonDecode(resp.body);
         final reply = (data is Map ? data['response'] ?? data['message'] ?? data.toString() : resp.body) as String;
-        final scrollBefore = _scrollController.hasClients ? _scrollController.position.pixels : 0.0;
         _addMessage(_ChatMessage(role: 'assistant', content: reply));
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (_scrollController.hasClients) {
-            _scrollController.animateTo(scrollBefore,
-                duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
-          }
-        });
+        _scrollToBottom();
 
         // If no tank is selected yet, try to detect which tank Ariel identified
         // from the reply (e.g. "logging that for Reef Tank").
@@ -4708,7 +4781,7 @@ class _ChatSheetState extends State<_ChatSheet> {
       }
     } catch (_) {}
 
-    if (mounted) setState(() => _aiResponding = false);
+    if (mounted) setState(() { _aiResponding = false; _sending = false; });
   }
 
   Future<List<Map<String, dynamic>>> _moderateTasks(List<Map<String, dynamic>> tasks) async {
@@ -5294,13 +5367,18 @@ class _LogEntryCardState extends State<_LogEntryCard> {
             // Measurements
             if (params.isNotEmpty) ...[
               const SizedBox(height: 12),
-              const Row(
+              Row(
                 children: [
-                  Icon(Icons.straighten, size: 15, color: Colors.black87),
-                  SizedBox(width: 4),
-                  Text('MEASUREMENTS',
-                      style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
-                          color: Colors.black, letterSpacing: 0.8)),
+                  Icon(
+                    parsed?['source'] == 'tap_water' ? Icons.water_drop_outlined : Icons.straighten,
+                    size: 15, color: Colors.black87,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    parsed?['source'] == 'tap_water' ? 'TAP WATER' : 'MEASUREMENTS',
+                    style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
+                        color: Colors.black, letterSpacing: 0.8),
+                  ),
                 ],
               ),
               const SizedBox(height: 6),
@@ -5514,9 +5592,9 @@ class _TankDetailScreenState extends State<TankDetailScreen> {
         ? Map<String, dynamic>.from(jsonDecode(_tapWaterJson!) as Map)
         : <String, dynamic>{};
 
-    final fields = ['pH', 'GH', 'KH', 'Ammonia', 'Nitrite', 'Nitrate', 'TDS'];
-    final keys   = ['ph', 'gh', 'kh', 'ammonia', 'nitrite', 'nitrate', 'tds'];
-    final units  = ['',   '°dH', '°dH', 'ppm', 'ppm', 'ppm', 'ppm'];
+    final fields = ['pH', 'GH', 'KH', 'Ammonia', 'Nitrite', 'Nitrate', 'Potassium', 'Calcium', 'TDS'];
+    final keys   = ['ph', 'gh', 'kh', 'ammonia', 'nitrite', 'nitrate', 'potassium', 'calcium', 'tds'];
+    final units  = ['',   '°dH', '°dH', 'ppm', 'ppm', 'ppm', 'ppm', 'ppm', 'ppm'];
     final controllers = List.generate(
       fields.length,
       (i) => TextEditingController(
@@ -5745,10 +5823,12 @@ class _TapWaterCard extends StatelessWidget {
 
   static const _fieldLabels = {
     'ph': 'pH', 'gh': 'GH', 'kh': 'KH',
-    'ammonia': 'Ammonia', 'nitrite': 'Nitrite', 'nitrate': 'Nitrate', 'tds': 'TDS',
+    'ammonia': 'Ammonia', 'nitrite': 'Nitrite', 'nitrate': 'Nitrate',
+    'potassium': 'Potassium', 'calcium': 'Calcium', 'tds': 'TDS',
   };
   static const _fieldUnits = {
-    'gh': '°dH', 'kh': '°dH', 'ammonia': 'ppm', 'nitrite': 'ppm', 'nitrate': 'ppm', 'tds': 'ppm',
+    'gh': '°dH', 'kh': '°dH', 'ammonia': 'ppm', 'nitrite': 'ppm', 'nitrate': 'ppm',
+    'potassium': 'ppm', 'calcium': 'ppm', 'tds': 'ppm',
   };
 
   @override
@@ -5836,6 +5916,162 @@ class _TapWaterChip extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────
+// Tap Water Profile Screen
+// ─────────────────────────────────────────────
+class TapWaterProfileScreen extends StatefulWidget {
+  final TankModel tank;
+  const TapWaterProfileScreen({super.key, required this.tank});
+  @override
+  State<TapWaterProfileScreen> createState() => _TapWaterProfileScreenState();
+}
+
+class _TapWaterProfileScreenState extends State<TapWaterProfileScreen> {
+  static const _fields = ['pH', 'GH', 'KH', 'Ammonia', 'Nitrite', 'Nitrate', 'Potassium', 'Calcium', 'TDS'];
+  static const _keys   = ['ph', 'gh', 'kh', 'ammonia', 'nitrite', 'nitrate', 'potassium', 'calcium', 'tds'];
+  static const _units  = ['', '°dH', '°dH', 'ppm', 'ppm', 'ppm', 'ppm', 'ppm', 'ppm'];
+
+  String? _tapWaterJson;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    TankStore.instance.tapWaterJsonFor(widget.tank.id).then((v) {
+      if (mounted) setState(() { _tapWaterJson = v; _loading = false; });
+    });
+  }
+
+  Map<String, dynamic> get _data => _tapWaterJson != null
+      ? Map<String, dynamic>.from(jsonDecode(_tapWaterJson!) as Map)
+      : {};
+
+  Future<void> _edit() async {
+    final existing = _data;
+    final controllers = List.generate(
+      _fields.length,
+      (i) => TextEditingController(text: existing[_keys[i]] != null ? '${existing[_keys[i]]}' : ''),
+    );
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Tap Water Profile'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Enter your tap water test results. Ariel will use these when advising on adjustments.',
+                style: TextStyle(fontSize: 13, color: Colors.black54),
+              ),
+              const SizedBox(height: 12),
+              ...List.generate(_fields.length, (i) => Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: TextField(
+                  controller: controllers[i],
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  decoration: InputDecoration(
+                    labelText: _fields[i],
+                    suffix: _units[i].isNotEmpty ? Text(_units[i]) : null,
+                    border: const OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                ),
+              )),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              await TankStore.instance.saveTapWater(widget.tank.id, null);
+              if (mounted) setState(() => _tapWaterJson = null);
+              if (ctx.mounted) Navigator.of(ctx).pop();
+            },
+            child: const Text('Clear', style: TextStyle(color: Colors.red)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              final data = <String, dynamic>{};
+              for (int i = 0; i < _fields.length; i++) {
+                final v = controllers[i].text.trim();
+                if (v.isNotEmpty) {
+                  final n = num.tryParse(v);
+                  if (n != null) data[_keys[i]] = n;
+                }
+              }
+              final jsonStr = data.isNotEmpty ? jsonEncode(data) : null;
+              await TankStore.instance.saveTapWater(widget.tank.id, jsonStr);
+              if (mounted) setState(() => _tapWaterJson = jsonStr);
+              if (ctx.mounted) Navigator.of(ctx).pop();
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    for (final c in controllers) c.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final data = _data;
+    return Scaffold(
+      backgroundColor: Colors.white,
+      appBar: _buildAppBar(context, 'Tap Water Profile', actions: [
+        IconButton(
+          icon: const Icon(Icons.edit_outlined),
+          tooltip: 'Edit',
+          onPressed: _loading ? null : _edit,
+        ),
+      ]),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                const Text(
+                  'Your tap water chemistry — Ariel uses this when advising on water adjustments.',
+                  style: TextStyle(fontSize: 13, color: Colors.black54),
+                ),
+                const SizedBox(height: 16),
+                Card(
+                  child: Column(
+                    children: List.generate(_fields.length, (i) {
+                      final key = _keys[i];
+                      final val = data[key];
+                      final unit = _units[i];
+                      return ListTile(
+                        title: Text(_fields[i], style: const TextStyle(fontWeight: FontWeight.w500)),
+                        trailing: val != null
+                            ? Text(
+                                unit.isNotEmpty ? '$val $unit' : '$val',
+                                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: _cDark),
+                              )
+                            : const Text('—', style: TextStyle(color: Colors.grey)),
+                        dense: true,
+                      );
+                    }),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Center(
+                  child: FilledButton.icon(
+                    onPressed: _edit,
+                    icon: const Icon(Icons.edit_outlined, size: 16),
+                    label: const Text('Edit Profile'),
+                  ),
+                ),
+              ],
+            ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
 // Inhabitants Screen
 // ─────────────────────────────────────────────
 class InhabitantsScreen extends StatefulWidget {
@@ -5878,8 +6114,6 @@ class _InhabitantsScreenState extends State<InhabitantsScreen> {
               await Navigator.of(context).push(MaterialPageRoute(
                 builder: (_) => EditInhabitantsScreen(
                   tank: widget.tank,
-                  inhabitants: _inhabitants,
-                  plants: _plants,
                   onSaved: _load,
                 ),
               ));
@@ -6523,7 +6757,8 @@ const _chartGroups = [
   ['nitrate', 'nitrite', 'ammonia'],
   ['gh', 'kh'],
   ['potassium', 'calcium'],
-  ['phosphate', 'ph'],
+  ['phosphate'],
+  ['ph'],
 ];
 
 const _paramColors = <String, Color>{
@@ -6576,6 +6811,7 @@ class _AllChartsScreenState extends State<AllChartsScreen> {
       try {
         final raw = jsonDecode(log.parsedJson!);
         if (raw is! Map) continue;
+        if (raw['source'] == 'tap_water') continue;
         final m = (raw['measurements'] as Map?)?.cast<String, dynamic>() ?? {};
         final date = DateTime(log.createdAt.toLocal().year, log.createdAt.toLocal().month, log.createdAt.toLocal().day);
         for (final e in m.entries) {
@@ -6700,6 +6936,7 @@ class _ChartsScreenState extends State<ChartsScreen> {
       try {
         final raw = jsonDecode(log.parsedJson!);
         if (raw is! Map) continue;
+        if (raw['source'] == 'tap_water') continue;
         final m = (raw['measurements'] as Map?)?.cast<String, dynamic>() ?? {};
         final date = DateTime(log.createdAt.toLocal().year, log.createdAt.toLocal().month, log.createdAt.toLocal().day);
         for (final e in m.entries) {
@@ -6786,12 +7023,13 @@ class _ChartCard extends StatelessWidget {
   static Map<String, (double, double)> _ranges(WaterType wt) {
     if (wt == WaterType.saltwater || wt == WaterType.reef) {
       return {
-        'nitrate':   (0, 5),
+        'nitrate':   (5, 25),
         'ph':        (8.1, 8.3),
+        'gh':        (6, 12),
         'kh':        (8, 12),
         'calcium':   (250, 350),
         'magnesium': (1250, 1350),
-        'phosphate': (0, 0.03),
+        'phosphate': (0.03, 0.5),
         'potassium': (380, 420),
         'temp':      (76, 80),
         'salinity':  (1.024, 1.026),
@@ -6799,7 +7037,7 @@ class _ChartCard extends StatelessWidget {
     }
     if (wt == WaterType.planted) {
       return {
-        'nitrate':   (10, 20),
+        'nitrate':   (5, 25),
         'ph':        (6.5, 7.5),
         'kh':        (4, 8),
         'gh':        (4, 12),
@@ -6810,7 +7048,7 @@ class _ChartCard extends StatelessWidget {
       };
     }
     return {
-      'nitrate':   (0, 20),
+      'nitrate':   (5, 25),
       'ph':        (6.5, 7.5),
       'kh':        (4, 8),
       'gh':        (4, 12),
@@ -6861,36 +7099,47 @@ class _ChartCard extends StatelessWidget {
     final yMax = maxY + pad;
     const rangeColors = <String, Color>{
       'nitrate':   Color(0x22800080), // purple
-      'kh':        Color(0x22800080), // purple
+      'kh':        Color(0x225C6BC0), // KH line color (indigo)
       'gh':        Color(0x2200BCD4), // GH line color (cyan)
       'nitrite':   Color(0x224CAF50),
       'ammonia':   Color(0x224CAF50),
-      'ph':        Color(0x224CAF50),
+      'ph':        Color(0x2200ACC1), // pH line color (teal)
       'calcium':   Color(0x22D4A84B), // calcium line color (golden)
       'magnesium': Color(0x224CAF50),
-      'phosphate': Color(0x224CAF50),
+      'phosphate': Color(0x22039BE5), // phosphate line color (sky blue)
       'potassium': Color(0x2243A047), // potassium line color (green)
       'temp':      Color(0x224CAF50),
-      'salinity':  Color(0x224CAF50),
+      'salinity':  Color(0x221565C0), // salinity line color (dark blue)
     };
     // Solid colors for legend swatches (more opaque than the band)
     const legendColors = <String, Color>{
       'nitrate':  Color(0x66800080),
-      'kh':       Color(0x66800080),
+      'kh':       Color(0x665C6BC0),
       'gh':       Color(0x6600BCD4),
       'potassium': Color(0x6643A047),
       'calcium':  Color(0x66D4A84B),
+      'ph':       Color(0x6600ACC1),
+      'phosphate': Color(0x66039BE5),
+      'salinity':  Color(0x661565C0),
     };
     const legendBorders = <String, Color>{
       'nitrate':  Color(0xFF800080),
-      'kh':       Color(0xFF800080),
+      'kh':       Color(0xFF5C6BC0),
+      'ph':       Color(0xFF00ACC1),
       'gh':       Color(0xFF00BCD4),
       'potassium': Color(0xFF43A047),
       'calcium':  Color(0xFFD4A84B),
+      'phosphate': Color(0xFF039BE5),
+      'salinity':  Color(0xFF1565C0),
+    };
+    const legendUnits = <String, String>{
+      'salinity': 'SG',
+      'gh': 'dGH',
+      'kh': 'dKH',
     };
     final rangeAnnotations = <HorizontalRangeAnnotation>[];
     final zeroParams = <String>[];
-    final rangeNotes = <({String label, Color color, Color border, double lo, double hi})>[];
+    final rangeNotes = <({String label, Color color, Color border, double lo, double hi, String unit})>[];
     for (final param in seriesData.keys) {
       if (param == 'ammonia' || param == 'nitrite') {
         zeroParams.add(ChartsScreen._paramLabel(param));
@@ -6907,6 +7156,7 @@ class _ChartCard extends StatelessWidget {
             border: legendBorders[param]!,
             lo: r.$1,
             hi: r.$2,
+            unit: legendUnits[param] ?? 'ppm',
           ));
         }
       }
@@ -7023,7 +7273,7 @@ class _ChartCard extends StatelessWidget {
                       ),
                       const SizedBox(width: 6),
                       Text(
-                        '${note.label}: ${note.lo % 1 == 0 ? note.lo.toInt() : note.lo} – ${note.hi % 1 == 0 ? note.hi.toInt() : note.hi} ppm',
+                        '${note.label}: ${note.lo % 1 == 0 ? note.lo.toInt() : note.lo} – ${note.hi % 1 == 0 ? note.hi.toInt() : note.hi} ${note.unit}',
                         style: const TextStyle(fontSize: 11, color: Color(0xFF757575), height: 1.4),
                       ),
                     ],
@@ -7031,7 +7281,7 @@ class _ChartCard extends StatelessWidget {
                 ),
               if (zeroParams.isNotEmpty)
                 Text(
-                  'Ideal ${zeroParams.join(' & ')}: 0 ppm — any detectable amount is a concern.',
+                  'Ideal ${zeroParams.join(' & ')}: 0 ppm',
                   style: const TextStyle(fontSize: 11, color: Color(0xFF757575), height: 1.4),
                 ),
             ],
@@ -7042,215 +7292,562 @@ class _ChartCard extends StatelessWidget {
   }
 }
 
-class EditTankFlowScreen extends StatefulWidget {
+class EditTankFlowScreen extends StatelessWidget {
   final TankModel tank;
   const EditTankFlowScreen({super.key, required this.tank});
-
   @override
-  State<EditTankFlowScreen> createState() => _EditTankFlowScreenState();
+  Widget build(BuildContext context) => EditTankScreen(tank: tank);
 }
 
-class _EditTankFlowScreenState extends State<EditTankFlowScreen> {
-  final _pageCtrl = PageController();
-  int _page = 0;
-  static const _totalPages = 4;
+class EditTankScreen extends StatefulWidget {
+  final TankModel tank;
+  const EditTankScreen({super.key, required this.tank});
 
-  late final TextEditingController _tankNameCtrl;
+  @override
+  State<EditTankScreen> createState() => _EditTankScreenState();
+}
+
+class _EditTankScreenState extends State<EditTankScreen> {
+  static const _lPerGal = 3.78541;
+  static const _types = ['fish', 'invertebrate', 'coral', 'polyp', 'anemone'];
+  static const _typeEmoji = {'fish': '🐟', 'invertebrate': '🦐', 'coral': '🪸', 'polyp': '🪼', 'anemone': '🌺'};
+
+  late final TextEditingController _nameCtrl;
+  late final TextEditingController _sizeCtrl;
+  String _unit = 'gal';
   late double _gallons;
   late WaterType _waterType;
-  List<({String name, String type, int count})> _inhabitants = [];
-  List<String> _plants = [];
+  String? _waterBase;
+  bool _hasPlants = false;
+  final Set<String> _saltFeatures = {};
+  List<_InhEdit> _inhs = [];
+  List<_PlantEdit> _plts = [];
   bool _loading = true;
-  bool _finishing = false;
+  bool _saving = false;
 
   @override
   void initState() {
     super.initState();
-    _tankNameCtrl = TextEditingController(text: widget.tank.name);
+    _nameCtrl = TextEditingController(text: widget.tank.name);
     _gallons = widget.tank.gallons.toDouble();
+    _sizeCtrl = TextEditingController(text: widget.tank.gallons.toString());
+    _sizeCtrl.addListener(_onSizeChanged);
     _waterType = widget.tank.waterType;
-    _loadExisting();
+    switch (widget.tank.waterType) {
+      case WaterType.saltwater: _waterBase = 'saltwater';
+      case WaterType.reef:      _waterBase = 'saltwater'; _saltFeatures.add('reef');
+      case WaterType.planted:   _waterBase = 'freshwater'; _hasPlants = true;
+      case WaterType.pond:      _waterBase = 'pond';
+      case WaterType.freshwater: _waterBase = null;
+    }
+    _load();
   }
 
-  Future<void> _loadExisting() async {
+  void _onSizeChanged() {
+    final val = double.tryParse(_sizeCtrl.text);
+    if (val == null || val <= 0) return;
+    _gallons = _unit == 'L' ? val / _lPerGal : val;
+  }
+
+  void _switchUnit(String unit) {
+    if (unit == _unit) return;
+    final current = double.tryParse(_sizeCtrl.text) ?? 0;
+    setState(() => _unit = unit);
+    if (current > 0) {
+      final converted = unit == 'L' ? current * _lPerGal : current / _lPerGal;
+      _sizeCtrl.text = converted.toStringAsFixed(1);
+      _sizeCtrl.selection = TextSelection.collapsed(offset: _sizeCtrl.text.length);
+    }
+  }
+
+  void _pushWaterType() {
+    final WaterType wt;
+    if (_waterBase == 'saltwater') {
+      wt = _saltFeatures.isNotEmpty ? WaterType.reef : WaterType.saltwater;
+    } else if (_waterBase == 'pond') {
+      wt = WaterType.pond;
+    } else {
+      wt = _hasPlants ? WaterType.planted : WaterType.freshwater;
+    }
+    setState(() => _waterType = wt);
+  }
+
+  void _selectBase(String base) {
+    setState(() { _waterBase = base; _hasPlants = false; _saltFeatures.clear(); });
+    _pushWaterType();
+  }
+
+  Future<void> _load() async {
     final rawInhabitants = await TankStore.instance.inhabitantsFor(widget.tank.id);
     final rawPlants = await TankStore.instance.plantsFor(widget.tank.id);
     if (!mounted) return;
     setState(() {
-      _inhabitants = rawInhabitants
-          .map((i) => (name: i.name, type: i.type ?? 'fish', count: i.count))
-          .toList();
-      _plants = rawPlants.map((p) => p.name).toList();
+      _inhs = rawInhabitants.map((i) => _InhEdit(nameText: i.name, type: i.type ?? 'fish', count: i.count)).toList();
+      _plts = rawPlants.map((p) => _PlantEdit(nameText: p.name)).toList();
       _loading = false;
     });
   }
 
-  @override
-  void dispose() {
-    _pageCtrl.dispose();
-    _tankNameCtrl.dispose();
-    super.dispose();
-  }
-
-  void _goNext() {
-    if (_page < _totalPages - 1) {
-      _pageCtrl.nextPage(duration: const Duration(milliseconds: 350), curve: Curves.easeInOut);
-    }
-  }
-
-  Future<void> _finish() async {
-    setState(() => _finishing = true);
+  Future<void> _save() async {
+    setState(() => _saving = true);
     try {
-      final name = _tankNameCtrl.text.trim().isEmpty ? widget.tank.name : _tankNameCtrl.text.trim();
-      final tank = TankModel(
-        id: widget.tank.id,
-        name: name,
-        gallons: _gallons.round(),
-        waterType: _waterType,
-        createdAt: widget.tank.createdAt,
-      );
+      final name = _nameCtrl.text.trim().isEmpty ? widget.tank.name : _nameCtrl.text.trim();
+      final tank = TankModel(id: widget.tank.id, name: name, gallons: _gallons.round(), waterType: _waterType, createdAt: widget.tank.createdAt);
       await TankStore.instance.saveParsedDetails(
         tank: tank,
-        inhabitants: _inhabitants
-            .map((i) => {'name': i.name, 'type': i.type, 'count': i.count})
-            .toList(),
-        plants: _plants,
+        inhabitants: _inhs.where((i) => i.name.text.trim().isNotEmpty).map((i) => {'name': i.name.text.trim(), 'type': i.type, 'count': i.count}).toList(),
+        plants: _plts.map((p) => p.name.text.trim()).where((n) => n.isNotEmpty).toList(),
       );
       await TankStore.instance.load();
       if (!mounted) return;
       Navigator.of(context).pop();
     } catch (e) {
       if (!mounted) return;
-      setState(() => _finishing = false);
+      setState(() => _saving = false);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
     }
   }
 
   @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _sizeCtrl.removeListener(_onSizeChanged);
+    _sizeCtrl.dispose();
+    for (final i in _inhs) i.dispose();
+    for (final p in _plts) p.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return const Scaffold(
-        backgroundColor: Colors.white,
-        body: Center(child: CircularProgressIndicator()),
-      );
+      return const Scaffold(backgroundColor: Colors.white, body: Center(child: CircularProgressIndicator()));
     }
     return Scaffold(
       backgroundColor: Colors.white,
-      extendBodyBehindAppBar: true,
       appBar: AppBar(
-        backgroundColor: Colors.transparent,
+        backgroundColor: Colors.white,
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.close, color: _cDark),
           onPressed: () => Navigator.of(context).pop(),
         ),
-      ),
-      body: Column(
-        children: [
-          Expanded(
-            child: PageView(
-              controller: _pageCtrl,
-              physics: const NeverScrollableScrollPhysics(),
-              onPageChanged: (p) => setState(() => _page = p),
-              children: [
-                _ObTankSetupPage(
-                  nameCtrl: _tankNameCtrl,
-                  gallons: _gallons,
-                  waterType: _waterType,
-                  onGallonsChanged: (v) => setState(() => _gallons = v),
-                  onWaterTypeChanged: (v) => setState(() => _waterType = v),
-                  onNext: _goNext,
-                ),
-                _ObInhabitantsPage(
-                  initialInhabitants: _inhabitants,
-                  waterType: _waterType,
-                  onNext: (inhs, plts) {
-                    setState(() { _inhabitants = inhs; _plants = plts; });
-                    _goNext();
-                  },
-                ),
-                _ObInhabitantSummaryPage(
-                  inhabitants: _inhabitants,
-                  waterType: _waterType,
-                  onNext: _goNext,
-                ),
-                _ObCongratsPage(
-                  experience: 'beginner',
-                  finishing: _finishing,
-                  onDone: _finish,
-                  title: 'All done!',
-                  buttonLabel: 'Save Changes',
-                ),
-              ],
-            ),
-          ),
+        title: const Text('Edit Tank', style: TextStyle(color: _cDark, fontWeight: FontWeight.w600, fontSize: 17)),
+        actions: [
           Padding(
-            padding: const EdgeInsets.only(bottom: 16),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: List.generate(_totalPages, (i) => AnimatedContainer(
-                duration: const Duration(milliseconds: 250),
-                margin: const EdgeInsets.symmetric(horizontal: 4),
-                width: _page == i ? 20 : 8,
-                height: 8,
-                decoration: BoxDecoration(
-                  color: _page == i ? _cDark : _cLight,
-                  borderRadius: BorderRadius.circular(4),
-                ),
-              )),
+            padding: const EdgeInsets.only(right: 8),
+            child: TextButton(
+              onPressed: _saving ? null : _save,
+              child: _saving
+                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Text('Save', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
             ),
           ),
         ],
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(24, 16, 24, 40),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Tank name
+            const Text('Tank name', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+            const SizedBox(height: 6),
+            TextField(
+              controller: _nameCtrl,
+              decoration: InputDecoration(
+                hintText: 'e.g. Living Room Tank',
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              ),
+            ),
+            const SizedBox(height: 24),
+            // Tank size
+            const Text('Tank size', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _sizeCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: InputDecoration(
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Container(
+                  decoration: BoxDecoration(border: Border.all(color: Colors.grey.shade300), borderRadius: BorderRadius.circular(10)),
+                  child: Row(
+                    children: [
+                      _UnitBtn(label: 'gal', selected: _unit == 'gal', onTap: () => _switchUnit('gal')),
+                      Container(width: 1, height: 44, color: Colors.grey.shade300),
+                      _UnitBtn(label: 'L', selected: _unit == 'L', onTap: () => _switchUnit('L')),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 24),
+            // Water type
+            const Text('Water type', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(child: _WaterBaseCard(emoji: '💧', label: 'Freshwater', selected: _waterBase == 'freshwater', onTap: () => _selectBase('freshwater'))),
+                const SizedBox(width: 10),
+                Expanded(child: _WaterBaseCard(emoji: '🌊', label: 'Saltwater', selected: _waterBase == 'saltwater', onTap: () => _selectBase('saltwater'))),
+                const SizedBox(width: 10),
+                Expanded(child: _WaterBaseCard(emoji: '🪷', label: 'Pond', selected: _waterBase == 'pond', onTap: () => _selectBase('pond'))),
+              ],
+            ),
+            AnimatedSize(
+              duration: const Duration(milliseconds: 320),
+              curve: Curves.easeOutCubic,
+              child: (_waterBase == null || _waterBase == 'pond')
+                  ? const SizedBox.shrink()
+                  : Padding(
+                      padding: const EdgeInsets.only(top: 12),
+                      child: _waterBase == 'freshwater'
+                          ? _FreshwaterFollowUp(hasPlants: _hasPlants, onChanged: (v) { setState(() => _hasPlants = v); _pushWaterType(); })
+                          : _SaltwaterFollowUp(selected: _saltFeatures, onToggle: (f) { setState(() { _saltFeatures.contains(f) ? _saltFeatures.remove(f) : _saltFeatures.add(f); }); _pushWaterType(); }),
+                    ),
+            ),
+            const SizedBox(height: 24),
+            const Divider(),
+            const SizedBox(height: 16),
+            // Inhabitants
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text('INHABITANTS', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.grey, letterSpacing: 0.8)),
+                TextButton.icon(
+                  onPressed: () async {
+                    final result = await showModalBottomSheet<({String name, String type, int count})>(
+                      context: context, isScrollControlled: true, backgroundColor: Colors.transparent,
+                      builder: (_) => _SpeciesPickerSheet(isPlant: false, waterType: _waterType),
+                    );
+                    if (result != null && mounted) setState(() => _inhs.add(_InhEdit(nameText: result.name, type: result.type, count: result.count)));
+                  },
+                  icon: const Icon(Icons.add, size: 16),
+                  label: const Text('Add'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            ...List.generate(_inhs.length, (idx) {
+              final inh = _inhs[idx];
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  children: [
+                    DropdownButton<String>(
+                      value: inh.type,
+                      underline: const SizedBox(),
+                      isDense: true,
+                      items: _types.map((t) => DropdownMenuItem(value: t, child: Text(_typeEmoji[t] ?? '🐠', style: const TextStyle(fontSize: 20)))).toList(),
+                      onChanged: (v) => setState(() => inh.type = v!),
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: () async {
+                          final result = await showModalBottomSheet<({String name, String type, int count})>(
+                            context: context, isScrollControlled: true, backgroundColor: Colors.transparent,
+                            builder: (_) => _SpeciesPickerSheet(isPlant: false, waterType: _waterType),
+                          );
+                          if (result != null && mounted) setState(() { inh.name.text = result.name; inh.type = result.type; });
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+                          decoration: BoxDecoration(border: Border.all(color: Colors.grey.shade400), borderRadius: BorderRadius.circular(4)),
+                          child: Row(children: [
+                            Expanded(child: Text(inh.name.text.isEmpty ? 'Tap to choose…' : inh.name.text, style: TextStyle(fontSize: 14, color: inh.name.text.isEmpty ? Colors.grey : Colors.black87))),
+                            const Icon(Icons.arrow_drop_down, size: 18, color: Colors.grey),
+                          ]),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    IconButton(icon: const Icon(Icons.remove, size: 16), padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 28, minHeight: 28), onPressed: inh.count > 1 ? () => setState(() => inh.count--) : null),
+                    SizedBox(width: 24, child: Text('${inh.count}', textAlign: TextAlign.center, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600))),
+                    IconButton(icon: const Icon(Icons.add, size: 16), padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 28, minHeight: 28), onPressed: () => setState(() => inh.count++)),
+                    IconButton(icon: const Icon(Icons.close, size: 16, color: Colors.red), padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 28, minHeight: 28), onPressed: () => setState(() { _inhs[idx].dispose(); _inhs.removeAt(idx); })),
+                  ],
+                ),
+              );
+            }),
+            const SizedBox(height: 8),
+            const Divider(),
+            const SizedBox(height: 16),
+            // Plants
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text('PLANTS', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.grey, letterSpacing: 0.8)),
+                TextButton.icon(
+                  onPressed: () async {
+                    final result = await showModalBottomSheet<({String name, String type, int count})>(
+                      context: context, isScrollControlled: true, backgroundColor: Colors.transparent,
+                      builder: (_) => const _SpeciesPickerSheet(isPlant: true),
+                    );
+                    if (result != null && mounted) setState(() => _plts.add(_PlantEdit(nameText: result.name)));
+                  },
+                  icon: const Icon(Icons.add, size: 16),
+                  label: const Text('Add'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            ...List.generate(_plts.length, (idx) {
+              final plt = _plts[idx];
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  children: [
+                    const Text('🌿', style: TextStyle(fontSize: 20)),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: () async {
+                          final result = await showModalBottomSheet<({String name, String type, int count})>(
+                            context: context, isScrollControlled: true, backgroundColor: Colors.transparent,
+                            builder: (_) => const _SpeciesPickerSheet(isPlant: true),
+                          );
+                          if (result != null && mounted) setState(() => plt.name.text = result.name);
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+                          decoration: BoxDecoration(border: Border.all(color: Colors.grey.shade400), borderRadius: BorderRadius.circular(4)),
+                          child: Row(children: [
+                            Expanded(child: Text(plt.name.text.isEmpty ? 'Tap to choose…' : plt.name.text, style: TextStyle(fontSize: 14, color: plt.name.text.isEmpty ? Colors.grey : Colors.black87))),
+                            const Icon(Icons.arrow_drop_down, size: 18, color: Colors.grey),
+                          ]),
+                        ),
+                      ),
+                    ),
+                    IconButton(icon: const Icon(Icons.close, size: 16, color: Colors.red), padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 28, minHeight: 28), onPressed: () => setState(() { _plts[idx].dispose(); _plts.removeAt(idx); })),
+                  ],
+                ),
+              );
+            }),
+          ],
+        ),
       ),
     );
   }
 }
 
-class EditInhabitantsScreen extends StatelessWidget {
+class EditInhabitantsScreen extends StatefulWidget {
   final TankModel tank;
-  final List<db.Inhabitant> inhabitants;
-  final List<db.Plant> plants;
   final VoidCallback onSaved;
-  const EditInhabitantsScreen({
-    super.key,
-    required this.tank,
-    required this.inhabitants,
-    required this.plants,
-    required this.onSaved,
-  });
+  const EditInhabitantsScreen({super.key, required this.tank, required this.onSaved});
+
+  @override
+  State<EditInhabitantsScreen> createState() => _EditInhabitantsScreenState();
+}
+
+class _EditInhabitantsScreenState extends State<EditInhabitantsScreen> {
+  static const _types = ['fish', 'invertebrate', 'coral', 'polyp', 'anemone'];
+  static const _typeEmoji = {'fish': '🐟', 'invertebrate': '🦐', 'coral': '🪸', 'polyp': '🪼', 'anemone': '🌺'};
+
+  List<_InhEdit> _inhs = [];
+  List<_PlantEdit> _plts = [];
+  bool _loading = true;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final rawInhabitants = await TankStore.instance.inhabitantsFor(widget.tank.id);
+    final rawPlants = await TankStore.instance.plantsFor(widget.tank.id);
+    if (!mounted) return;
+    setState(() {
+      _inhs = rawInhabitants.map((i) => _InhEdit(nameText: i.name, type: i.type ?? 'fish', count: i.count)).toList();
+      _plts = rawPlants.map((p) => _PlantEdit(nameText: p.name)).toList();
+      _loading = false;
+    });
+  }
+
+  Future<void> _save() async {
+    setState(() => _saving = true);
+    try {
+      await TankStore.instance.saveParsedDetails(
+        tank: widget.tank,
+        inhabitants: _inhs.where((i) => i.name.text.trim().isNotEmpty).map((i) => {'name': i.name.text.trim(), 'type': i.type, 'count': i.count}).toList(),
+        plants: _plts.map((p) => p.name.text.trim()).where((n) => n.isNotEmpty).toList(),
+      );
+      widget.onSaved();
+      if (mounted) Navigator.of(context).pop();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+    }
+  }
+
+  @override
+  void dispose() {
+    for (final i in _inhs) i.dispose();
+    for (final p in _plts) p.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final initialInhabitants = inhabitants
-        .map((i) => (name: i.name, type: i.type ?? 'fish', count: i.count))
-        .toList();
-    final initialPlants = plants.map((p) => p.name).toList();
-
+    if (_loading) {
+      return const Scaffold(backgroundColor: Colors.white, body: Center(child: CircularProgressIndicator()));
+    }
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
-        backgroundColor: Colors.transparent,
+        backgroundColor: Colors.white,
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.close, color: _cDark),
           onPressed: () => Navigator.of(context).pop(),
         ),
-        title: const Text('Edit Inhabitants',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _cDark)),
+        title: const Text('Edit Inhabitants & Plants', style: TextStyle(color: _cDark, fontWeight: FontWeight.w600, fontSize: 17)),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: TextButton(
+              onPressed: _saving ? null : _save,
+              child: _saving
+                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Text('Save', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+            ),
+          ),
+        ],
       ),
-      body: _ObInhabitantsPage(
-        initialInhabitants: initialInhabitants,
-        waterType: tank.waterType,
-        showSkip: false,
-        onNext: (inhs, plts) async {
-          await TankStore.instance.saveParsedDetails(
-            tank: tank,
-            inhabitants: inhs.map((i) => {'name': i.name, 'type': i.type, 'count': i.count}).toList(),
-            plants: plts,
-          );
-          onSaved();
-          if (context.mounted) Navigator.of(context).pop();
-        },
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(24, 16, 24, 40),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Inhabitants
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text('INHABITANTS', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.grey, letterSpacing: 0.8)),
+                TextButton.icon(
+                  onPressed: () async {
+                    final result = await showModalBottomSheet<({String name, String type, int count})>(
+                      context: context, isScrollControlled: true, backgroundColor: Colors.transparent,
+                      builder: (_) => _SpeciesPickerSheet(isPlant: false, waterType: widget.tank.waterType),
+                    );
+                    if (result != null && mounted) setState(() => _inhs.add(_InhEdit(nameText: result.name, type: result.type, count: result.count)));
+                  },
+                  icon: const Icon(Icons.add, size: 16),
+                  label: const Text('Add'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            ...List.generate(_inhs.length, (idx) {
+              final inh = _inhs[idx];
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  children: [
+                    DropdownButton<String>(
+                      value: inh.type,
+                      underline: const SizedBox(),
+                      isDense: true,
+                      items: _types.map((t) => DropdownMenuItem(value: t, child: Text(_typeEmoji[t] ?? '🐠', style: const TextStyle(fontSize: 20)))).toList(),
+                      onChanged: (v) => setState(() => inh.type = v!),
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: () async {
+                          final result = await showModalBottomSheet<({String name, String type, int count})>(
+                            context: context, isScrollControlled: true, backgroundColor: Colors.transparent,
+                            builder: (_) => _SpeciesPickerSheet(isPlant: false, waterType: widget.tank.waterType),
+                          );
+                          if (result != null && mounted) setState(() { inh.name.text = result.name; inh.type = result.type; });
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+                          decoration: BoxDecoration(border: Border.all(color: Colors.grey.shade400), borderRadius: BorderRadius.circular(4)),
+                          child: Row(children: [
+                            Expanded(child: Text(inh.name.text.isEmpty ? 'Tap to choose…' : inh.name.text, style: TextStyle(fontSize: 14, color: inh.name.text.isEmpty ? Colors.grey : Colors.black87))),
+                            const Icon(Icons.arrow_drop_down, size: 18, color: Colors.grey),
+                          ]),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    IconButton(icon: const Icon(Icons.remove, size: 16), padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 28, minHeight: 28), onPressed: inh.count > 1 ? () => setState(() => inh.count--) : null),
+                    SizedBox(width: 24, child: Text('${inh.count}', textAlign: TextAlign.center, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600))),
+                    IconButton(icon: const Icon(Icons.add, size: 16), padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 28, minHeight: 28), onPressed: () => setState(() => inh.count++)),
+                    IconButton(icon: const Icon(Icons.close, size: 16, color: Colors.red), padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 28, minHeight: 28), onPressed: () => setState(() { _inhs[idx].dispose(); _inhs.removeAt(idx); })),
+                  ],
+                ),
+              );
+            }),
+            const SizedBox(height: 8),
+            const Divider(),
+            const SizedBox(height: 16),
+            // Plants
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text('PLANTS', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.grey, letterSpacing: 0.8)),
+                TextButton.icon(
+                  onPressed: () async {
+                    final result = await showModalBottomSheet<({String name, String type, int count})>(
+                      context: context, isScrollControlled: true, backgroundColor: Colors.transparent,
+                      builder: (_) => const _SpeciesPickerSheet(isPlant: true),
+                    );
+                    if (result != null && mounted) setState(() => _plts.add(_PlantEdit(nameText: result.name)));
+                  },
+                  icon: const Icon(Icons.add, size: 16),
+                  label: const Text('Add'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            ...List.generate(_plts.length, (idx) {
+              final plt = _plts[idx];
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  children: [
+                    const Text('🌿', style: TextStyle(fontSize: 20)),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: () async {
+                          final result = await showModalBottomSheet<({String name, String type, int count})>(
+                            context: context, isScrollControlled: true, backgroundColor: Colors.transparent,
+                            builder: (_) => const _SpeciesPickerSheet(isPlant: true),
+                          );
+                          if (result != null && mounted) setState(() => plt.name.text = result.name);
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+                          decoration: BoxDecoration(border: Border.all(color: Colors.grey.shade400), borderRadius: BorderRadius.circular(4)),
+                          child: Row(children: [
+                            Expanded(child: Text(plt.name.text.isEmpty ? 'Tap to choose…' : plt.name.text, style: TextStyle(fontSize: 14, color: plt.name.text.isEmpty ? Colors.grey : Colors.black87))),
+                            const Icon(Icons.arrow_drop_down, size: 18, color: Colors.grey),
+                          ]),
+                        ),
+                      ),
+                    ),
+                    IconButton(icon: const Icon(Icons.close, size: 16, color: Colors.red), padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 28, minHeight: 28), onPressed: () => setState(() { _plts[idx].dispose(); _plts.removeAt(idx); })),
+                  ],
+                ),
+              );
+            }),
+          ],
+        ),
       ),
     );
   }

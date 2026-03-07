@@ -2,6 +2,7 @@ import json
 import os
 import re
 import sqlite3
+import time
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
@@ -18,6 +19,19 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _chat(client: anthropic.Anthropic, **kwargs):
+    """Call client.messages.create with retry on 529 overloaded errors."""
+    for attempt in range(4):
+        try:
+            return client.messages.create(**kwargs)
+        except anthropic.APIStatusError as e:
+            if e.status_code == 529 and attempt < 3:
+                time.sleep(2 ** attempt)
+                continue
+            raise
+
 
 # ─── Knowledge base (RAG) ────────────────────────────────────────────────────
 
@@ -341,7 +355,7 @@ def _parse_inhabitants_with_llm(text: str) -> Optional[List[Dict[str, Any]]]:
         return None
     try:
         client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
+        response = _chat(client,
             model="claude-haiku-4-5",
             max_tokens=512,
             system=_INHABITANTS_SYSTEM_PROMPT,
@@ -598,7 +612,7 @@ def _parse_with_llm(text: str, today: str) -> Optional[List[Dict[str, Any]]]:
         return None
     try:
         client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
+        response = _chat(client,
             model="claude-haiku-4-5",
             max_tokens=1024,
             system=_LOG_SYSTEM_PROMPT + f"\n\nToday's date is {today}.",
@@ -692,7 +706,7 @@ Rules:
     alkalinity: 8–12 dKH normal
     calcium: 380–450 ppm normal
     magnesium: 1250–1350 ppm normal
-    phosphate: 0–0.03 ppm normal for reef, >0.1 ppm high
+    phosphate: 0.03–0.5 ppm normal for saltwater/reef, >0.5 ppm high
     potassium: 380–420 ppm normal
     temperature: 76–80°F / 24–27°C normal
 - When measurements are provided in ml, treat them as actions (dosing), not tank parameter measurements.
@@ -716,7 +730,7 @@ def summarize_tank_logs(req: SummaryRequest):
 
     try:
         client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
+        response = _chat(client,
             model="claude-haiku-4-5",
             max_tokens=256,
             system=_SUMMARY_SYSTEM_PROMPT,
@@ -789,7 +803,7 @@ Use these reference ranges when assessing whether a parameter is low, normal, or
     alkalinity: 8–12 dKH normal
     calcium: 380–450 ppm normal
     magnesium: 1250–1350 ppm normal
-    phosphate: 0–0.03 ppm normal for reef, >0.1 ppm high
+    phosphate: 0.03–0.5 ppm normal for saltwater/reef, >0.5 ppm high
     potassium: 380–420 ppm normal
     temperature: 76–80°F / 24–27°C normal
 
@@ -1066,7 +1080,7 @@ def chat_tank(req: ChatRequest):
 
     try:
         client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
+        response = _chat(client,
             model="claude-haiku-4-5",
             max_tokens=256,
             system=_CHAT_SYSTEM_PROMPT + f"\n\n{tank_context}" + (f"\n\n{req.system_context}" if req.system_context else ""),
@@ -1115,7 +1129,7 @@ def chat_tank(req: ChatRequest):
             convo_parts.append({"role": "user", "content": req.message})
             convo_parts.append({"role": "assistant", "content": reply})
             try:
-                ex_response = client.messages.create(
+                ex_response = _chat(client,
                     model="claude-haiku-4-5",
                     max_tokens=256,
                     system=extraction_prompt,
@@ -1165,7 +1179,7 @@ def chat_tank(req: ChatRequest):
             )
             convo += f"\nUSER: {req.message}\nASSISTANT: {reply}"
             try:
-                ex_response = client.messages.create(
+                ex_response = _chat(client,
                     model="claude-haiku-4-5",
                     max_tokens=512,
                     system=_NEW_TANK_EXTRACT_PROMPT,
@@ -1216,7 +1230,7 @@ def chat_tank(req: ChatRequest):
             )
             convo += f"\nUSER: {req.message}\nASSISTANT: {reply}"
             try:
-                inh_response = client.messages.create(
+                inh_response = _chat(client,
                     model="claude-haiku-4-5",
                     max_tokens=256,
                     system=_NEW_INHABITANT_EXTRACT_PROMPT,
@@ -1294,7 +1308,7 @@ def moderate_tasks(req: ModerationRequest):
     try:
         client = anthropic.Anthropic(api_key=api_key)
         task_list = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(req.tasks))
-        response = client.messages.create(
+        response = _chat(client,
             model="claude-haiku-4-5",
             max_tokens=128,
             system=[{
