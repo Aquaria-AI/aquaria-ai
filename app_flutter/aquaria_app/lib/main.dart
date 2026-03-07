@@ -1127,10 +1127,10 @@ class _ObTankSetupPageState extends State<_ObTankSetupPage> {
               children: [
                 SizedBox(
                   width: double.infinity,
-                  height: 56,
+                  height: 61,
                   child: Image.asset('assets/images/21034573.jpg', fit: BoxFit.cover),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 26),
                 const _PouringVideoHeader(),
                 const SizedBox(height: 16),
                 Padding(
@@ -1863,6 +1863,11 @@ const _kSpeciesDescriptions = <String, String>{
   'Endler\'s Livebearer': 'Colorful nano fish closely related to guppies. Hardy, prolific breeders that are perfect for small, planted tanks.',
   'Peacock Gudgeon': 'A rare gem with vibrant peacock-like coloring. Peaceful and unusual, they prefer cool, soft water and planted environments.',
   'Scarlet Badis': 'Tiny jewels with stunning red and blue coloring. Males are territorial but peaceful with other species in nano planted tanks.',
+  'GloFish Tetra': 'Fluorescent black skirt tetras that glow under blue light. Same care as regular tetras — peaceful schoolers best kept in groups of 6+.',
+  'GloFish Danio': 'Fluorescent zebra danios — the original GloFish. Hardy, active schoolers that are perfect for beginners and glow brilliantly under blue light.',
+  'GloFish Barb': 'Fluorescent tiger barbs with the same semi-aggressive temperament. Keep in groups of 6+ to reduce fin-nipping; stunning under blue LEDs.',
+  'GloFish Shark': 'A fluorescent rainbow shark — semi-aggressive and territorial toward bottom-dwellers. Needs hiding spots and room to establish territory.',
+  'GloFish Betta': 'A fluorescent betta with the same care needs as standard bettas. Keep alone or with peaceful tankmates; glows under blue light.',
   // Saltwater Fish
   'Ocellaris Clownfish': 'The iconic "Finding Nemo" fish. Hardy, personable, and reef-safe; they form a symbiotic bond with anemones over time.',
   'Percula Clownfish': 'Nearly identical to ocellaris but slightly more vivid. Hardy, reef-safe, and one of the most beloved marine fish in the hobby.',
@@ -2976,11 +2981,6 @@ class _TankListScreenState extends State<TankListScreen> {
       backgroundColor: Colors.white,
       appBar: _buildAppBar(context, 'Aquaria', actions: [
           IconButton(
-            tooltip: 'Add new tank',
-            icon: const Icon(Icons.add),
-            onPressed: _openAdd,
-          ),
-          IconButton(
             tooltip: 'Setup guide',
             icon: const Icon(Icons.explore_outlined),
             onPressed: _openOnboarding,
@@ -3027,7 +3027,11 @@ class _TankListScreenState extends State<TankListScreen> {
                                 PopupMenuButton<String>(
                                   icon: const Icon(Icons.more_vert, color: Colors.black54),
                                   onSelected: (value) {
-                                    if (value == 'charts') {
+                                    if (value == 'add_tank') {
+                                      Navigator.of(context).push(MaterialPageRoute(
+                                        builder: (_) => const AddTankFlowScreen(),
+                                      )).then((_) => _refresh());
+                                    } else if (value == 'charts') {
                                       Navigator.of(context).push(MaterialPageRoute(
                                         builder: (_) => AllChartsScreen(tanks: TankStore.instance.tanks),
                                       ));
@@ -3036,6 +3040,8 @@ class _TankListScreenState extends State<TankListScreen> {
                                     }
                                   },
                                   itemBuilder: (_) => const [
+                                    PopupMenuItem(value: 'add_tank', child: Text('Add Tank')),
+                                    PopupMenuDivider(),
                                     PopupMenuItem(value: 'az', child: Text('Sort A → Z')),
                                     PopupMenuItem(value: 'za', child: Text('Sort Z → A')),
                                     PopupMenuDivider(),
@@ -3549,9 +3555,12 @@ class _AddTankFlowScreenState extends State<AddTankFlowScreen> {
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.close, color: _cDark),
-          onPressed: () => Navigator.of(context).pop(),
+        leading: Padding(
+          padding: const EdgeInsets.only(top: 10),
+          child: IconButton(
+            icon: const Icon(Icons.close, color: _cDark),
+            onPressed: () => Navigator.of(context).pop(),
+          ),
         ),
       ),
       body: Column(
@@ -3592,7 +3601,7 @@ class _AddTankFlowScreenState extends State<AddTankFlowScreen> {
               ),
             ),
             Padding(
-              padding: const EdgeInsets.only(bottom: 16),
+              padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom + 16),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: List.generate(_totalPages, (i) => AnimatedContainer(
@@ -4080,15 +4089,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
     final tasks = _allTasks();
     final measurementAlerts = _measurementAlerts();
     return Scaffold(
-      appBar: _buildAppBar(context, widget.tank.name, actions: [
-          IconButton(
-            tooltip: 'Edit tank',
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => EditTankFlowScreen(tank: widget.tank)),
-            ),
-            icon: const Icon(Icons.edit),
-          ),
-        ]),
+      appBar: _buildAppBar(context, widget.tank.name),
       bottomNavigationBar: _AquariaFooter(
         onAiTap: () => showModalBottomSheet(
           context: context,
@@ -4133,6 +4134,11 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
                 PopupMenuButton<String>(
                   tooltip: 'More options',
                   onSelected: (value) {
+                    if (value == 'edit_tank') {
+                      Navigator.of(context).push(MaterialPageRoute(
+                        builder: (_) => EditTankFlowScreen(tank: widget.tank),
+                      )).then((_) => _load());
+                    }
                     if (value == 'tap_water') {
                       Navigator.of(context).push(MaterialPageRoute(
                         builder: (_) => TapWaterProfileScreen(tank: widget.tank),
@@ -4140,6 +4146,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
                     }
                   },
                   itemBuilder: (_) => const [
+                    PopupMenuItem(value: 'edit_tank', child: Text('Edit Tank')),
                     PopupMenuItem(value: 'tap_water', child: Text('Tap Water Profile')),
                   ],
                   icon: const Icon(Icons.more_vert, size: 20),
@@ -5331,6 +5338,7 @@ class _LogEntryCardState extends State<_LogEntryCard> {
     final params = (parsed?['measurements'] as Map?)?.cast<String, dynamic>() ?? {};
     final actions = ((parsed?['actions'] as List?) ?? []).map((e) => e.toString()).toList();
     final notes = ((parsed?['notes'] as List?) ?? []).map((e) => e.toString()).toList();
+    final tasks = ((parsed?['tasks'] as List?) ?? []).cast<Map<String, dynamic>>();
     final cs = Theme.of(context).colorScheme;
 
     return Card(
@@ -5468,6 +5476,41 @@ class _LogEntryCardState extends State<_LogEntryCard> {
                   ],
                 ),
               )),
+            ],
+            // Tasks
+            if (tasks.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              const Row(
+                children: [
+                  Icon(Icons.task_alt, size: 15, color: Colors.black87),
+                  SizedBox(width: 4),
+                  Text('TASKS',
+                      style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
+                          color: Colors.black, letterSpacing: 0.8)),
+                ],
+              ),
+              const SizedBox(height: 6),
+              ...tasks.map((t) {
+                final desc = (t['description'] ?? '').toString();
+                final due = (t['due_date'] ?? t['due'] ?? '').toString();
+                return Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Padding(
+                        padding: EdgeInsets.only(top: 5),
+                        child: _Dot(color: Colors.orange),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(child: Text(
+                        due.isNotEmpty ? '$desc (due $due)' : desc,
+                        style: const TextStyle(fontSize: 13, height: 1.4),
+                      )),
+                    ],
+                  ),
+                );
+              }),
             ],
               ],
             ),
@@ -6135,7 +6178,63 @@ class _InhabitantsScreenState extends State<InhabitantsScreen> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : (_inhabitants.isEmpty && _plants.isEmpty)
-              ? const Center(child: Text('No inhabitants logged yet.', style: TextStyle(color: Colors.grey)))
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(32),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Text('No inhabitants logged yet.', style: TextStyle(color: Colors.grey)),
+                        const SizedBox(height: 20),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                icon: const Icon(Icons.add, size: 18),
+                                label: const Text('Add Inhabitants'),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: _cDark,
+                                  side: const BorderSide(color: _cMid),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                  padding: const EdgeInsets.symmetric(vertical: 12),
+                                ),
+                                onPressed: () async {
+                                  await Navigator.of(context).push(MaterialPageRoute(
+                                    builder: (_) => EditInhabitantsScreen(
+                                      tank: widget.tank,
+                                      onSaved: _load,
+                                    ),
+                                  ));
+                                },
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                icon: const Icon(Icons.add, size: 18),
+                                label: const Text('Add Plants'),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: _cDark,
+                                  side: const BorderSide(color: _cMid),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                  padding: const EdgeInsets.symmetric(vertical: 12),
+                                ),
+                                onPressed: () async {
+                                  await Navigator.of(context).push(MaterialPageRoute(
+                                    builder: (_) => EditInhabitantsScreen(
+                                      tank: widget.tank,
+                                      onSaved: _load,
+                                    ),
+                                  ));
+                                },
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                )
               : RefreshIndicator(
                   onRefresh: _load,
                   child: ListView(
@@ -6148,6 +6247,52 @@ class _InhabitantsScreenState extends State<InhabitantsScreen> {
                       const SizedBox(height: 6),
                       ..._plants.map((p) => _tile(p.name, null, '🌿')),
                     ],
+                    const SizedBox(height: 24),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            icon: const Icon(Icons.add, size: 18),
+                            label: const Text('Add Inhabitants'),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: _cDark,
+                              side: const BorderSide(color: _cMid),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                            ),
+                            onPressed: () async {
+                              await Navigator.of(context).push(MaterialPageRoute(
+                                builder: (_) => EditInhabitantsScreen(
+                                  tank: widget.tank,
+                                  onSaved: _load,
+                                ),
+                              ));
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            icon: const Icon(Icons.add, size: 18),
+                            label: const Text('Add Plants'),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: _cDark,
+                              side: const BorderSide(color: _cMid),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                            ),
+                            onPressed: () async {
+                              await Navigator.of(context).push(MaterialPageRoute(
+                                builder: (_) => EditInhabitantsScreen(
+                                  tank: widget.tank,
+                                  onSaved: _load,
+                                ),
+                              ));
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
                   ],
                 ),
                 ),
@@ -6227,6 +6372,9 @@ const _kInhabitantCatalogue = <String, List<_Species>>{
     _Species('Ram Cichlid', 'fish'), _Species('Apistogramma', 'fish'), _Species('Flowerhorn', 'fish'),
     _Species('Electric Yellow Cichlid', 'fish'), _Species('Endler\'s Livebearer', 'fish'),
     _Species('Peacock Gudgeon', 'fish'), _Species('Scarlet Badis', 'fish'),
+    _Species('GloFish Tetra', 'fish'), _Species('GloFish Danio', 'fish'),
+    _Species('GloFish Barb', 'fish'), _Species('GloFish Shark', 'fish'),
+    _Species('GloFish Betta', 'fish'),
   ],
   'Saltwater Fish': [
     _Species('Ocellaris Clownfish', 'fish'), _Species('Percula Clownfish', 'fish'),
@@ -6705,7 +6853,8 @@ class _DailyLogsScreenState extends State<DailyLogsScreen> {
                   if (parsed != null) {
                     final hasContent = (parsed['measurements'] as Map?)?.isNotEmpty == true ||
                         (parsed['actions'] as List?)?.isNotEmpty == true ||
-                        (parsed['notes'] as List?)?.isNotEmpty == true;
+                        (parsed['notes'] as List?)?.isNotEmpty == true ||
+                        (parsed['tasks'] as List?)?.isNotEmpty == true;
                     if (!hasContent) return const SizedBox.shrink();
                   }
                   return _LogEntryCard(
@@ -7393,12 +7542,7 @@ class _EditTankScreenState extends State<EditTankScreen> {
     try {
       final name = _nameCtrl.text.trim().isEmpty ? widget.tank.name : _nameCtrl.text.trim();
       final tank = TankModel(id: widget.tank.id, name: name, gallons: _gallons.round(), waterType: _waterType, createdAt: widget.tank.createdAt);
-      await TankStore.instance.saveParsedDetails(
-        tank: tank,
-        inhabitants: _inhs.where((i) => i.name.text.trim().isNotEmpty).map((i) => {'name': i.name.text.trim(), 'type': i.type, 'count': i.count}).toList(),
-        plants: _plts.map((p) => p.name.text.trim()).where((n) => n.isNotEmpty).toList(),
-      );
-      await TankStore.instance.load();
+      await TankStore.instance.saveTank(tank: tank);
       if (!mounted) return;
       Navigator.of(context).pop();
     } catch (e) {
@@ -7515,124 +7659,6 @@ class _EditTankScreenState extends State<EditTankScreen> {
                           : _SaltwaterFollowUp(selected: _saltFeatures, onToggle: (f) { setState(() { _saltFeatures.contains(f) ? _saltFeatures.remove(f) : _saltFeatures.add(f); }); _pushWaterType(); }),
                     ),
             ),
-            const SizedBox(height: 24),
-            const Divider(),
-            const SizedBox(height: 16),
-            // Inhabitants
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text('INHABITANTS', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.grey, letterSpacing: 0.8)),
-                TextButton.icon(
-                  onPressed: () async {
-                    final result = await showModalBottomSheet<({String name, String type, int count})>(
-                      context: context, isScrollControlled: true, backgroundColor: Colors.transparent,
-                      builder: (_) => _SpeciesPickerSheet(isPlant: false, waterType: _waterType),
-                    );
-                    if (result != null && mounted) setState(() => _inhs.add(_InhEdit(nameText: result.name, type: result.type, count: result.count)));
-                  },
-                  icon: const Icon(Icons.add, size: 16),
-                  label: const Text('Add'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            ...List.generate(_inhs.length, (idx) {
-              final inh = _inhs[idx];
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Row(
-                  children: [
-                    DropdownButton<String>(
-                      value: inh.type,
-                      underline: const SizedBox(),
-                      isDense: true,
-                      items: _types.map((t) => DropdownMenuItem(value: t, child: Text(_typeEmoji[t] ?? '🐠', style: const TextStyle(fontSize: 20)))).toList(),
-                      onChanged: (v) => setState(() => inh.type = v!),
-                    ),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: GestureDetector(
-                        onTap: () async {
-                          final result = await showModalBottomSheet<({String name, String type, int count})>(
-                            context: context, isScrollControlled: true, backgroundColor: Colors.transparent,
-                            builder: (_) => _SpeciesPickerSheet(isPlant: false, waterType: _waterType),
-                          );
-                          if (result != null && mounted) setState(() { inh.name.text = result.name; inh.type = result.type; });
-                        },
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-                          decoration: BoxDecoration(border: Border.all(color: Colors.grey.shade400), borderRadius: BorderRadius.circular(4)),
-                          child: Row(children: [
-                            Expanded(child: Text(inh.name.text.isEmpty ? 'Tap to choose…' : inh.name.text, style: TextStyle(fontSize: 14, color: inh.name.text.isEmpty ? Colors.grey : Colors.black87))),
-                            const Icon(Icons.arrow_drop_down, size: 18, color: Colors.grey),
-                          ]),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    IconButton(icon: const Icon(Icons.remove, size: 16), padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 28, minHeight: 28), onPressed: inh.count > 1 ? () => setState(() => inh.count--) : null),
-                    SizedBox(width: 24, child: Text('${inh.count}', textAlign: TextAlign.center, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600))),
-                    IconButton(icon: const Icon(Icons.add, size: 16), padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 28, minHeight: 28), onPressed: () => setState(() => inh.count++)),
-                    IconButton(icon: const Icon(Icons.close, size: 16, color: Colors.red), padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 28, minHeight: 28), onPressed: () => setState(() { _inhs[idx].dispose(); _inhs.removeAt(idx); })),
-                  ],
-                ),
-              );
-            }),
-            const SizedBox(height: 8),
-            const Divider(),
-            const SizedBox(height: 16),
-            // Plants
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text('PLANTS', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.grey, letterSpacing: 0.8)),
-                TextButton.icon(
-                  onPressed: () async {
-                    final result = await showModalBottomSheet<({String name, String type, int count})>(
-                      context: context, isScrollControlled: true, backgroundColor: Colors.transparent,
-                      builder: (_) => const _SpeciesPickerSheet(isPlant: true),
-                    );
-                    if (result != null && mounted) setState(() => _plts.add(_PlantEdit(nameText: result.name)));
-                  },
-                  icon: const Icon(Icons.add, size: 16),
-                  label: const Text('Add'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            ...List.generate(_plts.length, (idx) {
-              final plt = _plts[idx];
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Row(
-                  children: [
-                    const Text('🌿', style: TextStyle(fontSize: 20)),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: GestureDetector(
-                        onTap: () async {
-                          final result = await showModalBottomSheet<({String name, String type, int count})>(
-                            context: context, isScrollControlled: true, backgroundColor: Colors.transparent,
-                            builder: (_) => const _SpeciesPickerSheet(isPlant: true),
-                          );
-                          if (result != null && mounted) setState(() => plt.name.text = result.name);
-                        },
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-                          decoration: BoxDecoration(border: Border.all(color: Colors.grey.shade400), borderRadius: BorderRadius.circular(4)),
-                          child: Row(children: [
-                            Expanded(child: Text(plt.name.text.isEmpty ? 'Tap to choose…' : plt.name.text, style: TextStyle(fontSize: 14, color: plt.name.text.isEmpty ? Colors.grey : Colors.black87))),
-                            const Icon(Icons.arrow_drop_down, size: 18, color: Colors.grey),
-                          ]),
-                        ),
-                      ),
-                    ),
-                    IconButton(icon: const Icon(Icons.close, size: 16, color: Colors.red), padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 28, minHeight: 28), onPressed: () => setState(() { _plts[idx].dispose(); _plts.removeAt(idx); })),
-                  ],
-                ),
-              );
-            }),
           ],
         ),
       ),
