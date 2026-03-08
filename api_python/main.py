@@ -1253,8 +1253,10 @@ def chat_tank(req: ChatRequest):
                 )
                 raw = ex_response.content[0].text.strip()
                 extraction_raw = raw
-                raw = re.sub(r"^```(?:json)?\s*", "", raw)
-                raw = re.sub(r"\s*```$", "", raw).strip()
+                # Strip everything before the first { and after the last }
+                json_match = re.search(r"\{.*\}", raw, flags=re.DOTALL)
+                if json_match:
+                    raw = json_match.group(0)
                 parsed = json.loads(raw)
                 extracted_tasks = parsed.get("tasks", [])
                 print(f"[TaskExtract] AI raw response: {raw}")
