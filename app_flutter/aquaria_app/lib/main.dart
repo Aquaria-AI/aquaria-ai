@@ -5534,7 +5534,7 @@ class _ChatSheetState extends State<_ChatSheet> {
         }
 
         // Save any tasks the AI confirmed scheduling
-        debugPrint('[Chat] data type: ${data.runtimeType}, data keys: ${data is Map ? data.keys.toList() : "not a map"}');
+        debugPrint('[Chat] full response: $data');
         final rawTasks = data is Map ? (data['tasks'] as List?)?.cast<Map<String, dynamic>>() : null;
         debugPrint('[Chat] rawTasks: $rawTasks');
         final chatTasks = rawTasks != null ? await _moderateTasks(rawTasks) : null;

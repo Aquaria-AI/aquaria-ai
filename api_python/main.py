@@ -1209,8 +1209,16 @@ def chat_tank(req: ChatRequest):
             today_str = date.today().isoformat()
             today_date = date.today()
 
-            # Quick extraction: parse due date from user message directly
+            # Quick extraction: try current message first, then scan history
             quick_task = _quick_extract_task(req.message, today_date)
+            if not quick_task:
+                # Scan history for the original reminder request
+                for h in reversed(req.history or []):
+                    if h.get("role") == "user":
+                        quick_task = _quick_extract_task(h.get("content", ""), today_date)
+                        if quick_task:
+                            break
+
             if quick_task:
                 extracted_tasks = [quick_task]
                 print(f"[TaskExtract] quick extracted: {extracted_tasks}")
