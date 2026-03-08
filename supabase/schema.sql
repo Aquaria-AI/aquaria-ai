@@ -60,7 +60,22 @@ create table if not exists public.logs (
   updated_at timestamptz not null default now()
 );
 
--- Dismissed tasks
+-- Tasks (reminders + alerts)
+create table if not exists public.tasks (
+  id bigint generated always as identity primary key,
+  tank_id text references public.tanks(id) on delete cascade not null,
+  user_id uuid references auth.users(id) on delete cascade not null,
+  description text not null,
+  due_date date,
+  priority text not null default 'normal',
+  source text not null default 'ai',
+  is_dismissed boolean not null default false,
+  dismissed_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- Dismissed tasks (legacy, kept for migration)
 create table if not exists public.dismissed_tasks (
   task_key text not null,
   user_id uuid references auth.users(id) on delete cascade not null,
@@ -80,6 +95,9 @@ create index if not exists idx_plants_user_id on public.plants(user_id);
 create index if not exists idx_logs_tank_id on public.logs(tank_id);
 create index if not exists idx_logs_user_id on public.logs(user_id);
 create index if not exists idx_logs_created_at on public.logs(created_at desc);
+create index if not exists idx_tasks_tank_id on public.tasks(tank_id);
+create index if not exists idx_tasks_user_id on public.tasks(user_id);
+create index if not exists idx_tasks_due_date on public.tasks(due_date);
 
 -- ============================================================
 -- AUTO-UPDATE updated_at TRIGGER
@@ -109,6 +127,10 @@ create or replace trigger trg_logs_updated_at
   before update on public.logs
   for each row execute function public.set_updated_at();
 
+create or replace trigger trg_tasks_updated_at
+  before update on public.tasks
+  for each row execute function public.set_updated_at();
+
 -- ============================================================
 -- AUTO-CREATE PROFILE ON SIGNUP
 -- ============================================================
@@ -135,6 +157,7 @@ alter table public.tanks enable row level security;
 alter table public.inhabitants enable row level security;
 alter table public.plants enable row level security;
 alter table public.logs enable row level security;
+alter table public.tasks enable row level security;
 alter table public.dismissed_tasks enable row level security;
 
 -- Profiles: users can only read/update their own profile
@@ -182,6 +205,16 @@ create policy "Users can update own logs"
   on public.logs for update using (auth.uid() = user_id);
 create policy "Users can delete own logs"
   on public.logs for delete using (auth.uid() = user_id);
+
+-- Tasks
+create policy "Users can view own tasks"
+  on public.tasks for select using (auth.uid() = user_id);
+create policy "Users can insert own tasks"
+  on public.tasks for insert with check (auth.uid() = user_id);
+create policy "Users can update own tasks"
+  on public.tasks for update using (auth.uid() = user_id);
+create policy "Users can delete own tasks"
+  on public.tasks for delete using (auth.uid() = user_id);
 
 -- Dismissed tasks
 create policy "Users can view own dismissed tasks"

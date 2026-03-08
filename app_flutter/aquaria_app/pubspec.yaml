@@ -43,6 +43,15 @@ dependencies:
   flutter_local_notifications: ^18.0.0
   timezone: ^0.9.4
   flutter_timezone: ^5.0.1
+  supabase_flutter: ^2.9.0
+  google_sign_in: ^6.2.1
+  sign_in_with_apple: ^6.1.4
+  crypto: ^3.0.6
+  google_fonts: ^8.0.2
+  file_picker: ^9.2.2
+  csv: ^6.0.0
+  image_picker: ^1.1.2
+  share_plus: ^10.1.4
 
 dev_dependencies:
   flutter_test:
@@ -84,6 +93,9 @@ flutter:
     - assets/images/dropin-silent.mp4
     - assets/images/fish-smile.png
     - assets/images/fish-smile-v2.png
+    - assets/images/fulllogo.jpg
+    - assets/images/logo-side.png
+    - assets/images/fish.jpg
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

@@ -60,6 +60,27 @@
     <key>UIApplicationSupportsIndirectInputEvents</key>
     <true/>
 
+    <!-- Deep link URL scheme for Supabase auth callback -->
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>com.example.aquariaApp</string>
+            </array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>com.googleusercontent.apps.710206253790-4qollfoaeal3bau5rhas3emqn9uhqpd2</string>
+            </array>
+        </dict>
+    </array>
+
     <!-- Allow HTTP for local development -->
     <key>NSAppTransportSecurity</key>
     <dict>
@@ -70,6 +91,12 @@
     <!-- Allow access to local network (needed for API during dev) -->
     <key>NSLocalNetworkUsageDescription</key>
     <string>Aquaria needs access to your local network to connect to the Aquaria API running on your computer during development.</string>
+
+    <!-- Camera & photo library for tank photos -->
+    <key>NSCameraUsageDescription</key>
+    <string>Aquaria uses your camera to take photos of your aquarium.</string>
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>Aquaria needs access to your photo library to upload aquarium photos.</string>
 
     <!-- Local notifications -->
     <key>UIBackgroundModes</key>

@@ -211,6 +211,7 @@ class SummaryRequest(BaseModel):
 class ChatRequest(BaseModel):
     tank: Optional[Dict[str, Any]] = None
     available_tanks: Optional[List[str]] = None
+    available_tanks_detail: Optional[List[Dict[str, Any]]] = None
     message: str
     history: Optional[List[Dict[str, Any]]] = None
     recent_logs: Optional[List[str]] = None
@@ -332,18 +333,19 @@ Categorize each organism with one of these types:
 Return ONLY valid JSON — no markdown, no code fences:
 {
   "inhabitants": [
-    {"name": "neon tetra", "count": 10, "type": "fish"},
-    {"name": "cherry shrimp", "count": 5, "type": "invertebrate"},
-    {"name": "hammer coral", "count": 2, "type": "coral"},
-    {"name": "zoanthid", "count": 1, "type": "polyp"},
-    {"name": "bubble tip anemone", "count": 1, "type": "anemone"},
-    {"name": "java fern", "count": 1, "type": "plant"}
+    {"name": "Neon Tetra", "count": 10, "type": "fish"},
+    {"name": "Cherry Shrimp", "count": 5, "type": "invertebrate"},
+    {"name": "Hammer Coral", "count": 2, "type": "coral"},
+    {"name": "Zoanthid", "count": 1, "type": "polyp"},
+    {"name": "Bubble Tip Anemone", "count": 1, "type": "anemone"},
+    {"name": "Java Fern", "count": 1, "type": "plant"}
   ]
 }
 
 Rules:
 - If no count is mentioned, use 1
-- Use singular species names (e.g. "neon tetra" not "neon tetras")
+- Use Title Case for species names (e.g. "Neon Tetra" not "neon tetra")
+- Use singular species names (e.g. "Neon Tetra" not "Neon Tetras")
 - Include every organism mentioned
 - Empty or irrelevant input: return {"inhabitants": []}"""
 
@@ -754,7 +756,10 @@ Do NOT tell the user you cannot do any of the above. These are all things you ca
 
 ABSOLUTE RULE — always follow this first, before anything else:
 If the user's message contains any loggable aquarium information (a measurement, an observation, an action, an aquarium-related reminder), your FIRST sentence MUST be a confirmation that it was logged. Use "Logged." or "Got it." or "Noted." — one word or short phrase, nothing else on that line. Do NOT ask a clarifying question first. Do NOT give advice first. Do NOT greet first. Log confirmation always comes first, no exceptions.
-EXCEPTION: If the context indicates a MULTI-TANK SESSION (multiple tanks and none pre-selected), and it is not clear from the conversation which tank the data applies to, ask which tank BEFORE confirming the log. Once the tank is identified, confirm normally. Never log or confirm logging without knowing which tank it belongs to.
+EXCEPTIONS — ask BEFORE confirming the log in these cases:
+1. MULTI-TANK SESSION: If the context indicates multiple tanks and none pre-selected, and it is not clear from the conversation which tank the data applies to, ask which tank BEFORE confirming the log.
+2. MISSING DATE: When the user reports an action they took (water change, dosing, feeding, cleaning, adding/removing livestock, etc.) without specifying when it happened, ask when they did it BEFORE confirming the log. Do NOT assume today. Keep it concise — e.g. "When did you do the water change?" If the user says "today", "yesterday", "this morning", "just now", or includes a specific date, that counts as specifying — no need to ask.
+Once the missing info is provided, confirm the log normally.
 
 TONE RULE — always redirect positively, never negatively:
 Never say "I can't", "I don't have access to", "I'm unable to", or "that's outside my scope." If a request is off-topic or you can't help with something specific, redirect toward what you CAN do instead.
@@ -763,15 +768,18 @@ Never say "I can't", "I don't have access to", "I'm unable to", or "that's outsi
   WRONG: "I don't have access to create tank profiles."
   RIGHT: "Just tell me your tank's name, size, and water type and I'll get it set up for you."
 
+PERSONALITY — you have a warm sense of humor:
+When the user cracks a joke, asks something silly or playful (e.g. "why is the inside of my tank wet?"), lean into it! Tell a short aquarium-related joke or quip, keep it lighthearted, then gently steer back if needed. You're friendly and fun, not robotic. Puns are welcome.
+
 RELEVANCE RULE — applies only to clearly off-topic requests:
-If a message has absolutely nothing to do with aquariums (a personal insult, an unrelated life errand, a joke), skip logging it and redirect warmly toward what Ariel can help with. Never frame this as a limitation — frame it as an invitation.
+If a message has absolutely nothing to do with aquariums (a personal insult, an unrelated life errand), skip logging it and redirect warmly toward what Ariel can help with. Never frame this as a limitation — frame it as an invitation.
 
 Your other jobs (after the log confirmation, if applicable):
-1. If the log entry was ambiguous or missing a key detail, ask ONE concise clarifying question after confirming.
+1. If the log entry was ambiguous or missing a key detail (other than date, which is handled above), ask ONE concise clarifying question after confirming.
    Examples: "phosphates are high" → confirm logged, then ask what the value was.
 2. When the log entry is clear and complete, the confirmation alone is enough — add follow-up only if genuinely useful.
 3. When the user asks a question, answer it directly. If it follows a log entry, confirm the log first, then answer.
-4. When the user sets a reminder or task, confirm it was noted.
+4. When the user sets a reminder or task, confirm with a phrase like "I've set a reminder for [description] on [date]." or "Reminder scheduled for [date]." Always include "reminder" in your confirmation.
 5. Keep responses short — 1-3 sentences unless a detailed answer is genuinely needed.
 6. Never repeat or re-summarize the full tank status unprompted.
 7. HARD RULE — one question per response, maximum. Never ask two questions in a single reply, even as an "or" choice or follow-up. If you have multiple things to ask, pick the single most important one and wait for the answer before asking the next. Violating this rule is not allowed.
@@ -932,6 +940,7 @@ Rules:
 - waterType: must be exactly "freshwater", "saltwater", or "reef"
 - inhabitant type: "fish" | "invertebrate" | "coral" | "polyp" | "anemone"
 - If no inhabitants mentioned, use empty array. If no plants, use empty array.
+- Use Title Case for all species and plant names (e.g. "Neon Tetra", "Java Fern").
 - count: integer, default to 1 if not specified.
 - If the conversation is NOT about creating a new tank (e.g. the user is asking about an existing tank), return {"tank": {}, "initial": {}}"""
 
@@ -961,14 +970,17 @@ def _history_has_tank_creation_offer(history: list) -> tuple[bool, str]:
 
 
 def _history_has_reminder_offer(history: list) -> tuple[bool, str]:
-    """Returns (has_offer, ai_message_text) scanning history in reverse for the last AI message."""
-    for msg in reversed(history or []):
-        if msg.get("role") == "assistant":
-            content = msg.get("content", "")
-            lower = content.lower()
-            if any(k in lower for k in ["reminder", "schedule", "would you like me to set", "set a reminder"]):
-                return True, content
-            return False, ""
+    """Returns (has_offer, ai_message_text) scanning recent history for reminder context."""
+    # Check the last 6 messages (3 exchanges) for any reminder-related discussion
+    recent = (history or [])[-6:]
+    for msg in reversed(recent):
+        content = msg.get("content", "")
+        lower = content.lower()
+        if any(k in lower for k in [
+            "reminder", "remind", "schedule", "would you like me to set",
+            "set a reminder", "which tank", "what tank",
+        ]):
+            return True, content
     return False, ""
 
 
@@ -997,23 +1009,47 @@ def chat_tank(req: ChatRequest):
     tank = req.tank or {}
     inhabitants = tank.get("inhabitants", [])
     plants = tank.get("plants", [])
-    available_tanks = req.available_tanks or []
+    # Use detailed tank list if available, otherwise fall back to names
+    available_tanks_detail = req.available_tanks_detail or []
+    available_tank_names = req.available_tanks or []
+    # Build a unified list: prefer detail, fall back to names
+    if available_tanks_detail:
+        available_tanks = available_tanks_detail
+    else:
+        available_tanks = available_tank_names
     no_tank_context = not tank  # chat opened from home page — no tank pre-selected
 
+    # Format tank list — supports both old (string) and new (dict) formats
+    def _fmt_tank(t):
+        if isinstance(t, dict):
+            name = t.get("name", "Unknown")
+            gal = t.get("gallons", "?")
+            wt = t.get("water_type", "")
+            created = t.get("created_at", "")[:10]  # YYYY-MM-DD
+            return f'"{name}" ({gal} gal, {wt}, created {created})'
+        return f'"{t}"'
+
+    def _tank_name(t):
+        return t.get("name", str(t)) if isinstance(t, dict) else str(t)
+
+    print(f"[Chat] tank={'set' if tank else 'none'} available_tanks={[_tank_name(t) for t in available_tanks]} no_tank_context={no_tank_context}")
+
     if no_tank_context and len(available_tanks) > 1:
-        tanks_list = ", ".join(f'"{t}"' for t in available_tanks)
+        tanks_list = "\n".join(f"  - {_fmt_tank(t)}" for t in available_tanks)
         tank_context = (
-            f"MULTI-TANK SESSION: The user has multiple tanks: {tanks_list}. "
+            f"MULTI-TANK SESSION: The user has multiple tanks:\n{tanks_list}\n"
             f"No specific tank is selected for this conversation.\n"
             f"IMPORTANT: Before logging any measurement, observation, action, or task, "
             f"you MUST ask which tank it applies to if it is not already clear from context. "
+            f"If the user refers to a tank indirectly (e.g. 'the one I just created', 'my big tank', 'the reef'), "
+            f"use the tank details above (size, type, creation date) to resolve which tank they mean. "
             f"Once the tank is identified, confirm it in your reply (e.g. 'Got it — logging that for [Tank Name].'). "
             f"If the user's message is a general question or doesn't involve logging, no clarification is needed.\n"
             f"Note: you can still create NEW tank profiles if the user asks — do not refuse.\n"
         )
     elif no_tank_context and len(available_tanks) == 1:
         tank_context = (
-            f"Current tank context: {available_tanks[0]} (only tank).\n"
+            f"Current tank context: {_fmt_tank(available_tanks[0])} (only tank).\n"
             f"Note: you can still create NEW tank profiles if the user asks — do not refuse.\n"
         )
     else:
@@ -1022,6 +1058,11 @@ def chat_tank(req: ChatRequest):
             f"{tank.get('gallons', '?')} gal, {tank.get('water_type', 'unknown')} water.\n"
             f"Note: you can still create NEW tank profiles if the user asks — do not refuse.\n"
         )
+        if len(available_tanks) > 1:
+            tanks_list = "\n".join(f"  - {_fmt_tank(t)}" for t in available_tanks)
+            tank_context += f"The user also has these other tanks:\n{tanks_list}\nIf they ask to switch tanks or refer to another tank, use the details above to resolve which one.\n"
+    if tank.get("has_csv_imports"):
+        tank_context += "This tank has imported historical water parameter data from a CSV — treat it as an established, already-running tank. Do NOT ask about cycling or initial setup.\n"
     if inhabitants:
         tank_context += f"Inhabitants: {', '.join(inhabitants)}.\n"
         # Flag sensitive categories so the model applies extra caution
@@ -1100,22 +1141,30 @@ def chat_tank(req: ChatRequest):
             "i'll remind", "i will remind", "set a reminder", "scheduled a reminder",
             "reminder for", "added a reminder", "task set", "i've added a reminder",
             "i've created a reminder", "i have created a reminder",
+            "i'll set a reminder", "i'll add a reminder", "noted. i'll remind",
+            "remind you", "i've scheduled", "i have scheduled",
         ])
 
         user_explicit_task_request = bool(re.search(
-            r"\b(remind me|set (a |an )?reminder|schedule (a |an )?reminder|"
+            r"\b(remind me|remind .*(tomorrow|next|monday|tuesday|wednesday|thursday|friday|saturday|sunday|week|month|day)|"
+            r"set (a |an )?reminder|schedule (a |an )?reminder|"
             r"daily reminder|weekly reminder|monthly reminder|create (a |an )?reminder|"
-            r"add (a |an )?reminder|set (a |an )?task)\b",
+            r"add (a |an )?reminder|set (a |an )?task|"
+            r"reminder (for |to |tomorrow|next))\b",
             req.message, re.IGNORECASE,
         ))
 
+        # Also trigger if the AI reply confirms a reminder AND history had a reminder discussion
+        history_has_reminder = _history_has_reminder_offer(req.history or [])[0]
         should_extract_tasks = (
-            (_is_affirmation(req.message) and _history_has_reminder_offer(req.history or [])[0])
+            (_is_affirmation(req.message) and history_has_reminder)
             or reply_confirms_task_set
             or user_explicit_task_request
+            or (history_has_reminder and "reminder" in reply_lower)
         )
 
-        print(f"[TaskExtract] should_extract={should_extract_tasks} reply_confirms={reply_confirms_task_set} user_explicit={user_explicit_task_request} is_affirmation={_is_affirmation(req.message)}")
+        print(f"[TaskExtract] should_extract={should_extract_tasks} reply_confirms={reply_confirms_task_set} user_explicit={user_explicit_task_request} is_affirmation={_is_affirmation(req.message)} user_msg='{req.message[:80]}' reply_snippet='{reply_lower[:80]}'")
+        print(f"[TaskExtract] history_len={len(req.history or [])}")
 
         if should_extract_tasks:
             today_str = date.today().isoformat()
@@ -1140,7 +1189,7 @@ def chat_tank(req: ChatRequest):
                 raw = re.sub(r"\s*```$", "", raw).strip()
                 parsed = json.loads(raw)
                 extracted_tasks = parsed.get("tasks", [])
-                print(f"[TaskExtract] extracted {len(extracted_tasks)} task(s)")
+                print(f"[TaskExtract] extracted {len(extracted_tasks)} task(s): {extracted_tasks}")
             except Exception as e:
                 print(f"[Chat/TaskExtract] error: {e}")
 

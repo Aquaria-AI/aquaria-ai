@@ -75,18 +75,30 @@ class NotificationService {
     required String tankName,
     required Map<String, dynamic> task,
   }) async {
-    if (!_ready) return;
+    debugPrint('[Notif] scheduleForTask called: ready=$_ready task=$task');
+    if (!_ready) { debugPrint('[Notif] NOT READY — skipping'); return; }
 
     final desc = task['description']?.toString() ?? '';
     final rawDue = (task['due_date'] ?? task['due'])?.toString() ?? '';
-    if (desc.isEmpty || rawDue.isEmpty) return;
+    debugPrint('[Notif] desc="$desc" rawDue="$rawDue"');
+    if (desc.isEmpty) { debugPrint('[Notif] empty desc — skipping'); return; }
 
-    final due = DateTime.tryParse(rawDue);
-    if (due == null) return;
+    final now = tz.TZDateTime.now(tz.local);
+    tz.TZDateTime fire;
 
-    // Fire at 9:00 AM local time on the due date
-    final fire = tz.TZDateTime(tz.local, due.year, due.month, due.day, 9);
-    if (fire.isBefore(tz.TZDateTime.now(tz.local))) return;
+    final due = rawDue.isNotEmpty ? DateTime.tryParse(rawDue) : null;
+    if (due != null) {
+      fire = tz.TZDateTime(tz.local, due.year, due.month, due.day, 9);
+      if (fire.isBefore(now)) {
+        fire = now.add(const Duration(minutes: 1));
+        debugPrint('[Notif] fire time was past, rescheduled to $fire');
+      }
+    } else {
+      // No due date — fire 1 minute from now
+      fire = now.add(const Duration(minutes: 1));
+      debugPrint('[Notif] no due date, firing in 1 min at $fire');
+    }
+    debugPrint('[Notif] fire=$fire now=$now');
 
     final id = _notifId(tankId, desc, rawDue);
 
@@ -110,6 +122,7 @@ class NotificationService {
           UILocalNotificationDateInterpretation.absoluteTime,
       payload: tankId, // used on tap to navigate to the correct tank
     );
+    debugPrint('[Notif] ✓ Notification scheduled id=$id fire=$fire desc="$desc"');
   }
 
   /// Cancel the notification for a specific task.

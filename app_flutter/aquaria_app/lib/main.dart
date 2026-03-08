@@ -1,17 +1,25 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:fl_chart/fl_chart.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:video_player/video_player.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
+import 'package:file_picker/file_picker.dart';
+import 'package:csv/csv.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:share_plus/share_plus.dart';
 
 import 'db/app_db.dart' as db;
 import 'models/tank.dart';
+import 'screens/auth_screen.dart';
 import 'services/notification_service.dart';
+import 'services/supabase_service.dart';
 import 'state/tank_store.dart';
 
 class _ChatMessage {
@@ -61,6 +69,45 @@ const _cMid     = Color(0xFF1FA2A8);
 const _cLight   = Color(0xFF7FE2D5);
 const _cMint    = Color(0xFFD9F7F0);
 const _cBeige   = Color(0xFFE7D8C7);
+
+/// Formal parameter display names with units.
+const _paramDisplayNames = <String, String>{
+  'ph': 'pH',
+  'ammonia': 'Ammonia (ppm)',
+  'nitrite': 'Nitrite (ppm)',
+  'nitrate': 'Nitrate (ppm)',
+  'gh': 'GH (dGH)',
+  'kh': 'KH (dKH)',
+  'temp': 'Temp (°F)',
+  'salinity': 'Salinity (SG)',
+  'phosphate': 'Phosphate (ppm)',
+  'calcium': 'Calcium (ppm)',
+  'magnesium': 'Magnesium (ppm)',
+  'potassium': 'Potassium (ppm)',
+  'tds': 'TDS (ppm)',
+  'alkalinity': 'Alkalinity (dKH)',
+  'copper': 'Copper (ppm)',
+  'iron': 'Iron (ppm)',
+};
+
+/// Short label (no units) for tight spaces like chips.
+const _paramShortNames = <String, String>{
+  'ph': 'pH', 'ammonia': 'Ammonia', 'nitrite': 'Nitrite', 'nitrate': 'Nitrate',
+  'gh': 'GH', 'kh': 'KH', 'temp': 'Temp', 'salinity': 'Salinity',
+  'phosphate': 'Phosphate', 'calcium': 'Calcium', 'magnesium': 'Magnesium',
+  'potassium': 'Potassium', 'tds': 'TDS', 'alkalinity': 'Alkalinity',
+  'copper': 'Copper', 'iron': 'Iron',
+};
+
+/// Get the formal display name for a parameter key.
+String _paramLabel(String key) => _paramDisplayNames[key.toLowerCase()] ?? key;
+
+/// Get the short name (no units) for a parameter key.
+String _paramShortLabel(String key) => _paramShortNames[key.toLowerCase()] ?? key;
+
+/// Title-case a species / plant name: "neon tetra" → "Neon Tetra"
+String _titleCase(String s) =>
+    s.split(' ').map((w) => w.isEmpty ? w : '${w[0].toUpperCase()}${w.substring(1)}').join(' ');
 
 const double _kFooterHeight = 45.0;
 
@@ -123,25 +170,69 @@ class _AquariaFooter extends StatelessWidget {
   }
 }
 
+const _cLogoTeal = Color(0xFF2297A8);
+
 AppBar _buildAppBar(BuildContext context, String title, {List<Widget>? actions}) => AppBar(
-      title: Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-      iconTheme: const IconThemeData(color: Colors.white),
-      actionsIconTheme: const IconThemeData(color: Colors.white),
-      backgroundColor: Colors.transparent,
+      title: Text(title, style: const TextStyle(color: _cDark, fontWeight: FontWeight.bold)),
+      iconTheme: const IconThemeData(color: _cDark),
+      actionsIconTheme: const IconThemeData(color: _cDark),
+      backgroundColor: Colors.white,
+      elevation: 0,
       actions: [
-        IconButton(
-          tooltip: 'Send feedback',
-          icon: const Icon(Icons.help_outline_rounded),
-          onPressed: () => _showFeedbackSheet(context),
-        ),
         ...(actions ?? []),
+        IconButton(
+          tooltip: 'Invite friends',
+          icon: const Icon(Icons.person_add_outlined),
+          onPressed: () {
+            Share.share('Check out Aquaria — an AI-powered aquarium companion app! https://aquaria.app');
+          },
+        ),
+        PopupMenuButton<String>(
+          icon: const Icon(Icons.account_circle_outlined),
+          tooltip: 'Account',
+          onSelected: (value) async {
+            if (value == 'feedback') {
+              _showFeedbackSheet(context);
+            } else if (value == 'sign_out') {
+              await SupabaseService.signOut();
+              await TankStore.instance.clearLocal();
+              await _clearOnboardingDone();
+              if (context.mounted) {
+                Navigator.of(context).pushAndRemoveUntil(
+                  MaterialPageRoute(builder: (_) => const _AppEntry()),
+                  (_) => false,
+                );
+              }
+            }
+          },
+          itemBuilder: (_) => [
+            if (SupabaseService.isLoggedIn) ...[
+              PopupMenuItem(
+                enabled: false,
+                child: Text(
+                  SupabaseService.userEmail ?? '',
+                  style: const TextStyle(color: Colors.black54, fontSize: 13),
+                ),
+              ),
+              const PopupMenuDivider(),
+            ],
+            const PopupMenuItem(value: 'feedback', child: Text('Feedback')),
+            if (SupabaseService.isLoggedIn)
+              const PopupMenuItem(value: 'sign_out', child: Text('Sign Out')),
+          ],
+        ),
       ],
-      flexibleSpace: Stack(
-        fit: StackFit.expand,
-        children: [
-          Image.asset('assets/images/21034573.jpg', fit: BoxFit.cover),
-          Container(color: Colors.black26),
-        ],
+      flexibleSpace: Container(
+        color: Colors.white,
+        child: SafeArea(
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Padding(
+              padding: const EdgeInsets.only(left: 47),
+              child: Image.asset('assets/images/logo-side.png', height: 39, fit: BoxFit.contain),
+            ),
+          ),
+        ),
       ),
     );
 
@@ -154,6 +245,227 @@ void _showFeedbackSheet(BuildContext context) {
     ),
     builder: (_) => const _FeedbackSheet(),
   );
+}
+
+/// Shows camera/gallery picker, then a save dialog with preview, notes, and tank selector.
+Future<void> pickAndSavePhoto(BuildContext context, {String? tankId}) async {
+  final tanks = TankStore.instance.tanks;
+  if (tanks.isEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Add a tank first')),
+    );
+    return;
+  }
+
+  // 1. Source picker: camera or gallery
+  final source = await showModalBottomSheet<ImageSource>(
+    context: context,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+    ),
+    builder: (ctx) => SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            leading: const Icon(Icons.camera_alt),
+            title: const Text('Take Photo'),
+            onTap: () => Navigator.of(ctx).pop(ImageSource.camera),
+          ),
+          ListTile(
+            leading: const Icon(Icons.photo_library),
+            title: const Text('Choose from Gallery'),
+            onTap: () => Navigator.of(ctx).pop(ImageSource.gallery),
+          ),
+        ],
+      ),
+    ),
+  );
+  if (source == null || !context.mounted) return;
+
+  // 2. Pick image
+  final XFile? picked;
+  try {
+    picked = await ImagePicker().pickImage(source: source, imageQuality: 85);
+  } catch (e) {
+    debugPrint('[PhotoPick] error picking image: $e');
+    return;
+  }
+  if (picked == null || !context.mounted) return;
+
+  // 3. Save to a temp location first (we'll move to tank folder after tank is chosen)
+  try {
+    final dir = await getApplicationDocumentsDirectory();
+    final ext = picked.path.split('.').last;
+    final tmpPath = '${dir.path}/tank_photos/_tmp_${DateTime.now().millisecondsSinceEpoch}.$ext';
+    final tmpDir = Directory('${dir.path}/tank_photos');
+    if (!tmpDir.existsSync()) tmpDir.createSync(recursive: true);
+    await File(picked.path).copy(tmpPath);
+
+    if (!context.mounted) return;
+
+    // Brief delay to let the image file settle before showing the dialog
+    await Future.delayed(const Duration(milliseconds: 150));
+    if (!context.mounted) return;
+
+    // 4. Show save dialog with preview, note, and tank dropdown
+    final needsTankPicker = tankId == null && tanks.length > 1;
+    final defaultTankId = tankId ?? tanks.first.id;
+
+    final result = await showDialog<_PhotoSaveResult>(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) => _PhotoSaveDialog(
+        imagePath: tmpPath,
+        tanks: tanks,
+        initialTankId: defaultTankId,
+        showTankPicker: needsTankPicker,
+      ),
+    );
+
+    if (result == null || !context.mounted) {
+      // Clean up temp file
+      try { await File(tmpPath).delete(); } catch (_) {}
+      return;
+    }
+
+    // 5. Move to final tank folder
+    final resolvedTankId = result.tankId;
+    final imgDir = Directory('${dir.path}/tank_photos/$resolvedTankId');
+    if (!imgDir.existsSync()) imgDir.createSync(recursive: true);
+    final fileName = '${DateTime.now().millisecondsSinceEpoch}.$ext';
+    final savedPath = '${imgDir.path}/$fileName';
+    await File(tmpPath).rename(savedPath);
+
+    await TankStore.instance.addPhoto(
+      tankId: resolvedTankId,
+      filePath: savedPath,
+      note: result.note,
+    );
+
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Photo saved')),
+      );
+    }
+  } catch (e) {
+    debugPrint('[PhotoPick] error saving photo: $e');
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error saving photo: $e')),
+      );
+    }
+  }
+}
+
+class _PhotoSaveResult {
+  final String tankId;
+  final String? note;
+  const _PhotoSaveResult({required this.tankId, this.note});
+}
+
+class _PhotoSaveDialog extends StatefulWidget {
+  final String imagePath;
+  final List<TankModel> tanks;
+  final String initialTankId;
+  final bool showTankPicker;
+  const _PhotoSaveDialog({
+    required this.imagePath,
+    required this.tanks,
+    required this.initialTankId,
+    required this.showTankPicker,
+  });
+  @override
+  State<_PhotoSaveDialog> createState() => _PhotoSaveDialogState();
+}
+
+class _PhotoSaveDialogState extends State<_PhotoSaveDialog> {
+  late String _selectedTankId;
+  final _noteCtrl = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedTankId = widget.initialTankId;
+  }
+
+  @override
+  void dispose() {
+    _noteCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: const Text('Save Photo', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: Image.file(
+                File(widget.imagePath),
+                height: 160,
+                width: double.infinity,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => Container(
+                  height: 160,
+                  color: Colors.grey.shade200,
+                  child: const Icon(Icons.broken_image, color: Colors.grey),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _noteCtrl,
+              maxLines: 2,
+              decoration: const InputDecoration(
+                hintText: 'Add a note (optional)',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+            ),
+            if (widget.showTankPicker) ...[
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                value: _selectedTankId,
+                decoration: const InputDecoration(
+                  labelText: 'Tank',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+                items: widget.tanks.map((t) => DropdownMenuItem(
+                  value: t.id,
+                  child: Text(t.name),
+                )).toList(),
+                onChanged: (v) { if (v != null) setState(() => _selectedTankId = v); },
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(null),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final note = _noteCtrl.text.trim();
+            Navigator.of(context).pop(_PhotoSaveResult(
+              tankId: _selectedTankId,
+              note: note.isNotEmpty ? note : null,
+            ));
+          },
+          style: FilledButton.styleFrom(backgroundColor: _cDark),
+          child: const Text('Save'),
+        ),
+      ],
+    );
+  }
 }
 
 class _FeedbackSheet extends StatefulWidget {
@@ -273,6 +585,14 @@ Future<void> _markOnboardingDone() async {
   try {
     final dir = await getApplicationDocumentsDirectory();
     await File('${dir.path}/.onboarding_done').writeAsString('1');
+  } catch (_) {}
+}
+
+Future<void> _clearOnboardingDone() async {
+  try {
+    final dir = await getApplicationDocumentsDirectory();
+    final f = File('${dir.path}/.onboarding_done');
+    if (f.existsSync()) await f.delete();
   } catch (_) {}
 }
 
@@ -456,12 +776,63 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   List<String> _plants = [];
   bool _finishing = false;
   final List<Map<String, dynamic>> _pendingTasks = [];
+  String? _pendingCsvContent;
 
   @override
   void dispose() {
     _pageCtrl.dispose();
     _tankNameCtrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _importCsvForTank(String tankId, String csvContent) async {
+    try {
+      final rows = const CsvToListConverter(eol: '\n').convert(csvContent);
+      if (rows.length < 2) return;
+      final headers = rows.first.map((e) => e.toString().trim()).toList();
+      int? dateCol;
+      final paramMapping = <int, String>{};
+      for (int i = 0; i < headers.length; i++) {
+        final h = headers[i].toLowerCase().trim();
+        if (h == 'date' || h == 'timestamp' || h == 'time') {
+          dateCol = i;
+        } else {
+          final mapped = _CsvImportScreenState._matchHeader(h);
+          if (mapped != null) paramMapping[i] = mapped;
+        }
+      }
+      if (paramMapping.isEmpty) return;
+      for (final row in rows.sublist(1)) {
+        if (row.length <= 1 && row.first.toString().trim().isEmpty) continue;
+        DateTime? logDate;
+        if (dateCol != null && dateCol < row.length) {
+          logDate = _CsvImportScreenState._parseFlexDate(row[dateCol].toString());
+        }
+        logDate ??= DateTime.now();
+        final measurements = <String, dynamic>{};
+        for (final e in paramMapping.entries) {
+          if (e.key >= row.length) continue;
+          final raw = row[e.key].toString().trim();
+          if (raw.isEmpty) continue;
+          final val = num.tryParse(raw.replaceAll(RegExp(r'[^\d.\-]'), ''));
+          measurements[e.value] = val ?? raw;
+        }
+        if (measurements.isEmpty) continue;
+        await TankStore.instance.addLog(
+          tankId: tankId,
+          rawText: 'CSV import',
+          parsedJson: jsonEncode({
+            'schemaVersion': 1,
+            'measurements': measurements,
+            'actions': <String>[],
+            'notes': <String>[],
+            'tasks': <Map>[],
+            'date': logDate.toIso8601String().substring(0, 10),
+          }),
+          date: logDate,
+        );
+      }
+    } catch (_) {}
   }
 
   void _goNext() {
@@ -487,25 +858,25 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       );
       // Save any reminder tasks collected during the water quality chat
       if (_pendingTasks.isNotEmpty) {
-        await TankStore.instance.addLog(
-          tankId: tank.id,
-          rawText: '',
-          parsedJson: jsonEncode({
-            'schemaVersion': 1,
-            'measurements': {},
-            'actions': [],
-            'notes': [],
-            'tasks': _pendingTasks,
-            'date': DateTime.now().toIso8601String().substring(0, 10),
-          }),
-          date: DateTime.now(),
-        );
+        for (final task in _pendingTasks) {
+          await TankStore.instance.addTask(
+            tankId: tank.id,
+            description: (task['description'] ?? '').toString(),
+            dueDate: (task['due_date'] ?? task['due'])?.toString(),
+            priority: (task['priority'] ?? 'normal').toString(),
+            source: 'ai',
+          );
+        }
+      }
+      // Import pending CSV data
+      if (_pendingCsvContent != null) {
+        await _importCsvForTank(tank.id, _pendingCsvContent!);
       }
       await _markOnboardingDone();
       await _saveExperienceLevel(_experience);
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const TankListScreen()),
+        MaterialPageRoute(builder: (_) => TankListScreen(showWelcome: _pendingCsvContent != null)),
       );
     } catch (e) {
       if (!mounted) return;
@@ -560,6 +931,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     inhabitants: _inhabitants,
                     onNext: _goNext,
                     onReminderTask: (t) => _pendingTasks.add(t),
+                    onCsvPending: (content) => _pendingCsvContent = content,
+                    experience: _experience,
+                    isActive: _page == 5,
                   ),
                   _ObCongratsPage(
                     experience: _experience,
@@ -595,6 +969,28 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 }
 
 // ─── Onboarding page widgets ─────────────────────────────────────────────────
+
+class _ObLogoBar extends StatelessWidget {
+  const _ObLogoBar();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: Colors.white,
+      width: double.infinity,
+      child: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(47, 8, 16, 8),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Image.asset('assets/images/logo-side.png', height: 39, fit: BoxFit.contain),
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 class _ObHeader extends StatelessWidget {
   final String emoji;
@@ -792,13 +1188,10 @@ class _BeginnerVideoHeaderState extends State<_BeginnerVideoHeader> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        const _ObLogoBar(),
         SizedBox(
-          height: 56,
+          height: 120,
           width: double.infinity,
-          child: Image.asset('assets/images/21034573.jpg', fit: BoxFit.cover),
-        ),
-        SizedBox(
-          height: 240,
           child: Stack(
             fit: StackFit.expand,
             children: [
@@ -881,31 +1274,26 @@ class _PouringVideoHeaderState extends State<_PouringVideoHeader> {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: 220,
+      height: 150,
       width: double.infinity,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          Container(
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [_cDark, _cMid],
-              ),
-            ),
-          ),
-          if (_ready)
-            FittedBox(
+      child: _ready
+          ? FittedBox(
               fit: BoxFit.cover,
               child: SizedBox(
                 width: _ctrl.value.size.width,
                 height: _ctrl.value.size.height,
                 child: VideoPlayer(_ctrl),
               ),
+            )
+          : Container(
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [_cDark, _cMid],
+                ),
+              ),
             ),
-        ],
-      ),
     );
   }
 }
@@ -921,11 +1309,7 @@ class _ObExperiencePage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        SizedBox(
-          width: double.infinity,
-          height: 56,
-          child: Image.asset('assets/images/21034573.jpg', fit: BoxFit.cover),
-        ),
+        const _ObLogoBar(),
         const Padding(
           padding: EdgeInsets.fromLTRB(24, 48, 24, 16),
           child: Text(
@@ -1125,11 +1509,7 @@ class _ObTankSetupPageState extends State<_ObTankSetupPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                SizedBox(
-                  width: double.infinity,
-                  height: 61,
-                  child: Image.asset('assets/images/21034573.jpg', fit: BoxFit.cover),
-                ),
+                const _ObLogoBar(),
                 const SizedBox(height: 26),
                 const _PouringVideoHeader(),
                 const SizedBox(height: 16),
@@ -1465,31 +1845,26 @@ class _DropInVideoHeaderState extends State<_DropInVideoHeader> {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: 220,
+      height: 150,
       width: double.infinity,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          Container(
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [_cDark, _cMid],
-              ),
-            ),
-          ),
-          if (_ready)
-            FittedBox(
+      child: _ready
+          ? FittedBox(
               fit: BoxFit.cover,
               child: SizedBox(
                 width: _ctrl.value.size.width,
                 height: _ctrl.value.size.height,
                 child: VideoPlayer(_ctrl),
               ),
+            )
+          : Container(
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [_cDark, _cMid],
+                ),
+              ),
             ),
-        ],
-      ),
     );
   }
 }
@@ -1600,27 +1975,7 @@ class _ObInhabitantsPageState extends State<_ObInhabitantsPage> {
         Expanded(
           child: CustomScrollView(
             slivers: [
-              SliverToBoxAdapter(
-                child: SizedBox(
-                  height: 56,
-                  width: double.infinity,
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      Image.asset('assets/images/21034573.jpg', fit: BoxFit.cover),
-                      Container(
-                        decoration: const BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                            colors: [Color(0x22000000), Color(0x88000000)],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
+              const SliverToBoxAdapter(child: _ObLogoBar()),
               const SliverToBoxAdapter(child: SizedBox(height: 16)),
               const SliverToBoxAdapter(child: _DropInVideoHeader()),
               const SliverToBoxAdapter(child: SizedBox(height: 16)),
@@ -1804,12 +2159,12 @@ class _ObInhabitantsPageState extends State<_ObInhabitantsPage> {
             ],
           ),
         ),
-        _obNextButton(label: 'Continue', onPressed: _continue),
         if (widget.showSkip)
           TextButton(
             onPressed: () => widget.onNext([], []),
             child: const Text('Skip for now', style: TextStyle(color: Colors.grey)),
           ),
+        _obNextButton(label: 'Continue', onPressed: _continue),
         const SizedBox(height: 8),
       ],
     );
@@ -2070,11 +2425,7 @@ class _ObInhabitantSummaryPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        SizedBox(
-          width: double.infinity,
-          height: 56,
-          child: Image.asset('assets/images/21034573.jpg', fit: BoxFit.cover),
-        ),
+        const _ObLogoBar(),
         const Padding(
           padding: EdgeInsets.fromLTRB(24, 48, 24, 16),
           child: Text(
@@ -2128,7 +2479,7 @@ class _ObInhabitantSummaryPage extends StatelessWidget {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  inh.count > 1 ? '${inh.count}× ${inh.name}' : inh.name,
+                                  inh.count > 1 ? '${inh.count}× ${_titleCase(inh.name)}' : _titleCase(inh.name),
                                   style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
                                 ),
                                 const SizedBox(height: 4),
@@ -2202,6 +2553,9 @@ class _ObWaterQualityPage extends StatefulWidget {
   final List<({String name, String type, int count})> inhabitants;
   final VoidCallback onNext;
   final void Function(Map<String, dynamic> task)? onReminderTask;
+  final void Function(String csvContent)? onCsvPending;
+  final String experience;
+  final bool isActive;
 
   const _ObWaterQualityPage({
     required this.tankName,
@@ -2210,6 +2564,9 @@ class _ObWaterQualityPage extends StatefulWidget {
     required this.inhabitants,
     required this.onNext,
     this.onReminderTask,
+    this.onCsvPending,
+    this.experience = 'beginner',
+    this.isActive = false,
   });
 
   @override
@@ -2220,15 +2577,148 @@ class _ObWaterQualityPageState extends State<_ObWaterQualityPage> {
   final _textCtrl = TextEditingController();
   final _scrollCtrl = ScrollController();
   bool _sending = false;
+  bool _csvPromptShown = false;
 
   late final List<({String role, String content})> _messages = [
     (
       role: 'assistant',
-      content: "Hi! I'm Ariel 🐠 Before you finish, let's talk water quality — "
-          "it's one of the most important things you can do for your aquarium.\n\n"
-          "Is your tank already filled with water?",
+      content: widget.experience == 'beginner'
+          ? "Hi! I'm Ariel 🐠 Before you finish, let's talk water quality — "
+            "it's one of the most important things you can do for your aquarium.\n\n"
+            "Is your tank already filled with water?"
+          : "Hey! I'm Ariel 🐠 I'll be tracking your water parameters and flagging "
+            "trends over time.\n\n"
+            "Have you tested your water recently? Drop your latest numbers here and I'll log them.",
     ),
   ];
+
+  @override
+  void didUpdateWidget(covariant _ObWaterQualityPage old) {
+    super.didUpdateWidget(old);
+    if (widget.isActive && !old.isActive && !_csvPromptShown && widget.experience != 'beginner') {
+      _csvPromptShown = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _showCsvPrompt();
+      });
+    }
+  }
+
+  void _showCsvPrompt() {
+    showDialog<bool>(
+      context: context,
+      builder: (ctx) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        backgroundColor: Colors.white,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: _cMint,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.upload_file, size: 28, color: _cDark),
+              ),
+              const SizedBox(height: 16),
+              const Text('Import Historical Data',
+                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: _cDark)),
+              const SizedBox(height: 10),
+              const Text(
+                'Have a spreadsheet with your water parameter history? '
+                'You can import it to start with all your data.\n\n'
+                'All you need are columns for dates and the parameters you\'ve been tracking.',
+                style: TextStyle(fontSize: 14, color: Colors.black87, height: 1.5),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: () => Navigator.of(ctx).pop(true),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: _cDark,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                  child: const Text('Import CSV', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                ),
+              ),
+              const SizedBox(height: 8),
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: const Text('Not right now', style: TextStyle(color: Colors.grey, fontSize: 14)),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ).then((accepted) {
+      if (accepted == true && mounted) {
+        // We don't have a tank yet during onboarding, so we'll note this
+        // and show a reminder after onboarding completes. For now, launch
+        // a simplified file picker that stores the file path for later.
+        _launchCsvPickerDuringOnboarding();
+      }
+    });
+  }
+
+  Future<void> _launchCsvPickerDuringOnboarding() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['csv', 'txt'],
+        withData: true,
+        readSequential: true,
+      );
+      if (result == null || result.files.isEmpty || !mounted) return;
+      final picked = result.files.single;
+      debugPrint('[CSV] picked: name=${picked.name} path=${picked.path} bytes=${picked.bytes?.length}');
+      final String content;
+      if (picked.bytes != null && picked.bytes!.isNotEmpty) {
+        content = utf8.decode(picked.bytes!, allowMalformed: true);
+      } else if (picked.path != null) {
+        final file = File(picked.path!);
+        if (await file.exists()) {
+          content = await file.readAsString();
+        } else {
+          throw Exception('File not found at ${picked.path}');
+        }
+      } else {
+        throw Exception('No file data available');
+      }
+      final rows = const CsvToListConverter(eol: '\n').convert(content);
+      if (rows.length < 2) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('CSV must have a header row and at least one data row.')),
+          );
+        }
+        return;
+      }
+      // Store the CSV content for import after tank is created
+      _pendingCsvContent = content;
+      widget.onCsvPending?.call(content);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${rows.length - 1} rows ready to import after setup.'),
+            backgroundColor: _cDark,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to read file: $e')),
+        );
+      }
+    }
+  }
+
+  String? _pendingCsvContent;
 
   String get _baseUrl => _kBaseUrl;
 
@@ -2264,21 +2754,30 @@ class _ObWaterQualityPageState extends State<_ObWaterQualityPage> {
               'message': text,
               'history': history,
               'recent_logs': <Map>[],
-              'system_context':
-                  'ONBOARDING CONTEXT — Water Quality page. Follow this exact conversational flow, one question at a time:\n'
-                  '1. You already asked: "Is your tank already filled with water?"\n'
-                  '2. If the user says NO or not yet: ask ONLY "Would you like suggestions on the best next steps to get started?"\n'
-                  '3. If they want next steps: give a brief numbered list of setup steps (substrate, dechlorinated water, filter, heater, cycle the tank). Then ask if they have a water test kit.\n'
-                  '4. If the user says YES the tank is filled: ask if they have tested the water yet.\n'
-                  '5. If they say they have a test kit OR have already tested: respond with something like "Great! The most important tests to run right now are ammonia, nitrite, nitrate, and pH — these four tell you the most about your tank\'s health. Just add your results in any of the chat windows and I\'ll log them for you."\n'
-                  '6. If the user says they do NOT have a test kit: recommend the API Master Test Kit by name as the best all-in-one option for new tank owners, and explain it covers ammonia, nitrite, nitrate, and pH. Then encourage them to pick one up soon.\n'
-                  '7. When the user shares test results: interpret each value clearly, flag anything concerning, and encourage them to keep logging results regularly in Aquaria so you can track trends.\n'
-                  '8. After covering test kits or sharing results (steps 5–7), ask: "Would you like me to set up a regular reminder to test and log your water parameters? Weekly is a great habit for most tanks." — then wait for the answer.\n'
-                  '9. If they say yes: confirm with something like "Done — I\'ll remind you weekly to test your water. You can always adjust this from the app." Then let them know they are all set.\n'
-                  '10. If they say no: acknowledge and let them know they can set reminders any time in any of the chat windows.\n'
-                  '11. At appropriate moments, reinforce that regular testing and reporting is the best way to catch problems early — and remind them they can share results in any of the chat windows at any time.\n'
-                  'LANGUAGE RULE: Never say "here", "in this chat", or "below" when referring to where the user can enter information. Always say "in any of the chat windows" or "just let me know in any of the chat windows".\n'
-                  'Keep every reply short and friendly. One question per response — no exceptions.',
+              'system_context': widget.experience == 'beginner'
+                  ? 'ONBOARDING CONTEXT — Water Quality page (BEGINNER). Follow this exact conversational flow, one question at a time:\n'
+                    '1. You already asked: "Is your tank already filled with water?"\n'
+                    '2. If the user says NO or not yet: ask ONLY "Would you like suggestions on the best next steps to get started?"\n'
+                    '3. If they want next steps: give a brief numbered list of setup steps (substrate, dechlorinated water, filter, heater, cycle the tank). Then ask if they have a water test kit.\n'
+                    '4. If the user says YES the tank is filled: ask if they have tested the water yet.\n'
+                    '5. If they say they have a test kit OR have already tested: respond with something like "Great! The most important tests to run right now are ammonia, nitrite, nitrate, and pH — these four tell you the most about your tank\'s health. Just add your results in any of the chat windows and I\'ll log them for you."\n'
+                    '6. If the user says they do NOT have a test kit: recommend the API Master Test Kit by name as the best all-in-one option for new tank owners, and explain it covers ammonia, nitrite, nitrate, and pH. Then encourage them to pick one up soon.\n'
+                    '7. When the user shares test results: interpret each value clearly, flag anything concerning, and encourage them to keep logging results regularly in Aquaria so you can track trends.\n'
+                    '8. After covering test kits or sharing results (steps 5–7), ask: "Would you like me to set up a regular reminder to test and log your water parameters? Weekly is a great habit for most tanks." — then wait for the answer.\n'
+                    '9. If they say yes: confirm with something like "Done — I\'ll remind you weekly to test your water. You can always adjust this from the app." Then let them know they are all set.\n'
+                    '10. If they say no: acknowledge and let them know they can set reminders any time in any of the chat windows.\n'
+                    '11. At appropriate moments, reinforce that regular testing and reporting is the best way to catch problems early — and remind them they can share results in any of the chat windows at any time.\n'
+                    'LANGUAGE RULE: Never say "here", "in this chat", or "below" when referring to where the user can enter information. Always say "in any of the chat windows" or "just let me know in any of the chat windows".\n'
+                    'Keep every reply short and friendly. One question per response — no exceptions.'
+                  : 'ONBOARDING CONTEXT — Water Quality page (EXPERIENCED keeper). The user already has an established tank. Do NOT explain basics like cycling, what ammonia is, or why testing matters — they know.\n'
+                    '1. You already asked: "Have you tested your water recently? Drop your latest numbers here and I\'ll log them."\n'
+                    '2. When the user shares test results: log them, briefly note anything out of range, and mention any trends worth watching. Keep it concise — no hand-holding.\n'
+                    '3. If they don\'t have numbers right now: that\'s fine — let them know they can drop results in any of the chat windows anytime.\n'
+                    '4. After logging results (or if they skip): ask if they\'d like a recurring reminder to log parameters. Suggest weekly or biweekly.\n'
+                    '5. If they say yes: confirm and let them know they\'re all set.\n'
+                    '6. If they say no: acknowledge and move on.\n'
+                    'LANGUAGE RULE: Never say "here", "in this chat", or "below". Always say "in any of the chat windows".\n'
+                    'Keep replies concise and peer-level. One question per response — no exceptions.',
             }),
           )
           .timeout(const Duration(seconds: 30));
@@ -2334,11 +2833,7 @@ class _ObWaterQualityPageState extends State<_ObWaterQualityPage> {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        SizedBox(
-          width: double.infinity,
-          height: 56,
-          child: Image.asset('assets/images/21034573.jpg', fit: BoxFit.cover),
-        ),
+        const _ObLogoBar(),
         const Padding(
           padding: EdgeInsets.fromLTRB(24, 20, 24, 4),
           child: Align(
@@ -2501,28 +2996,23 @@ class _ObCongratsPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        SizedBox(
-          height: 56,
-          width: double.infinity,
-          child: Image.asset('assets/images/21034573.jpg', fit: BoxFit.cover),
-        ),
+        const _ObLogoBar(),
         Padding(
-          padding: const EdgeInsets.fromLTRB(24, 48, 24, 16),
+          padding: const EdgeInsets.fromLTRB(24, 32, 24, 8),
           child: Text(
             title,
             style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: _cDark),
             textAlign: TextAlign.center,
           ),
         ),
-        const SizedBox(height: 8),
-        Flexible(
+        Expanded(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
+            padding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text("I'm Ariel and happy to help!", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 20),
+                const SizedBox(height: 16),
                 const _ObTipRow(
                   icon: Icons.auto_awesome, color: Color(0xFFC8A97E),
                   title: 'Tap the sparkle button',
@@ -2541,7 +3031,7 @@ class _ObCongratsPage extends StatelessWidget {
                 const _ObTipRow(
                   icon: Icons.science_outlined, color: Color(0xFF6A5ACD),
                   title: 'Share test results',
-                  body: 'Run a water test and tell Ariel the numbers — ammonia, nitrite, nitrate, pH. The more you share, the better her advice. Also tell her about fish behaviour, cloudy water, unusual smells, or anything that seems off.',
+                  body: 'Share your numbers and Ariel will track trends and flag anything off.',
                 ),
                 const _ObTipRow(
                   icon: Icons.notifications_active_outlined, color: Colors.green,
@@ -2552,10 +3042,9 @@ class _ObCongratsPage extends StatelessWidget {
             ),
           ),
         ),
-        Expanded(
-          child: Center(
-            child: Image.asset('assets/images/fish-smile-v2.png', height: 110),
-          ),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Image.asset('assets/images/fish-smile-v2.png', height: 60),
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(24, 0, 24, 12),
@@ -2620,7 +3109,12 @@ final _navigatorKey = GlobalKey<NavigatorState>();
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await SupabaseService.init();
   await TankStore.instance.load();
+  // If already logged in from a previous session, pull cloud data
+  if (SupabaseService.isLoggedIn) {
+    TankStore.instance.pullFromCloud().then((_) => TankStore.instance.load());
+  }
   try {
     await NotificationService.init();
   } catch (e) {
@@ -2722,6 +3216,24 @@ class _AppEntryState extends State<_AppEntry> {
   }
 
   Future<Widget> _resolveStartScreen() async {
+    // Require authentication before entering the app
+    if (!SupabaseService.isLoggedIn) {
+      return AuthScreen(onAuthSuccess: () async {
+        // Clear leftover local data, pull this user's cloud data, then navigate
+        await TankStore.instance.clearLocal();
+        await TankStore.instance.pullFromCloud();
+        await TankStore.instance.load();
+        final screen = await _resolveMainScreen();
+        _navigatorKey.currentState?.pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => screen),
+          (_) => false,
+        );
+      });
+    }
+    return _resolveMainScreen();
+  }
+
+  Future<Widget> _resolveMainScreen() async {
     final store = TankStore.instance;
     await store.load();
     if (store.tanks.isNotEmpty) {
@@ -2771,6 +3283,7 @@ class _AquariaAppState extends State<AquariaApp> {
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: _cDark),
         useMaterial3: true,
+        textTheme: GoogleFonts.nunitoSansTextTheme(),
       ),
       home: const _AppEntry(),
     );
@@ -2778,7 +3291,8 @@ class _AquariaAppState extends State<AquariaApp> {
 }
 
 class TankListScreen extends StatefulWidget {
-  const TankListScreen({super.key});
+  final bool showWelcome;
+  const TankListScreen({super.key, this.showWelcome = false});
 
   @override
   State<TankListScreen> createState() => _TankListScreenState();
@@ -2788,13 +3302,16 @@ class _TankListScreenState extends State<TankListScreen> {
   bool _loading = false;
   String? _error;
   String _experience = 'beginner';
-  // tankId → list of task maps
-  Map<String, List<Map<String, dynamic>>> _tasksByTank = {};
+  // tankId → list of active tasks
+  Map<String, List<db.Task>> _tasksByTank = {};
   // tankId → set of type strings present
   Map<String, Set<String>> _typesByTank = {};
   // tankId → has plants
   Map<String, bool> _hasPlantsByTank = {};
-  String _tankSort = 'none'; // 'none' | 'az' | 'za'
+  DateTime? _lastLogDate;
+  Set<String> _tanksWithoutInhabitants = {};
+  Set<String> _tanksWithoutLogs = {};
+  String _tankSort = 'newest'; // 'newest' | 'oldest' | 'az' | 'za'
 
   @override
   void initState() {
@@ -2807,7 +3324,9 @@ class _TankListScreenState extends State<TankListScreen> {
         if (mounted) _showDailyTipOverlay();
       }
     });
-    _refresh();
+    _refresh().then((_) {
+      if (widget.showWelcome && mounted) _showWelcomeDialog();
+    });
   }
 
   void _showDailyTipOverlay() {
@@ -2819,6 +3338,68 @@ class _TankListScreenState extends State<TankListScreen> {
       context: context,
       barrierColor: Colors.black54,
       builder: (_) => _DailyTipDialog(tip: tip),
+    );
+  }
+
+  void _showWelcomeDialog() {
+    final tanks = TankStore.instance.tanks;
+    final tank = tanks.isNotEmpty ? tanks.first : null;
+    showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Import complete!', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 18)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Your data has been imported. Charts need at least 3 log dates to render — check back after a few entries to see your trends.',
+              style: TextStyle(fontSize: 14, color: Colors.black87, height: 1.4),
+            ),
+            const SizedBox(height: 20),
+            if (tank != null) ...[
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: () {
+                    Navigator.of(ctx).pop();
+                    Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => TankJournalScreen(tank: tank)),
+                    );
+                  },
+                  icon: const Icon(Icons.edit_note, size: 18),
+                  label: const Text('View Daily Logs'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: _cDark,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () {
+                    Navigator.of(ctx).pop();
+                    Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => ChartsScreen(tank: tank)),
+                    );
+                  },
+                  icon: const Icon(Icons.show_chart, size: 18),
+                  label: const Text('View Charts'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: _cDark,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 
@@ -2841,22 +3422,21 @@ class _TankListScreenState extends State<TankListScreen> {
   }
 
   Future<void> _loadAllTasks() async {
-    final result = <String, List<Map<String, dynamic>>>{};
+    final result = <String, List<db.Task>>{};
+    final noLogs = <String>{};
+    DateTime? latestLog;
     for (final tank in TankStore.instance.tanks) {
       final logs = await TankStore.instance.logsFor(tank.id);
-      final tasks = <Map<String, dynamic>>[];
-      for (final log in logs) {
-        if (log.parsedJson == null) continue;
-        try {
-          final parsed = jsonDecode(log.parsedJson!);
-          if (parsed is! Map) continue;
-          final t = (parsed['tasks'] as List?)?.cast<Map<String, dynamic>>() ?? [];
-          tasks.addAll(t);
-        } catch (_) {}
+      if (logs.isEmpty) {
+        noLogs.add(tank.id);
+      } else {
+        final newest = logs.first.createdAt; // logs are newest-first
+        if (latestLog == null || newest.isAfter(latestLog)) latestLog = newest;
       }
+      final tasks = await TankStore.instance.tasksForTank(tank.id);
       if (tasks.isNotEmpty) result[tank.id] = tasks;
     }
-    if (mounted) setState(() => _tasksByTank = result);
+    if (mounted) setState(() { _tasksByTank = result; _lastLogDate = latestLog; _tanksWithoutLogs = noLogs; });
   }
 
   static const _typeEmojiList = ['fish', 'invertebrate', 'coral', 'polyp', 'anemone'];
@@ -2865,21 +3445,21 @@ class _TankListScreenState extends State<TankListScreen> {
   Future<void> _loadAllInhabitantTypes() async {
     final types = <String, Set<String>>{};
     final plants = <String, bool>{};
+    final noInhab = <String>{};
     for (final tank in TankStore.instance.tanks) {
       final inhs = await TankStore.instance.inhabitantsFor(tank.id);
       final plts = await TankStore.instance.plantsFor(tank.id);
       types[tank.id] = inhs.map((i) => i.type ?? 'fish').toSet();
       plants[tank.id] = plts.isNotEmpty;
+      if (inhs.isEmpty) noInhab.add(tank.id);
     }
-    if (mounted) setState(() { _typesByTank = types; _hasPlantsByTank = plants; });
+    if (mounted) setState(() { _typesByTank = types; _hasPlantsByTank = plants; _tanksWithoutInhabitants = noInhab; });
   }
 
   int _notificationCount(String tankId) {
     final tasks = _tasksByTank[tankId];
     if (tasks == null) return 0;
-    return tasks
-        .where((t) => !TankStore.instance.isTaskDismissed(TankStore.taskKey(tankId, t)))
-        .length;
+    return tasks.length;
   }
 
   Future<void> _openAdd() async {
@@ -2972,14 +3552,23 @@ class _TankListScreenState extends State<TankListScreen> {
   Widget build(BuildContext context) {
     final tanks = () {
       final list = [...TankStore.instance.tanks];
-      if (_tankSort == 'az') list.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-      if (_tankSort == 'za') list.sort((a, b) => b.name.toLowerCase().compareTo(a.name.toLowerCase()));
+      switch (_tankSort) {
+        case 'newest': list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+        case 'oldest': list.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+        case 'az': list.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+        case 'za': list.sort((a, b) => b.name.toLowerCase().compareTo(a.name.toLowerCase()));
+      }
       return list;
     }();
 
     return Scaffold(
-      backgroundColor: Colors.white,
-      appBar: _buildAppBar(context, 'Aquaria', actions: [
+      backgroundColor: const Color(0xFFF0F0F0),
+      appBar: _buildAppBar(context, '', actions: [
+          IconButton(
+            tooltip: 'Add photo',
+            icon: const Icon(Icons.add_a_photo_outlined),
+            onPressed: () => pickAndSavePhoto(context),
+          ),
           IconButton(
             tooltip: 'Setup guide',
             icon: const Icon(Icons.explore_outlined),
@@ -3001,6 +3590,54 @@ class _TankListScreenState extends State<TankListScreen> {
                           tanks: tanks,
                           tasksByTank: _tasksByTank,
                           onDismissed: () => setState(() {}),
+                          lastLogDate: _lastLogDate,
+                          tanksWithoutInhabitants: _tanksWithoutInhabitants,
+                          tanksWithoutLogs: _tanksWithoutLogs,
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(20, 16, 8, 0),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              const Expanded(
+                                child: Text(
+                                  'My Tanks',
+                                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.black87),
+                                ),
+                              ),
+                              PopupMenuButton<String>(
+                                icon: const Icon(Icons.more_vert, color: Colors.black54),
+                                onSelected: (value) async {
+                                  if (value == 'add_tank') {
+                                    Navigator.of(context).push(MaterialPageRoute(
+                                      builder: (_) => const AddTankFlowScreen(),
+                                    )).then((_) => _refresh());
+                                  } else if (value == 'charts') {
+                                    Navigator.of(context).push(MaterialPageRoute(
+                                      builder: (_) => AllChartsScreen(tanks: TankStore.instance.tanks),
+                                    ));
+                                  } else if (value == 'archived') {
+                                    Navigator.of(context).push(MaterialPageRoute(
+                                      builder: (_) => const ArchivedTanksScreen(),
+                                    )).then((_) => _refresh());
+                                  } else {
+                                    setState(() => _tankSort = value);
+                                  }
+                                },
+                                itemBuilder: (_) => [
+                                  const PopupMenuItem(value: 'add_tank', child: Text('Add Tank')),
+                                  const PopupMenuDivider(),
+                                  const PopupMenuItem(value: 'newest', child: Text('Sort: Newest First')),
+                                  const PopupMenuItem(value: 'oldest', child: Text('Sort: Oldest First')),
+                                  const PopupMenuItem(value: 'az', child: Text('Sort: A → Z')),
+                                  const PopupMenuItem(value: 'za', child: Text('Sort: Z → A')),
+                                  const PopupMenuDivider(),
+                                  const PopupMenuItem(value: 'charts', child: Text('View All Charts')),
+                                  const PopupMenuItem(value: 'archived', child: Text('Archived Tanks')),
+                                ],
+                              ),
+                            ],
+                          ),
                         ),
                         if (tanks.isEmpty)
                           const Expanded(
@@ -3012,45 +3649,7 @@ class _TankListScreenState extends State<TankListScreen> {
                               ),
                             ),
                           )
-                        else ...[
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(20, 16, 8, 0),
-                            child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.center,
-                              children: [
-                                const Expanded(
-                                  child: Text(
-                                    'My Tanks',
-                                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.black87),
-                                  ),
-                                ),
-                                PopupMenuButton<String>(
-                                  icon: const Icon(Icons.more_vert, color: Colors.black54),
-                                  onSelected: (value) {
-                                    if (value == 'add_tank') {
-                                      Navigator.of(context).push(MaterialPageRoute(
-                                        builder: (_) => const AddTankFlowScreen(),
-                                      )).then((_) => _refresh());
-                                    } else if (value == 'charts') {
-                                      Navigator.of(context).push(MaterialPageRoute(
-                                        builder: (_) => AllChartsScreen(tanks: TankStore.instance.tanks),
-                                      ));
-                                    } else {
-                                      setState(() => _tankSort = value);
-                                    }
-                                  },
-                                  itemBuilder: (_) => const [
-                                    PopupMenuItem(value: 'add_tank', child: Text('Add Tank')),
-                                    PopupMenuDivider(),
-                                    PopupMenuItem(value: 'az', child: Text('Sort A → Z')),
-                                    PopupMenuItem(value: 'za', child: Text('Sort Z → A')),
-                                    PopupMenuDivider(),
-                                    PopupMenuItem(value: 'charts', child: Text('View All Charts')),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
+                        else
                           Expanded(
                             child: RefreshIndicator(
                               onRefresh: _refresh,
@@ -3061,10 +3660,14 @@ class _TankListScreenState extends State<TankListScreen> {
                         final t = tanks[i];
                         final notifCount = _notificationCount(t.id);
                         return Card(
+                            color: Colors.white,
                             margin: const EdgeInsets.only(top: 8),
-                            elevation: 1.5,
+                            elevation: 0.5,
                             shadowColor: Colors.black12,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              side: const BorderSide(color: Color(0xFFD8D8D8)),
+                            ),
                             clipBehavior: Clip.antiAlias,
                             child: InkWell(
                             onTap: () => _openDetail(t),
@@ -3155,17 +3758,19 @@ class _TankListScreenState extends State<TankListScreen> {
                                   // Quick-nav buttons
                                   Row(
                                     children: [
-                                      _NavChip(
-                                        label: 'Inhabitants',
-                                        icon: Icons.pets,
+                                      _NavIconButton(
+                                        child: Image.asset('assets/images/fish.jpg', width: 28, height: 28),
+                                        tooltip: 'Inhabitants',
+                                        color: const Color(0xFF2E86AB),
                                         onTap: () => Navigator.of(context).push(
                                           MaterialPageRoute(builder: (_) => InhabitantsScreen(tank: t)),
                                         ),
                                       ),
-                                      const SizedBox(width: 10),
-                                      _NavChip(
-                                        label: 'Daily logs',
+                                      const SizedBox(width: 8),
+                                      _NavIconButton(
                                         icon: Icons.menu_book_outlined,
+                                        tooltip: 'Daily Logs',
+                                        color: const Color(0xFF5B8C5A),
                                         onTap: () async {
                                           final logs = await TankStore.instance.logsFor(t.id);
                                           if (!mounted) return;
@@ -3174,17 +3779,23 @@ class _TankListScreenState extends State<TankListScreen> {
                                           ));
                                         },
                                       ),
-                                      const SizedBox(width: 10),
-                                      _NavChip(
-                                        label: 'Charts',
+                                      const SizedBox(width: 8),
+                                      _NavIconButton(
                                         icon: Icons.show_chart,
-                                        onTap: () async {
-                                          final logs = await TankStore.instance.logsFor(t.id);
-                                          if (!mounted) return;
-                                          Navigator.of(context).push(MaterialPageRoute(
-                                            builder: (_) => ChartsScreen(tank: t),
-                                          ));
-                                        },
+                                        tooltip: 'Charts',
+                                        color: const Color(0xFFE07A2F),
+                                        onTap: () => Navigator.of(context).push(
+                                          MaterialPageRoute(builder: (_) => ChartsScreen(tank: t)),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      _NavIconButton(
+                                        icon: Icons.photo_library_outlined,
+                                        tooltip: 'Photos',
+                                        color: const Color(0xFF8B5DAF),
+                                        onTap: () => Navigator.of(context).push(
+                                          MaterialPageRoute(builder: (_) => TankGalleryScreen(tank: t)),
+                                        ),
                                       ),
                                     ],
                                   ),
@@ -3197,7 +3808,6 @@ class _TankListScreenState extends State<TankListScreen> {
                           ),
                             ),
                           ),
-                        ],
                       ],
                       ),
       bottomNavigationBar: _AquariaFooter(
@@ -3217,9 +3827,22 @@ class _TankListScreenState extends State<TankListScreen> {
 
 class _NotificationsCard extends StatefulWidget {
   final List<TankModel> tanks;
-  final Map<String, List<Map<String, dynamic>>> tasksByTank;
+  final Map<String, List<db.Task>> tasksByTank;
   final VoidCallback onDismissed;
-  const _NotificationsCard({required this.tanks, required this.tasksByTank, required this.onDismissed});
+  /// Most recent log date across all tanks (null = no logs at all).
+  final DateTime? lastLogDate;
+  /// Tank IDs that have no inhabitants.
+  final Set<String> tanksWithoutInhabitants;
+  /// Tank IDs that have no logs.
+  final Set<String> tanksWithoutLogs;
+  const _NotificationsCard({
+    required this.tanks,
+    required this.tasksByTank,
+    required this.onDismissed,
+    this.lastLogDate,
+    this.tanksWithoutInhabitants = const {},
+    this.tanksWithoutLogs = const {},
+  });
 
   @override
   State<_NotificationsCard> createState() => _NotificationsCardState();
@@ -3228,6 +3851,49 @@ class _NotificationsCard extends StatefulWidget {
 class _NotificationsCardState extends State<_NotificationsCard> {
   static const _kLimit = 2;
   bool _expanded = false;
+
+  ({String emoji, String text})? _buildPrompt() {
+    final tanks = widget.tanks;
+    if (tanks.isEmpty) {
+      return (emoji: '🐠', text: 'Welcome! Add your first tank to get started.');
+    }
+    // Tanks with no inhabitants
+    if (widget.tanksWithoutInhabitants.isNotEmpty) {
+      final count = widget.tanksWithoutInhabitants.length;
+      if (count == tanks.length && count > 1) {
+        return (emoji: '🐟', text: 'None of your tanks have inhabitants yet — add some so Ariel can help care for them.');
+      } else if (count > 1) {
+        return (emoji: '🐟', text: '$count of your tanks have no inhabitants — add some so Ariel can give tailored advice.');
+      } else {
+        final name = tanks.firstWhere((t) => widget.tanksWithoutInhabitants.contains(t.id), orElse: () => tanks.first).name;
+        return (emoji: '🐟', text: '$name has no inhabitants yet — add some so Ariel can help care for them.');
+      }
+    }
+    // Tanks with no logs
+    if (widget.tanksWithoutLogs.isNotEmpty) {
+      final noLogCount = widget.tanksWithoutLogs.length;
+      if (noLogCount == tanks.length && noLogCount > 1) {
+        return (emoji: '📋', text: 'None of your tanks have test results logged yet — test your water and tell Ariel.');
+      } else if (noLogCount > 1) {
+        return (emoji: '📋', text: '$noLogCount of your tanks have no test results logged — test your water and tell Ariel.');
+      } else if (noLogCount == 1) {
+        final name = tanks.firstWhere((t) => widget.tanksWithoutLogs.contains(t.id), orElse: () => tanks.first).name;
+        return (emoji: '📋', text: '$name has no logs yet — test your water and log the results to start tracking.');
+      }
+    }
+    if (widget.lastLogDate == null) {
+      return (emoji: '📋', text: 'No logs yet! Test your water and log the results to start tracking.');
+    }
+    // Inactive for 3+ days
+    final daysSince = DateTime.now().difference(widget.lastLogDate!).inDays;
+    if (daysSince >= 7) {
+      return (emoji: '👋', text: 'It\'s been a week — how are your tanks doing? Log an update or ask Ariel.');
+    }
+    if (daysSince >= 3) {
+      return (emoji: '💧', text: 'It\'s been $daysSince days since your last log. Time for a check-in?');
+    }
+    return null;
+  }
 
   static String _fmtDue(String raw) {
     final dt = DateTime.tryParse(raw);
@@ -3238,17 +3904,42 @@ class _NotificationsCardState extends State<_NotificationsCard> {
 
   @override
   Widget build(BuildContext context) {
-    final items = <({TankModel tank, Map<String, dynamic> task, String key})>[];
+    final items = <({TankModel tank, db.Task task})>[];
     for (final tank in widget.tanks) {
       final tasks = widget.tasksByTank[tank.id] ?? [];
       for (final t in tasks) {
-        final key = TankStore.taskKey(tank.id, t);
-        if (!TankStore.instance.isTaskDismissed(key)) {
-          items.add((tank: tank, task: t, key: key));
-        }
+        items.add((tank: tank, task: t));
       }
     }
-    if (items.isEmpty) return const SizedBox.shrink();
+
+    // When no task-based notifications, show a contextual prompt
+    if (items.isEmpty) {
+      final prompt = _buildPrompt();
+      if (prompt == null) return const SizedBox.shrink();
+      return Card(
+        margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+        elevation: 1,
+        shadowColor: Colors.black12,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(color: _cLight),
+        ),
+        color: _cMint,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+          child: Row(
+            children: [
+              Text(prompt.emoji, style: const TextStyle(fontSize: 20)),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(prompt.text,
+                    style: const TextStyle(fontSize: 13, color: Colors.black87, height: 1.4)),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
 
     final showAll = _expanded || items.length <= _kLimit;
     final visible = showAll ? items : items.take(_kLimit).toList();
@@ -3281,9 +3972,9 @@ class _NotificationsCardState extends State<_NotificationsCard> {
           ),
           const Divider(height: 1, color: Color(0xFFFFCC80)),
           ...visible.map((item) {
-            final desc = item.task['description']?.toString() ?? '';
+            final desc = item.task.description;
             final label = desc.isEmpty ? '' : desc[0].toUpperCase() + desc.substring(1);
-            final rawDue = (item.task['due_date'] ?? item.task['due'])?.toString();
+            final rawDue = item.task.dueDate;
             final dueLabel = (rawDue != null && rawDue.isNotEmpty) ? _fmtDue(rawDue) : null;
             return Padding(
               padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
@@ -3311,7 +4002,7 @@ class _NotificationsCardState extends State<_NotificationsCard> {
                   ),
                   GestureDetector(
                     onTap: () {
-                      TankStore.instance.dismissTask(item.key);
+                      TankStore.instance.dismissTaskById(item.task.id);
                       widget.onDismissed();
                     },
                     child: const Padding(
@@ -3455,6 +4146,35 @@ class _HintStep extends StatelessWidget {
             child: Text(text, style: const TextStyle(fontSize: 13, color: Color(0xFF444444), height: 1.45)),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _NavIconButton extends StatelessWidget {
+  final IconData? icon;
+  final Widget? child;
+  final String tooltip;
+  final VoidCallback onTap;
+  final Color? color;
+  const _NavIconButton({this.icon, this.child, required this.tooltip, required this.onTap, this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = color ?? _cDark;
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            border: Border.all(color: c.withValues(alpha: 0.4)),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: child ?? Icon(icon, size: 24, color: c),
+        ),
       ),
     );
   }
@@ -3781,7 +4501,7 @@ class _AddTankScreenState extends State<AddTankScreen> {
                   dense: true,
                   contentPadding: EdgeInsets.zero,
                   leading: Text(_inhEmoji(inh.type), style: const TextStyle(fontSize: 20)),
-                  title: Text(inh.count > 1 ? '${inh.count}× ${inh.name}' : inh.name),
+                  title: Text(inh.count > 1 ? '${inh.count}× ${_titleCase(inh.name)}' : _titleCase(inh.name)),
                   trailing: IconButton(
                     icon: const Icon(Icons.close, size: 18, color: Colors.grey),
                     onPressed: () => setState(() => _inhabitants.removeAt(i)),
@@ -3811,7 +4531,7 @@ class _AddTankScreenState extends State<AddTankScreen> {
                 dense: true,
                 contentPadding: EdgeInsets.zero,
                 leading: const Text('🌿', style: TextStyle(fontSize: 20)),
-                title: Text(_plants[i]),
+                title: Text(_titleCase(_plants[i])),
                 trailing: IconButton(
                   icon: const Icon(Icons.close, size: 18, color: Colors.grey),
                   onPressed: () => setState(() => _plants.removeAt(i)),
@@ -3850,16 +4570,19 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
   List<db.Log> _logs = [];
   List<db.Inhabitant> _inhabitants = [];
   List<db.Plant> _plants = [];
+  List<db.Task> _tasks = [];
   String? _summary;
   bool _summaryLoading = false;
   bool _summaryExpanded = false;
   bool _notifExpanded = false;
   static const _kNotifLimit = 3;
+  String _experience = 'beginner';
 
   @override
   void initState() {
     super.initState();
     _load();
+    _loadExperienceLevel().then((v) { if (mounted) setState(() => _experience = v); });
   }
 
   @override
@@ -3871,11 +4594,13 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
     final logs = await TankStore.instance.logsFor(widget.tank.id);
     final inhabitants = await TankStore.instance.inhabitantsFor(widget.tank.id);
     final plants = await TankStore.instance.plantsFor(widget.tank.id);
+    final tasks = await TankStore.instance.tasksForTank(widget.tank.id);
     if (!mounted) return;
     setState(() {
       _logs = logs;
       _inhabitants = inhabitants;
       _plants = plants;
+      _tasks = tasks;
     });
     _loadSummary();
   }
@@ -4067,29 +4792,18 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
 
   String _fmtVal(double v) => v == v.truncateToDouble() ? v.toInt().toString() : v.toStringAsFixed(2);
 
-  List<Map<String, dynamic>> _allTasks() {
-    final result = <Map<String, dynamic>>[];
-    for (final log in _logs) {
-      if (log.parsedJson == null) continue;
-      try {
-        final raw = jsonDecode(log.parsedJson!);
-        if (raw is Map) {
-          final tasks = (raw['tasks'] as List?) ?? [];
-          for (final t in tasks) {
-            if (t is Map) result.add(Map<String, dynamic>.from(t));
-          }
-        }
-      } catch (_) {}
-    }
-    return result;
-  }
-
   @override
   Widget build(BuildContext context) {
-    final tasks = _allTasks();
+    final tasks = _tasks;
     final measurementAlerts = _measurementAlerts();
     return Scaffold(
-      appBar: _buildAppBar(context, widget.tank.name),
+      appBar: _buildAppBar(context, '', actions: [
+        IconButton(
+          tooltip: 'Add photo',
+          icon: const Icon(Icons.add_a_photo_outlined),
+          onPressed: () => pickAndSavePhoto(context, tankId: widget.tank.id),
+        ),
+      ]),
       bottomNavigationBar: _AquariaFooter(
         onAiTap: () => showModalBottomSheet(
           context: context,
@@ -4102,33 +4816,21 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
           ),
         ),
       ),
-      body: SelectionArea(
-        child: RefreshIndicator(
+      body: RefreshIndicator(
         onRefresh: _load,
         child: SingleChildScrollView(
         child: Column(
         children: [
-          // compact tank header
-          Container(
-            width: double.infinity,
-            color: Theme.of(context).colorScheme.surfaceContainerHighest,
-            padding: const EdgeInsets.only(left: 16, top: 8, bottom: 8),
+          // tank name + menu
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 4, 4),
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
                 Expanded(
-                  child: Row(
-                    children: [
-                      Text(
-                        '${widget.tank.gallons} gal • ${widget.tank.waterType.label}',
-                        style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
-                      ),
-                      if (_inhabitants.isNotEmpty || _plants.isNotEmpty) ...[
-                        const SizedBox(width: 10),
-                        const Text('·', style: TextStyle(color: Colors.grey)),
-                        const SizedBox(width: 10),
-                        ..._buildInhabitantIcons(),
-                      ],
-                    ],
+                  child: Text(
+                    widget.tank.name,
+                    style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: _cDark),
                   ),
                 ),
                 PopupMenuButton<String>(
@@ -4142,15 +4844,47 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
                     if (value == 'tap_water') {
                       Navigator.of(context).push(MaterialPageRoute(
                         builder: (_) => TapWaterProfileScreen(tank: widget.tank),
+                      )).then((_) => _load());
+                    }
+                    if (value == 'import_csv') {
+                      Navigator.of(context).push(MaterialPageRoute(
+                        builder: (_) => _CsvImportScreen(tank: widget.tank),
+                      )).then((_) => _load());
+                    }
+                    if (value == 'photos') {
+                      Navigator.of(context).push(MaterialPageRoute(
+                        builder: (_) => TankGalleryScreen(tank: widget.tank),
                       ));
                     }
                   },
-                  itemBuilder: (_) => const [
-                    PopupMenuItem(value: 'edit_tank', child: Text('Edit Tank')),
-                    PopupMenuItem(value: 'tap_water', child: Text('Tap Water Profile')),
+                  itemBuilder: (_) => [
+                    const PopupMenuItem(value: 'photos', child: Text('Photos')),
+                    const PopupMenuItem(value: 'edit_tank', child: Text('Edit Tank')),
+                    const PopupMenuItem(value: 'tap_water', child: Text('Tap Water Profile')),
+                    const PopupMenuItem(value: 'import_csv', child: Text('Import CSV')),
                   ],
                   icon: const Icon(Icons.more_vert, size: 20),
                 ),
+              ],
+            ),
+          ),
+          // compact tank header
+          Container(
+            width: double.infinity,
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(
+              children: [
+                Text(
+                  '${widget.tank.gallons} gal • ${widget.tank.waterType.label}',
+                  style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
+                ),
+                if (_inhabitants.isNotEmpty || _plants.isNotEmpty) ...[
+                  const SizedBox(width: 10),
+                  const Text('·', style: TextStyle(color: Colors.grey)),
+                  const SizedBox(width: 10),
+                  ..._buildInhabitantIcons(),
+                ],
               ],
             ),
           ),
@@ -4159,16 +4893,20 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
             child: Row(
               children: [
-                _NavButton(icon: Icons.pets, label: 'Inhabitants', onTap: () async {
+                _NavIconButton(child: Image.asset('assets/images/fish.jpg', width: 28, height: 28), tooltip: 'Inhabitants', color: const Color(0xFF2E86AB), onTap: () async {
                   await Navigator.of(context).push(MaterialPageRoute(builder: (_) => InhabitantsScreen(tank: widget.tank)));
                 }),
                 const SizedBox(width: 8),
-                _NavButton(icon: Icons.history, label: 'Daily Logs', onTap: () {
+                _NavIconButton(icon: Icons.menu_book_outlined, tooltip: 'Daily Logs', color: const Color(0xFF5B8C5A), onTap: () {
                   Navigator.of(context).push(MaterialPageRoute(builder: (_) => DailyLogsScreen(tank: widget.tank, logs: _logs)));
                 }),
                 const SizedBox(width: 8),
-                _NavButton(icon: Icons.show_chart, label: 'Charts', onTap: () {
+                _NavIconButton(icon: Icons.show_chart, tooltip: 'Charts', color: const Color(0xFFE07A2F), onTap: () {
                   Navigator.of(context).push(MaterialPageRoute(builder: (_) => ChartsScreen(tank: widget.tank)));
+                }),
+                const SizedBox(width: 8),
+                _NavIconButton(icon: Icons.photo_library_outlined, tooltip: 'Photos', color: const Color(0xFF8B5DAF), onTap: () {
+                  Navigator.of(context).push(MaterialPageRoute(builder: (_) => TankGalleryScreen(tank: widget.tank)));
                 }),
               ],
             ),
@@ -4176,8 +4914,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
           const SizedBox(height: 10),
           // notifications card
           if (measurementAlerts.isNotEmpty || tasks.isNotEmpty) ...() {
-            final allTasks = tasks.where((t) =>
-                !TankStore.instance.isTaskDismissed(TankStore.taskKey(widget.tank.id, t))).toList();
+            final allTasks = tasks;
             if (measurementAlerts.isEmpty && allTasks.isEmpty) return <Widget>[];
             final visibleTasks = (_notifExpanded || allTasks.length <= _kNotifLimit)
                 ? allTasks
@@ -4221,9 +4958,8 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
                         ),
                       )),
                       ...visibleTasks.map((t) {
-                        final key = TankStore.taskKey(widget.tank.id, t);
-                        final desc = t['description']?.toString() ?? '';
-                        final rawDue = (t['due_date'] ?? t['due'])?.toString();
+                        final desc = t.description;
+                        final rawDue = t.dueDate;
                         String? dueLabel;
                         if (rawDue != null && rawDue.isNotEmpty) {
                           final dt = DateTime.tryParse(rawDue);
@@ -4255,9 +4991,9 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
                                 ),
                               ),
                               GestureDetector(
-                                onTap: () {
-                                  TankStore.instance.dismissTask(key);
-                                  setState(() {});
+                                onTap: () async {
+                                  await TankStore.instance.dismissTaskById(t.id);
+                                  _load();
                                 },
                                 child: const Padding(
                                   padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -4396,7 +5132,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
                             runSpacing: 8,
                             children: byDate[date]!.map((e) {
                               final bgColor = _paramColors[e.key] ?? _cMint;
-                              final label = ChartsScreen._paramLabel(e.key);
+                              final label = _paramShortLabel(e.key);
                               final textColor = bgColor.computeLuminance() < 0.35 ? Colors.white : Colors.black;
                               return Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -4436,7 +5172,6 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
         ),
         ),
         ),
-      ),
     );
   }
 }
@@ -4469,6 +5204,7 @@ class _ChatSheetState extends State<_ChatSheet> {
   bool _aiResponding = false;
   bool _cancelled = false;
   DateTime _logDate = DateTime.now();
+  final Set<String> _firedAlerts = {};
 
   TankModel? _selectedTank;
   late List<TankModel> _allTanks;
@@ -4476,6 +5212,8 @@ class _ChatSheetState extends State<_ChatSheet> {
   List<db.Plant> _plants = [];
   List<String> _recentLogs = [];
   String? _tapWaterJson;
+  bool _hasCsvImports = false;
+  List<Map<String, dynamic>> _pendingTasks = [];
 
   @override
   void initState() {
@@ -4488,6 +5226,11 @@ class _ChatSheetState extends State<_ChatSheet> {
     final cached = _ChatCache.load(_selectedTank?.id);
     if (cached != null && cached.isNotEmpty) {
       _chatMessages = cached;
+      _scrollToBottom();
+    } else {
+      _chatMessages = [
+        _ChatMessage(role: 'assistant', content: 'Hey! I\'m Ariel — ask me anything about your tanks or log an entry.'),
+      ];
     }
     if (_selectedTank != null) _loadTankData(_selectedTank!);
   }
@@ -4503,6 +5246,7 @@ class _ChatSheetState extends State<_ChatSheet> {
         _plants = plants;
         _recentLogs = logs.take(10).map((l) => l.rawText).toList();
         _tapWaterJson = tapWaterJson;
+        _hasCsvImports = logs.any((l) => l.rawText == 'CSV import');
       });
     }
   }
@@ -4584,6 +5328,14 @@ class _ChatSheetState extends State<_ChatSheet> {
 
           for (int i = 0; i < logEntries.length; i++) {
             final entry = logEntries[i];
+            // Skip entries with no measurements, actions, or notes.
+            // Tasks/reminders are handled separately by the chat task extraction path.
+            final hasMeasurements = (entry['measurements'] as Map?)?.isNotEmpty == true;
+            final hasActions = (entry['actions'] as List?)?.isNotEmpty == true;
+            final hasNotes = (entry['notes'] as List?)?.isNotEmpty == true;
+            if (!hasMeasurements && !hasActions && !hasNotes) continue;
+            // Remove tasks from parse entries — chat path handles task saving
+            entry.remove('tasks');
             final dateStr = entry['date'] as String?;
             final logDate = (dateStr != null ? DateTime.tryParse(dateStr) : null) ?? logDateSnapshot;
             if (i == logEntries.length - 1 && mounted) setState(() => _logDate = logDate);
@@ -4635,28 +5387,21 @@ class _ChatSheetState extends State<_ChatSheet> {
             }
           }
 
-          // Auto-create notifications for problem observations
-          final alerts = _observationAlerts(text);
+          // Auto-create notifications for problem observations (once per session)
+          final alerts = _observationAlerts(text)
+              .where((a) => !_firedAlerts.contains(a)).toList();
+          _firedAlerts.addAll(alerts);
           if (alerts.isNotEmpty) {
             final today = DateTime.now();
-            final taskJson = jsonEncode({
-              'schemaVersion': 1,
-              'measurements': {},
-              'actions': [],
-              'notes': [],
-              'tasks': alerts.map((a) => {
-                'description': a,
-                'due_date': today.toIso8601String().substring(0, 10),
-                'priority': 'high',
-              }).toList(),
-              'date': today.toIso8601String().substring(0, 10),
-            });
-            await TankStore.instance.addLog(
-              tankId: tankSnapshot.id,
-              rawText: '',
-              parsedJson: taskJson,
-              date: today,
-            );
+            for (final alert in alerts) {
+              await TankStore.instance.addTask(
+                tankId: tankSnapshot.id,
+                description: alert,
+                dueDate: today.toIso8601String().substring(0, 10),
+                priority: 'high',
+                source: 'alert',
+              );
+            }
             if (mounted) widget.onLogsChanged();
           }
         }
@@ -4664,8 +5409,21 @@ class _ChatSheetState extends State<_ChatSheet> {
       if (mounted) setState(() => _sending = false);
     }
 
-    // Start log parsing in background; don't await it before showing chat response
-    parseAndSaveLog();
+    // Only parse for log data if the message looks like it contains aquarium info
+    // (measurements, observations, actions) — skip pure conversational messages.
+    final _logWordsRe = RegExp(
+      r'\b(ph|ammonia|nitrite|nitrate|kh|gh|temp|temperature|salinity|calcium|'
+      r'magnesium|phosphate|alkalinity|alk|ppm|dkh|sg|'
+      r'water\s*change|dose[d]?|dosing|fed|feed|clean|trim|prune|'
+      r'test|tested|measure|reading|parameters|levels|results|'
+      r'added|removed|replaced|installed|treated|'
+      r'cloudy|clear|algae|bloom|sick|dead|died|spawn|'
+      r'filter|heater|light|pump|skimmer)\b',
+      caseSensitive: false,
+    );
+    if (_logWordsRe.hasMatch(text)) {
+      parseAndSaveLog();
+    }
 
     // Get AI chat response
     try {
@@ -4684,8 +5442,15 @@ class _ChatSheetState extends State<_ChatSheet> {
                   'inhabitants': _inhabitants.map((i) => '${i.count != null ? "${i.count}x " : ""}${i.name}').toList(),
                   'plants': _plants.map((p) => p.name).toList(),
                   if (_tapWaterJson != null) 'tap_water': jsonDecode(_tapWaterJson!),
+                  if (_hasCsvImports) 'has_csv_imports': true,
                 } : null,
                 'available_tanks': _allTanks.map((t) => t.name).toList(),
+                'available_tanks_detail': _allTanks.map((t) => <String, dynamic>{
+                  'name': t.name,
+                  'gallons': t.gallons,
+                  'water_type': t.waterType.label,
+                  'created_at': t.createdAt.toIso8601String(),
+                }).toList(),
                 'message': text,
                 'history': history,
                 'recent_logs': _recentLogs,
@@ -4765,28 +5530,40 @@ class _ChatSheetState extends State<_ChatSheet> {
         }
 
         // Save any tasks the AI confirmed scheduling
-        if (_selectedTank != null) {
-          final rawTasks = data is Map ? (data['tasks'] as List?)?.cast<Map<String, dynamic>>() : null;
-          final chatTasks = rawTasks != null ? await _moderateTasks(rawTasks) : null;
-          if (chatTasks != null && chatTasks.isNotEmpty) {
+        final rawTasks = data is Map ? (data['tasks'] as List?)?.cast<Map<String, dynamic>>() : null;
+        final chatTasks = rawTasks != null ? await _moderateTasks(rawTasks) : null;
+        final taskTank = _selectedTank ?? (_allTanks.length == 1 ? _allTanks.first : null);
+        if (chatTasks != null && chatTasks.isNotEmpty && taskTank == null) {
+          // No tank selected yet — buffer tasks until tank is identified
+          _pendingTasks.addAll(chatTasks);
+          debugPrint('[Chat] Buffered ${chatTasks.length} task(s) — waiting for tank selection');
+        }
+        if (taskTank != null) {
+          // Merge any buffered tasks with current ones
+          final allTasks = [..._pendingTasks, ...?chatTasks];
+          _pendingTasks = [];
+          if (allTasks.isNotEmpty) {
             try {
-              final today = DateTime.now();
-              final taskJson = jsonEncode({
-                'schemaVersion': 1,
-                'measurements': {},
-                'actions': [],
-                'notes': [],
-                'tasks': chatTasks,
-                'date': today.toIso8601String().substring(0, 10),
-              });
-              await TankStore.instance.addLog(
-                  tankId: _selectedTank!.id, rawText: '', parsedJson: taskJson, date: today);
+              for (final task in allTasks) {
+                await TankStore.instance.addTask(
+                  tankId: taskTank.id,
+                  description: (task['description'] ?? '').toString(),
+                  dueDate: (task['due_date'] ?? task['due'])?.toString(),
+                  priority: (task['priority'] ?? 'normal').toString(),
+                  source: 'ai',
+                );
+              }
               widget.onLogsChanged();
             } catch (_) {}
           }
         }
       }
-    } catch (_) {}
+    } catch (e, st) {
+      debugPrint('[Chat] error: $e\n$st');
+      if (mounted) {
+        _addMessage(_ChatMessage(role: 'assistant', content: "Sorry, something went wrong. Please try again."));
+      }
+    }
 
     if (mounted) setState(() { _aiResponding = false; _sending = false; });
   }
@@ -4861,7 +5638,7 @@ class _ChatSheetState extends State<_ChatSheet> {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(msg.content,
-                style: TextStyle(fontSize: 13, color: isUser ? Colors.white : Colors.black87, height: 1.4)),
+                style: TextStyle(fontSize: 15, color: isUser ? Colors.white : Colors.black87, height: 1.4)),
             if (msg.newTank != null) ...[
               const SizedBox(height: 8),
               TextButton.icon(
@@ -4935,7 +5712,9 @@ class _ChatSheetState extends State<_ChatSheet> {
                         GestureDetector(
                           onTap: () {
                             _ChatCache.clear(_selectedTank?.id);
-                            setState(() => _chatMessages = []);
+                            setState(() => _chatMessages = [
+                              _ChatMessage(role: 'assistant', content: 'Hey! I\'m Ariel — ask me anything about your tanks or log an entry.'),
+                            ]);
                           },
                           child: const Padding(
                             padding: EdgeInsets.only(right: 12),
@@ -5102,8 +5881,8 @@ class _LogEditSheetState extends State<_LogEditSheet> {
   late List<TextEditingController> _notes;
   bool _saving = false;
 
-  static const _knownParams = [
-    'pH', 'KH', 'GH', 'Ca', 'Mg', 'ammonia', 'nitrite', 'nitrate', 'K', 'salinity', 'temp', 'phosphate',
+  static const _knownParamKeys = [
+    'ph', 'kh', 'gh', 'calcium', 'magnesium', 'ammonia', 'nitrite', 'nitrate', 'potassium', 'salinity', 'temp', 'phosphate',
   ];
 
   @override
@@ -5185,15 +5964,15 @@ class _LogEditSheetState extends State<_LogEditSheet> {
             ..._measurements.asMap().entries.map((entry) {
               final idx = entry.key;
               final (key, ctrl) = entry.value;
-              final dropdownKey = _knownParams.contains(key) ? key : null;
+              final dropdownKey = _knownParamKeys.contains(key.toLowerCase()) ? key.toLowerCase() : null;
               return Padding(
                 padding: const EdgeInsets.only(bottom: 8),
                 child: Row(children: [
                   SizedBox(
-                    width: 120,
+                    width: 140,
                     child: DropdownButtonFormField<String>(
                       value: dropdownKey,
-                      hint: Text(key, style: const TextStyle(fontSize: 13)),
+                      hint: Text(_paramShortLabel(key), style: const TextStyle(fontSize: 12)),
                       isExpanded: true,
                       isDense: true,
                       decoration: const InputDecoration(
@@ -5201,8 +5980,8 @@ class _LogEditSheetState extends State<_LogEditSheet> {
                         border: OutlineInputBorder(),
                         isDense: true,
                       ),
-                      items: _knownParams.map((p) =>
-                          DropdownMenuItem(value: p, child: Text(p, style: const TextStyle(fontSize: 13)))).toList(),
+                      items: _knownParamKeys.map((p) =>
+                          DropdownMenuItem(value: p, child: Text(_paramDisplayNames[p] ?? p, style: const TextStyle(fontSize: 12)))).toList(),
                       onChanged: (v) {
                         if (v != null) setState(() => _measurements[idx] = (v, ctrl));
                       },
@@ -5230,7 +6009,7 @@ class _LogEditSheetState extends State<_LogEditSheet> {
               );
             }),
             TextButton.icon(
-              onPressed: () => setState(() => _measurements.add(('pH', TextEditingController()))),
+              onPressed: () => setState(() => _measurements.add(('ph', TextEditingController()))),
               icon: const Icon(Icons.add, size: 16),
               label: const Text('Add measurement', style: TextStyle(fontSize: 13)),
             ),
@@ -5635,9 +6414,8 @@ class _TankDetailScreenState extends State<TankDetailScreen> {
         ? Map<String, dynamic>.from(jsonDecode(_tapWaterJson!) as Map)
         : <String, dynamic>{};
 
-    final fields = ['pH', 'GH', 'KH', 'Ammonia', 'Nitrite', 'Nitrate', 'Potassium', 'Calcium', 'TDS'];
     final keys   = ['ph', 'gh', 'kh', 'ammonia', 'nitrite', 'nitrate', 'potassium', 'calcium', 'tds'];
-    final units  = ['',   '°dH', '°dH', 'ppm', 'ppm', 'ppm', 'ppm', 'ppm', 'ppm'];
+    final fields = keys.map((k) => _paramDisplayNames[k] ?? k).toList();
     final controllers = List.generate(
       fields.length,
       (i) => TextEditingController(
@@ -5665,7 +6443,6 @@ class _TankDetailScreenState extends State<TankDetailScreen> {
                   keyboardType: const TextInputType.numberWithOptions(decimal: true),
                   decoration: InputDecoration(
                     labelText: fields[i],
-                    suffix: units[i].isNotEmpty ? Text(units[i]) : null,
                     border: const OutlineInputBorder(),
                     isDense: true,
                   ),
@@ -5796,7 +6573,14 @@ class _TankDetailScreenState extends State<TankDetailScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: _buildAppBar(context, widget.tank.name, actions: [
+      appBar: _buildAppBar(context, '', actions: [
+          IconButton(
+            tooltip: 'Photos',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => TankGalleryScreen(tank: widget.tank)),
+            ),
+            icon: const Icon(Icons.photo_library_outlined),
+          ),
           IconButton(
             tooltip: 'Edit',
             onPressed: _openEdit,
@@ -5815,7 +6599,18 @@ class _TankDetailScreenState extends State<TankDetailScreen> {
           ),
         ),
       ),
-      body: _loading
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+            child: Text(
+              widget.tank.name,
+              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: _cDark),
+            ),
+          ),
+          Expanded(
+            child: _loading
           ? const Center(child: CircularProgressIndicator())
           : RefreshIndicator(
               onRefresh: _load,
@@ -5852,6 +6647,9 @@ class _TankDetailScreenState extends State<TankDetailScreen> {
               ],
             ),
             ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -5864,15 +6662,7 @@ class _TapWaterCard extends StatelessWidget {
   final VoidCallback onEdit;
   const _TapWaterCard({required this.tapWaterJson, required this.onEdit});
 
-  static const _fieldLabels = {
-    'ph': 'pH', 'gh': 'GH', 'kh': 'KH',
-    'ammonia': 'Ammonia', 'nitrite': 'Nitrite', 'nitrate': 'Nitrate',
-    'potassium': 'Potassium', 'calcium': 'Calcium', 'tds': 'TDS',
-  };
-  static const _fieldUnits = {
-    'gh': '°dH', 'kh': '°dH', 'ammonia': 'ppm', 'nitrite': 'ppm', 'nitrate': 'ppm',
-    'potassium': 'ppm', 'calcium': 'ppm', 'tds': 'ppm',
-  };
+  static String _fieldLabel(String key) => _paramDisplayNames[key.toLowerCase()] ?? key;
 
   @override
   Widget build(BuildContext context) {
@@ -5917,9 +6707,8 @@ class _TapWaterCard extends StatelessWidget {
                 children: [
                   for (final entry in data.entries)
                     _TapWaterChip(
-                      label: _fieldLabels[entry.key] ?? entry.key,
+                      label: _fieldLabel(entry.key),
                       value: entry.value,
-                      unit: _fieldUnits[entry.key],
                     ),
                 ],
               ),
@@ -5933,12 +6722,10 @@ class _TapWaterCard extends StatelessWidget {
 class _TapWaterChip extends StatelessWidget {
   final String label;
   final dynamic value;
-  final String? unit;
-  const _TapWaterChip({required this.label, required this.value, this.unit});
+  const _TapWaterChip({required this.label, required this.value});
 
   @override
   Widget build(BuildContext context) {
-    final display = unit != null ? '$value $unit' : '$value';
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
@@ -5950,7 +6737,7 @@ class _TapWaterChip extends StatelessWidget {
           style: const TextStyle(fontSize: 12, color: Colors.black87),
           children: [
             TextSpan(text: '$label  ', style: const TextStyle(color: Colors.black54)),
-            TextSpan(text: display, style: const TextStyle(fontWeight: FontWeight.w600)),
+            TextSpan(text: '$value', style: const TextStyle(fontWeight: FontWeight.w600)),
           ],
         ),
       ),
@@ -5969,9 +6756,8 @@ class TapWaterProfileScreen extends StatefulWidget {
 }
 
 class _TapWaterProfileScreenState extends State<TapWaterProfileScreen> {
-  static const _fields = ['pH', 'GH', 'KH', 'Ammonia', 'Nitrite', 'Nitrate', 'Potassium', 'Calcium', 'TDS'];
-  static const _keys   = ['ph', 'gh', 'kh', 'ammonia', 'nitrite', 'nitrate', 'potassium', 'calcium', 'tds'];
-  static const _units  = ['', '°dH', '°dH', 'ppm', 'ppm', 'ppm', 'ppm', 'ppm', 'ppm'];
+  static const _keys = ['ph', 'gh', 'kh', 'ammonia', 'nitrite', 'nitrate', 'potassium', 'calcium', 'tds'];
+  static List<String> get _fields => _keys.map((k) => _paramDisplayNames[k] ?? k).toList();
 
   String? _tapWaterJson;
   bool _loading = true;
@@ -6014,7 +6800,6 @@ class _TapWaterProfileScreenState extends State<TapWaterProfileScreen> {
                   keyboardType: const TextInputType.numberWithOptions(decimal: true),
                   decoration: InputDecoration(
                     labelText: _fields[i],
-                    suffix: _units[i].isNotEmpty ? Text(_units[i]) : null,
                     border: const OutlineInputBorder(),
                     isDense: true,
                   ),
@@ -6086,12 +6871,11 @@ class _TapWaterProfileScreenState extends State<TapWaterProfileScreen> {
                     children: List.generate(_fields.length, (i) {
                       final key = _keys[i];
                       final val = data[key];
-                      final unit = _units[i];
                       return ListTile(
                         title: Text(_fields[i], style: const TextStyle(fontWeight: FontWeight.w500)),
                         trailing: val != null
                             ? Text(
-                                unit.isNotEmpty ? '$val $unit' : '$val',
+                                '$val',
                                 style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: _cDark),
                               )
                             : const Text('—', style: TextStyle(color: Colors.grey)),
@@ -6149,7 +6933,7 @@ class _InhabitantsScreenState extends State<InhabitantsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: _buildAppBar(context, '${widget.tank.name} — Inhabitants', actions: [
+      appBar: _buildAppBar(context, '', actions: [
           IconButton(
             icon: const Icon(Icons.edit),
             tooltip: 'Edit inhabitants',
@@ -6177,7 +6961,18 @@ class _InhabitantsScreenState extends State<InhabitantsScreen> {
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
-          : (_inhabitants.isEmpty && _plants.isEmpty)
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                  child: Text(
+                    '${widget.tank.name} — Inhabitants',
+                    style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: _cDark),
+                  ),
+                ),
+                Expanded(
+                  child: (_inhabitants.isEmpty && _plants.isEmpty)
               ? Center(
                   child: Padding(
                     padding: const EdgeInsets.all(32),
@@ -6245,7 +7040,7 @@ class _InhabitantsScreenState extends State<InhabitantsScreen> {
                       const SizedBox(height: 16),
                       const Row(children: [Text('🌿', style: TextStyle(fontSize: 15)), SizedBox(width: 6), Text('Plants', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700))]),
                       const SizedBox(height: 6),
-                      ..._plants.map((p) => _tile(p.name, null, '🌿')),
+                      ..._plants.map((p) => _tile(_titleCase(p.name), null, '🌿')),
                     ],
                     const SizedBox(height: 24),
                     Row(
@@ -6296,6 +7091,9 @@ class _InhabitantsScreenState extends State<InhabitantsScreen> {
                   ],
                 ),
                 ),
+                ),
+              ],
+            ),
     );
   }
 
@@ -6312,7 +7110,7 @@ class _InhabitantsScreenState extends State<InhabitantsScreen> {
       first = false;
       widgets.add(Row(children: [Text(emoji, style: const TextStyle(fontSize: 15)), const SizedBox(width: 6), Text(_typeLabels[type] ?? type, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700))]));
       widgets.add(const SizedBox(height: 6));
-      for (final i in group) { widgets.add(_tile(i.name, i.count, emoji)); }
+      for (final i in group) { widgets.add(_tile(_titleCase(i.name), i.count, emoji)); }
     }
     return widgets;
   }
@@ -6443,6 +7241,546 @@ const _kPlantCatalogue = <String, List<String>>{
     'Marsilea', 'Staurogyne Repens', 'Micranthemum',
   ],
 };
+
+/// Fuzzy-match a user-typed name against the known catalogues.
+/// Returns the canonical catalogue name if a close match is found, otherwise null.
+/// For inhabitants, also returns the matched type.
+({String name, String type})? _matchInhabitantCatalogue(String input) {
+  final q = input.trim().toLowerCase().replaceAll(RegExp(r'e?s$'), '');
+  for (final entry in _kInhabitantCatalogue.entries) {
+    for (final s in entry.value) {
+      final canon = s.name.toLowerCase();
+      final canonStripped = canon.replaceAll(RegExp(r'e?s$'), '');
+      if (canon == input.trim().toLowerCase() || canonStripped == q) return (name: s.name, type: s.type);
+      // input words all appear in catalogue name or vice versa
+      final qWords = q.split(RegExp(r'\s+'));
+      final cWords = canonStripped.split(RegExp(r'\s+'));
+      if (qWords.length >= 1 && cWords.length >= 1) {
+        if (qWords.every((w) => cWords.any((c) => c.contains(w) || w.contains(c))) ||
+            cWords.every((c) => qWords.any((w) => w.contains(c) || c.contains(w)))) {
+          // Require at least 3 chars overlap to avoid spurious matches
+          if (q.length >= 3) return (name: s.name, type: s.type);
+        }
+      }
+    }
+  }
+  return null;
+}
+
+String? _matchPlantCatalogue(String input) {
+  final q = input.trim().toLowerCase().replaceAll(RegExp(r'e?s$'), '');
+  for (final entry in _kPlantCatalogue.entries) {
+    for (final p in entry.value) {
+      final canon = p.toLowerCase();
+      final canonStripped = canon.replaceAll(RegExp(r'e?s$'), '');
+      if (canon == input.trim().toLowerCase() || canonStripped == q) return p;
+      final qWords = q.split(RegExp(r'\s+'));
+      final cWords = canonStripped.split(RegExp(r'\s+'));
+      if (qWords.length >= 1 && cWords.length >= 1) {
+        if (qWords.every((w) => cWords.any((c) => c.contains(w) || w.contains(c))) ||
+            cWords.every((c) => qWords.any((w) => w.contains(c) || c.contains(w)))) {
+          if (q.length >= 3) return p;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+// ── CSV Import screen ────────────────────────────────────────────────────────
+
+class _CsvImportScreen extends StatefulWidget {
+  final TankModel tank;
+  const _CsvImportScreen({required this.tank});
+
+  @override
+  State<_CsvImportScreen> createState() => _CsvImportScreenState();
+}
+
+class _CsvImportScreenState extends State<_CsvImportScreen> {
+  List<List<dynamic>>? _rows;
+  List<String> _headers = [];
+  // column index → parameter name (null = skip)
+  Map<int, String?> _mapping = {};
+  int? _dateColIndex;
+  bool _importing = false;
+  int _importedCount = 0;
+  String? _error;
+
+  static const _knownParams = [
+    'ph', 'ammonia', 'nitrite', 'nitrate', 'gh', 'kh',
+    'temp', 'salinity', 'phosphate', 'calcium', 'magnesium',
+    'potassium', 'tds', 'alkalinity', 'copper', 'iron',
+  ];
+
+  static const _headerAliases = {
+    'ph': 'ph', 'p.h.': 'ph', 'ph level': 'ph',
+    'nh3': 'ammonia', 'nh4': 'ammonia', 'ammonia': 'ammonia', 'nh3/nh4': 'ammonia', 'amm': 'ammonia',
+    'no2': 'nitrite', 'nitrite': 'nitrite', 'nite': 'nitrite',
+    'no3': 'nitrate', 'nitrate': 'nitrate', 'nate': 'nitrate',
+    'gh': 'gh', 'general hardness': 'gh',
+    'kh': 'kh', 'carbonate hardness': 'kh',
+    'temp': 'temp', 'temperature': 'temp', 'water temp': 'temp',
+    'sal': 'salinity', 'salinity': 'salinity',
+    'po4': 'phosphate', 'phosphate': 'phosphate', 'phos': 'phosphate',
+    'ca': 'calcium', 'calcium': 'calcium',
+    'mg': 'magnesium', 'magnesium': 'magnesium',
+    'k': 'potassium', 'potassium': 'potassium',
+    'tds': 'tds',
+    'alk': 'alkalinity', 'alkalinity': 'alkalinity',
+    'cu': 'copper', 'copper': 'copper',
+    'fe': 'iron', 'iron': 'iron',
+  };
+
+  /// Fuzzy-match a CSV header to a known parameter.
+  static String? _matchHeader(String raw) {
+    // Strip units like "(ppm)", "(°F)", trailing whitespace
+    final h = raw.replaceAll(RegExp(r'\s*\(.*?\)\s*'), '').trim().toLowerCase();
+    // Exact match first
+    if (_headerAliases.containsKey(h)) return _headerAliases[h];
+    // Check if any alias is contained in the header or vice versa
+    for (final entry in _headerAliases.entries) {
+      if (h.contains(entry.key) || entry.key.contains(h)) {
+        // Avoid false positives from very short keys like 'k'
+        if (entry.key.length < 2 && h.length > 3) continue;
+        return entry.value;
+      }
+    }
+    // Check if header starts with a known param name
+    for (final p in _knownParams) {
+      if (h.startsWith(p.toLowerCase())) return p;
+    }
+    return null;
+  }
+
+  Future<void> _pickFile() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['csv', 'txt'],
+        withData: true,
+        readSequential: true,
+      );
+      if (result == null || result.files.isEmpty) return;
+      final picked = result.files.single;
+      debugPrint('[CSV] picked: name=${picked.name} path=${picked.path} bytes=${picked.bytes?.length}');
+      final String content;
+      if (picked.bytes != null && picked.bytes!.isNotEmpty) {
+        content = utf8.decode(picked.bytes!, allowMalformed: true);
+      } else if (picked.path != null) {
+        final file = File(picked.path!);
+        if (await file.exists()) {
+          content = await file.readAsString();
+        } else {
+          throw Exception('File not found at ${picked.path}');
+        }
+      } else {
+        throw Exception('No file data available');
+      }
+      debugPrint('[CSV] content length: ${content.length}');
+      final rows = const CsvToListConverter(eol: '\n').convert(content);
+      if (rows.length < 2) {
+        setState(() => _error = 'CSV must have a header row and at least one data row.');
+        return;
+      }
+      final headers = rows.first.map((e) => e.toString().trim()).toList();
+      final mapping = <int, String?>{};
+      int? dateCol;
+      for (int i = 0; i < headers.length; i++) {
+        final h = headers[i].toLowerCase().replaceAll(RegExp(r'\s*\(.*?\)\s*'), '').trim();
+        if (h == 'date' || h == 'timestamp' || h == 'time' ||
+            h.contains('date') || h == 'day' || h == 'logged') {
+          dateCol ??= i; // take first date-like column
+        } else {
+          mapping[i] = _matchHeader(h);
+        }
+      }
+      setState(() {
+        _headers = headers;
+        _rows = rows.sublist(1);
+        _mapping = mapping;
+        _dateColIndex = dateCol;
+        _error = null;
+      });
+    } catch (e) {
+      setState(() => _error = 'Failed to read file: $e');
+    }
+  }
+
+  Future<void> _downloadTemplate() async {
+    const template =
+        'Date,pH,Ammonia,Nitrite,Nitrate,GH,KH,Temp\n'
+        '3/1/2026,7.2,0,0,10,8,4,78\n';
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final file = File('${dir.path}/aquaria_template.csv');
+      await file.writeAsString(template);
+      if (!mounted) return;
+      // Use the platform share sheet so user can save/send it
+      await FilePicker.platform.saveFile(
+        dialogTitle: 'Save CSV Template',
+        fileName: 'aquaria_template.csv',
+        bytes: Uint8List.fromList(utf8.encode(template)),
+      );
+    } catch (_) {
+      // Fallback: just confirm it's in the app documents
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Template saved to app documents.'),
+            backgroundColor: _cDark,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _import() async {
+    if (_rows == null) return;
+    final paramCols = _mapping.entries
+        .where((e) => e.value != null)
+        .toList();
+    if (paramCols.isEmpty) {
+      setState(() => _error = 'Map at least one column to a parameter.');
+      return;
+    }
+    setState(() { _importing = true; _error = null; _importedCount = 0; });
+    int count = 0;
+    for (final row in _rows!) {
+      if (row.length <= 1 && row.first.toString().trim().isEmpty) continue;
+      // Parse date
+      DateTime? logDate;
+      if (_dateColIndex != null && _dateColIndex! < row.length) {
+        final raw = row[_dateColIndex!].toString().trim();
+        logDate = _parseFlexDate(raw);
+      }
+      logDate ??= DateTime.now();
+
+      // Build measurements
+      final measurements = <String, dynamic>{};
+      for (final entry in paramCols) {
+        if (entry.key >= row.length) continue;
+        final raw = row[entry.key].toString().trim();
+        if (raw.isEmpty) continue;
+        final num? val = num.tryParse(raw.replaceAll(RegExp(r'[^\d.\-]'), ''));
+        if (val != null) {
+          measurements[entry.value!] = val;
+        } else {
+          measurements[entry.value!] = raw;
+        }
+      }
+      if (measurements.isEmpty) continue;
+
+      final parsedJson = jsonEncode({
+        'schemaVersion': 1,
+        'measurements': measurements,
+        'actions': <String>[],
+        'notes': <String>[],
+        'tasks': <Map>[],
+        'date': logDate.toIso8601String().substring(0, 10),
+      });
+      await TankStore.instance.addLog(
+        tankId: widget.tank.id,
+        rawText: 'CSV import',
+        parsedJson: parsedJson,
+        date: logDate,
+      );
+      count++;
+    }
+    setState(() { _importing = false; _importedCount = count; });
+    if (count > 0 && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Imported $count entries!'),
+          backgroundColor: _cDark,
+        ),
+      );
+      Navigator.of(context).pop(true);
+    }
+  }
+
+  static const _monthNames = {
+    'jan': 1, 'january': 1, 'feb': 2, 'february': 2, 'mar': 3, 'march': 3,
+    'apr': 4, 'april': 4, 'may': 5, 'jun': 6, 'june': 6,
+    'jul': 7, 'july': 7, 'aug': 8, 'august': 8, 'sep': 9, 'september': 9,
+    'oct': 10, 'october': 10, 'nov': 11, 'november': 11, 'dec': 12, 'december': 12,
+  };
+
+  static DateTime? _parseFlexDate(String s) {
+    final trimmed = s.trim();
+    if (trimmed.isEmpty) return null;
+
+    // Try ISO first (2026-03-01, 2026-03-01T00:00:00)
+    final iso = DateTime.tryParse(trimmed);
+    if (iso != null) return iso;
+
+    // Try numeric formats: M/D/YY, M/D/YYYY, M-D-YYYY, M.D.YYYY, M-D-YY
+    final numParts = trimmed.split(RegExp(r'[/\-.]'));
+    if (numParts.length >= 2) {
+      final m = int.tryParse(numParts[0]);
+      final d = int.tryParse(numParts[1]);
+      if (m != null && d != null) {
+        var y = numParts.length >= 3 ? int.tryParse(numParts[2]) : DateTime.now().year;
+        if (y != null) {
+          if (y < 100) y += 2000;
+          try { return DateTime(y, m, d); } catch (_) {}
+        }
+      }
+    }
+
+    // Try named month formats: "Mar 1", "March 1", "Mar 1 2026", "March 1, 2026"
+    final cleaned = trimmed.replaceAll(',', ' ').replaceAll(RegExp(r'\s+'), ' ');
+    final words = cleaned.split(' ');
+    if (words.length >= 2) {
+      final monthNum = _monthNames[words[0].toLowerCase()];
+      if (monthNum != null) {
+        final d = int.tryParse(words[1]);
+        if (d != null) {
+          var y = words.length >= 3 ? int.tryParse(words[2]) : DateTime.now().year;
+          if (y != null) {
+            if (y < 100) y += 2000;
+            try { return DateTime(y, monthNum, d); } catch (_) {}
+          }
+        }
+      }
+      // Try "1 Mar 2026" / "1 March"
+      final d = int.tryParse(words[0]);
+      if (d != null) {
+        final monthNum2 = _monthNames[words[1].toLowerCase()];
+        if (monthNum2 != null) {
+          var y = words.length >= 3 ? int.tryParse(words[2]) : DateTime.now().year;
+          if (y != null) {
+            if (y < 100) y += 2000;
+            try { return DateTime(y, monthNum2, d); } catch (_) {}
+          }
+        }
+      }
+    }
+
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: _buildAppBar(context, 'Import CSV'),
+      body: _rows == null ? _buildPickerView() : _buildMappingView(),
+    );
+  }
+
+  Widget _buildPickerView() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.upload_file, size: 56, color: _cMid),
+            const SizedBox(height: 16),
+            const Text(
+              'Import water parameters from a CSV file',
+              style: TextStyle(fontSize: 15, color: Colors.black87),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'The file should have a header row with column names like Date, pH, Ammonia, Nitrate, etc.',
+              style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 24),
+            FilledButton.icon(
+              onPressed: _pickFile,
+              icon: const Icon(Icons.file_open),
+              label: const Text('Choose CSV File'),
+              style: FilledButton.styleFrom(
+                backgroundColor: _cDark,
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextButton.icon(
+              onPressed: _downloadTemplate,
+              icon: const Icon(Icons.download, size: 18),
+              label: const Text('Download Template'),
+              style: TextButton.styleFrom(foregroundColor: _cMid),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 16),
+              Text(_error!, style: const TextStyle(color: Colors.red, fontSize: 13), textAlign: TextAlign.center),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMappingView() {
+    final previewRows = _rows!.take(3).toList();
+    return Column(
+      children: [
+        // Column mapping
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              Text(
+                '${_rows!.length} rows found. Map your columns to parameters:',
+                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 12),
+              // Column labels
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Row(
+                  children: [
+                    Expanded(flex: 2, child: Text('CSV COLUMN', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.grey.shade500, letterSpacing: 0.8))),
+                    const SizedBox(width: 24), // arrow space
+                    Expanded(flex: 2, child: Text('MAP TO', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.grey.shade500, letterSpacing: 0.8))),
+                  ],
+                ),
+              ),
+              const Divider(height: 1),
+              // Date column
+              _MappingRow(
+                header: _dateColIndex != null ? _headers[_dateColIndex!] : '(no date column)',
+                assignedValue: _dateColIndex != null ? 'Date' : null,
+                isDate: true,
+                onChanged: null,
+              ),
+              const Divider(height: 1),
+              // Parameter columns
+              ...List.generate(_headers.length, (i) {
+                if (i == _dateColIndex) return const SizedBox.shrink();
+                return Column(
+                  children: [
+                    _MappingRow(
+                      header: _headers[i],
+                      assignedValue: _mapping[i],
+                      isDate: false,
+                      preview: previewRows.map((r) => i < r.length ? r[i].toString() : '').join(', '),
+                      onChanged: (val) => setState(() => _mapping[i] = val),
+                    ),
+                    const Divider(height: 1),
+                  ],
+                );
+              }),
+            ],
+          ),
+        ),
+        // Bottom bar
+        Container(
+          padding: EdgeInsets.fromLTRB(16, 12, 16, 12 + MediaQuery.of(context).viewPadding.bottom),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            border: Border(top: BorderSide(color: Colors.grey.shade200)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (_error != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text(_error!, style: const TextStyle(color: Colors.red, fontSize: 13)),
+                ),
+              if (_importedCount > 0)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text('Imported $_importedCount entries!',
+                      style: const TextStyle(color: _cDark, fontSize: 14, fontWeight: FontWeight.w600)),
+                ),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: _importing ? null : _import,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: _cDark,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  child: _importing
+                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      : Text('Import ${_rows!.length} Rows'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _MappingRow extends StatelessWidget {
+  final String header;
+  final String? assignedValue;
+  final bool isDate;
+  final String? preview;
+  final ValueChanged<String?>? onChanged;
+
+  const _MappingRow({
+    required this.header,
+    required this.assignedValue,
+    required this.isDate,
+    this.preview,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final bool matched = assignedValue != null;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        children: [
+          Expanded(
+            flex: 2,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(header, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: matched ? Colors.black87 : Colors.grey.shade600)),
+                if (preview != null)
+                  Text(preview!, style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+                      maxLines: 1, overflow: TextOverflow.ellipsis),
+              ],
+            ),
+          ),
+          Icon(Icons.arrow_forward, size: 16, color: matched ? _cDark : Colors.grey.shade400),
+          const SizedBox(width: 8),
+          Expanded(
+            flex: 2,
+            child: isDate
+                ? Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: _cMint,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(assignedValue ?? 'Not detected',
+                        style: TextStyle(fontSize: 13, color: assignedValue != null ? _cDark : Colors.grey)),
+                  )
+                : DropdownButtonFormField<String?>(
+                    value: assignedValue,
+                    decoration: InputDecoration(
+                      isDense: true,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                    style: const TextStyle(fontSize: 13, color: Colors.black87),
+                    items: [
+                      const DropdownMenuItem(value: null, child: Text('Skip', style: TextStyle(color: Colors.grey))),
+                      ..._CsvImportScreenState._knownParams.map((p) =>
+                          DropdownMenuItem(value: p, child: Text(_paramDisplayNames[p] ?? p, style: const TextStyle(fontSize: 12)))),
+                    ],
+                    onChanged: onChanged,
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 // ── Species picker sheet ──────────────────────────────────────────────────────
 
@@ -6644,7 +7982,13 @@ class _SpeciesPickerSheetState extends State<_SpeciesPickerSheet> {
                             onPressed: () {
                               final name = _customCtrl.text.trim();
                               if (name.isEmpty) return;
-                              Navigator.pop(context, (name: name, type: widget.isPlant ? 'plant' : _customType, count: 1));
+                              if (widget.isPlant) {
+                                final match = _matchPlantCatalogue(name);
+                                Navigator.pop(context, (name: match ?? _titleCase(name), type: 'plant', count: 1));
+                              } else {
+                                final match = _matchInhabitantCatalogue(name);
+                                Navigator.pop(context, (name: match?.name ?? _titleCase(name), type: match?.type ?? _customType, count: 1));
+                              }
                             },
                             child: const Text('Add'),
                           ),
@@ -6793,10 +8137,22 @@ class _DailyLogsScreenState extends State<DailyLogsScreen> {
       items.add(key);
       if (!_collapsedDays.contains(key)) items.addAll(groups[key]!);
     }
-    final dayCounts = {for (final e in groups.entries) e.key: e.value.length};
+    final dayCounts = <String, int>{};
+    for (final e in groups.entries) {
+      dayCounts[e.key] = e.value.where((log) {
+        if (log.parsedJson == null) return log.rawText.isNotEmpty;
+        try {
+          final p = jsonDecode(log.parsedJson!) as Map;
+          return (p['measurements'] as Map?)?.isNotEmpty == true ||
+              (p['actions'] as List?)?.isNotEmpty == true ||
+              (p['notes'] as List?)?.isNotEmpty == true ||
+              (p['tasks'] as List?)?.isNotEmpty == true;
+        } catch (_) { return false; }
+      }).length;
+    }
 
     return Scaffold(
-      appBar: _buildAppBar(context, '${widget.tank.name} — Log History'),
+      appBar: _buildAppBar(context, ''),
       bottomNavigationBar: _AquariaFooter(
         onAiTap: () => showModalBottomSheet(
           context: context,
@@ -6809,7 +8165,18 @@ class _DailyLogsScreenState extends State<DailyLogsScreen> {
           ),
         ),
       ),
-      body: _logs.isEmpty
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+            child: Text(
+              '${widget.tank.name} — Log History',
+              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: _cDark),
+            ),
+          ),
+          Expanded(
+            child: _logs.isEmpty
           ? const Center(child: Text('No log entries yet.', style: TextStyle(color: Colors.grey)))
           : RefreshIndicator(
               onRefresh: _reload,
@@ -6822,6 +8189,7 @@ class _DailyLogsScreenState extends State<DailyLogsScreen> {
                   final key = item;
                   final isCollapsed = _collapsedDays.contains(key);
                   final count = dayCounts[key] ?? 0;
+                  if (count == 0) return const SizedBox.shrink();
                   final parts = key.split('-');
                   final dt = DateTime(int.parse(parts[0]), int.parse(parts[1]), int.parse(parts[2]));
                   return InkWell(
@@ -6877,6 +8245,220 @@ class _DailyLogsScreenState extends State<DailyLogsScreen> {
               },
             ),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+// Tank Gallery Screen
+// ─────────────────────────────────────────────
+
+class TankGalleryScreen extends StatefulWidget {
+  final TankModel tank;
+  const TankGalleryScreen({super.key, required this.tank});
+
+  @override
+  State<TankGalleryScreen> createState() => _TankGalleryScreenState();
+}
+
+class _TankGalleryScreenState extends State<TankGalleryScreen> {
+  List<db.TankPhoto> _photos = [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final photos = await TankStore.instance.photosFor(widget.tank.id);
+    if (mounted) setState(() { _photos = photos; _loading = false; });
+  }
+
+  Future<void> _addPhoto() async {
+    await pickAndSavePhoto(context, tankId: widget.tank.id);
+    if (mounted) await _load();
+  }
+
+  void _viewPhoto(db.TankPhoto photo) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => _PhotoDetailScreen(photo: photo, onDelete: () async {
+          try { await File(photo.filePath).delete(); } catch (_) {}
+          await TankStore.instance.deletePhoto(photo.id);
+          if (mounted) {
+            Navigator.of(context).pop();
+            _load();
+          }
+        }),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: _buildAppBar(context, '', actions: [
+        IconButton(
+          icon: const Icon(Icons.add_a_photo_outlined),
+          tooltip: 'Add Photo',
+          onPressed: _addPhoto,
+        ),
+      ]),
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+            child: Text(
+              '${widget.tank.name} — Photos',
+              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: _cDark),
+            ),
+          ),
+          Expanded(
+            child: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : _photos.isEmpty
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(32),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.photo_library_outlined, size: 56, color: _cMid),
+                        const SizedBox(height: 16),
+                        const Text(
+                          'No photos yet',
+                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Colors.black87),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Snap a photo to track your tank\'s progress over time.',
+                          style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 24),
+                        FilledButton.icon(
+                          onPressed: _addPhoto,
+                          icon: const Icon(Icons.add_a_photo_outlined),
+                          label: const Text('Add Photo'),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: _cDark,
+                            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                )
+              : RefreshIndicator(
+                  onRefresh: _load,
+                  child: GridView.builder(
+                    padding: const EdgeInsets.all(8),
+                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 3,
+                      mainAxisSpacing: 4,
+                      crossAxisSpacing: 4,
+                    ),
+                    itemCount: _photos.length,
+                    itemBuilder: (_, i) {
+                      final photo = _photos[i];
+                      return GestureDetector(
+                        onTap: () => _viewPhoto(photo),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(6),
+                          child: Image.file(
+                            File(photo.filePath),
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) => Container(
+                              color: Colors.grey.shade200,
+                              child: const Icon(Icons.broken_image, color: Colors.grey),
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PhotoDetailScreen extends StatelessWidget {
+  final db.TankPhoto photo;
+  final VoidCallback onDelete;
+  const _PhotoDetailScreen({required this.photo, required this.onDelete});
+
+  @override
+  Widget build(BuildContext context) {
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    final d = photo.createdAt.toLocal();
+    final dateStr = '${months[d.month - 1]} ${d.day}, ${d.year}';
+
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+        title: Text(dateStr, style: const TextStyle(fontSize: 15)),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.delete_outline),
+            tooltip: 'Delete',
+            onPressed: () {
+              showDialog<bool>(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: const Text('Delete photo?'),
+                  content: const Text('This cannot be undone.'),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
+                    TextButton(
+                      onPressed: () { Navigator.of(ctx).pop(true); },
+                      child: const Text('Delete', style: TextStyle(color: Colors.red)),
+                    ),
+                  ],
+                ),
+              ).then((confirmed) {
+                if (confirmed == true) onDelete();
+              });
+            },
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          Expanded(
+            child: InteractiveViewer(
+              child: Center(
+                child: Image.file(
+                  File(photo.filePath),
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, __, ___) => const Icon(Icons.broken_image, color: Colors.grey, size: 64),
+                ),
+              ),
+            ),
+          ),
+          if (photo.note != null && photo.note!.isNotEmpty)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+              color: Colors.black,
+              child: Text(
+                photo.note!,
+                style: const TextStyle(color: Colors.white70, fontSize: 14, height: 1.4),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }
@@ -6985,7 +8567,7 @@ class _AllChartsScreenState extends State<AllChartsScreen> {
       final groupSeries = {for (final p in group) if (series.containsKey(p) && series[p]!.keys.toSet().length >= 3) p: series[p]!};
       if (groupSeries.isEmpty) continue;
       for (final p in groupSeries.keys) usedParams.add(p);
-      charts.add(_ChartCard(title: group.map(ChartsScreen._paramLabel).join(' / '), seriesData: groupSeries, waterType: tank.waterType));
+      charts.add(_ChartCard(title: group.map(_paramShortLabel).join(' / '), seriesData: groupSeries, waterType: tank.waterType));
     }
     for (final entry in series.entries) {
       if (usedParams.contains(entry.key)) continue;
@@ -7049,15 +8631,7 @@ class ChartsScreen extends StatefulWidget {
 
   const ChartsScreen({super.key, required this.tank});
 
-  static String _paramLabel(String p) {
-    const labels = <String, String>{
-      'ammonia': 'Ammonia', 'nitrite': 'Nitrite', 'nitrate': 'Nitrate',
-      'ph': 'pH', 'kh': 'KH', 'gh': 'GH',
-      'potassium': 'Potassium', 'calcium': 'Calcium', 'magnesium': 'Magnesium',
-      'phosphate': 'Phosphate', 'temp': 'Temp', 'salinity': 'Salinity',
-    };
-    return labels[p] ?? p;
-  }
+  static String _paramLabel(String p) => _paramDisplayNames[p.toLowerCase()] ?? p;
 
   @override
   State<ChartsScreen> createState() => _ChartsScreenState();
@@ -7114,7 +8688,7 @@ class _ChartsScreenState extends State<ChartsScreen> {
       final groupSeries = {for (final p in group) if (series.containsKey(p) && _qualifies(series[p]!)) p: series[p]!};
       if (groupSeries.isEmpty) continue;
       for (final p in groupSeries.keys) usedParams.add(p);
-      charts.add(_ChartCard(title: group.map(ChartsScreen._paramLabel).join(' / '), seriesData: groupSeries, waterType: widget.tank.waterType));
+      charts.add(_ChartCard(title: group.map(_paramShortLabel).join(' / '), seriesData: groupSeries, waterType: widget.tank.waterType));
     }
 
     // Remaining params with enough data each get their own chart
@@ -7125,7 +8699,7 @@ class _ChartsScreenState extends State<ChartsScreen> {
     }
 
     return Scaffold(
-      appBar: _buildAppBar(context, '${widget.tank.name} — Charts'),
+      appBar: _buildAppBar(context, ''),
       bottomNavigationBar: Builder(
         builder: (ctx) => _AquariaFooter(
           onAiTap: () => showModalBottomSheet(
@@ -7140,7 +8714,18 @@ class _ChartsScreenState extends State<ChartsScreen> {
           ),
         ),
       ),
-      body: charts.isEmpty
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+            child: Text(
+              '${widget.tank.name} — Charts',
+              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: _cDark),
+            ),
+          ),
+          Expanded(
+            child: charts.isEmpty
           ? const Center(
               child: Padding(
                 padding: EdgeInsets.all(32),
@@ -7158,6 +8743,9 @@ class _ChartsScreenState extends State<ChartsScreen> {
               children: charts,
             ),
             ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -7291,7 +8879,7 @@ class _ChartCard extends StatelessWidget {
     final rangeNotes = <({String label, Color color, Color border, double lo, double hi, String unit})>[];
     for (final param in seriesData.keys) {
       if (param == 'ammonia' || param == 'nitrite') {
-        zeroParams.add(ChartsScreen._paramLabel(param));
+        zeroParams.add(_paramShortLabel(param));
         continue;
       }
       final r = idealRanges[param];
@@ -7300,7 +8888,7 @@ class _ChartCard extends StatelessWidget {
         rangeAnnotations.add(HorizontalRangeAnnotation(y1: r.$1, y2: r.$2, color: color));
         if (legendColors.containsKey(param)) {
           rangeNotes.add((
-            label: 'Ideal ${ChartsScreen._paramLabel(param)}',
+            label: 'Ideal ${_paramShortLabel(param)}',
             color: legendColors[param]!,
             border: legendBorders[param]!,
             lo: r.$1,
@@ -7317,7 +8905,7 @@ class _ChartCard extends StatelessWidget {
       return Row(mainAxisSize: MainAxisSize.min, children: [
         Container(width: 12, height: 3, color: color),
         const SizedBox(width: 4),
-        Text(ChartsScreen._paramLabel(p), style: TextStyle(fontSize: 11, color: color, fontWeight: FontWeight.w600)),
+        Text(_paramShortLabel(p), style: TextStyle(fontSize: 11, color: color, fontWeight: FontWeight.w600)),
       ]);
     }).toList();
 
@@ -7395,7 +8983,7 @@ class _ChartCard extends StatelessWidget {
                         final param = seriesData.keys.elementAt(s.barIndex);
                         final d = allDates[s.x.round()];
                         return LineTooltipItem(
-                          '${ChartsScreen._paramLabel(param)}: ${s.y % 1 == 0 ? s.y.toInt() : s.y.toStringAsFixed(2)}\n${months[d.month - 1]} ${d.day}',
+                          '${_paramShortLabel(param)}: ${s.y % 1 == 0 ? s.y.toInt() : s.y.toStringAsFixed(2)}\n${months[d.month - 1]} ${d.day}',
                           TextStyle(color: _paramColors[param] ?? Colors.white, fontSize: 11),
                         );
                       }).toList(),

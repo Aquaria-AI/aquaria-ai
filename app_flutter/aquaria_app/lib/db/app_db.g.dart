@@ -1553,6 +1553,902 @@ class LogsCompanion extends UpdateCompanion<Log> {
   }
 }
 
+class $TankPhotosTable extends TankPhotos
+    with TableInfo<$TankPhotosTable, TankPhoto> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $TankPhotosTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<int> id = GeneratedColumn<int>(
+    'id',
+    aliasedName,
+    false,
+    hasAutoIncrement: true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'PRIMARY KEY AUTOINCREMENT',
+    ),
+  );
+  static const VerificationMeta _tankIdMeta = const VerificationMeta('tankId');
+  @override
+  late final GeneratedColumn<String> tankId = GeneratedColumn<String>(
+    'tank_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _filePathMeta = const VerificationMeta(
+    'filePath',
+  );
+  @override
+  late final GeneratedColumn<String> filePath = GeneratedColumn<String>(
+    'file_path',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _noteMeta = const VerificationMeta('note');
+  @override
+  late final GeneratedColumn<String> note = GeneratedColumn<String>(
+    'note',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: false,
+    defaultValue: Constant(DateTime.now()),
+  );
+  @override
+  List<GeneratedColumn> get $columns => [id, tankId, filePath, note, createdAt];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'tank_photos';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<TankPhoto> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('tank_id')) {
+      context.handle(
+        _tankIdMeta,
+        tankId.isAcceptableOrUnknown(data['tank_id']!, _tankIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_tankIdMeta);
+    }
+    if (data.containsKey('file_path')) {
+      context.handle(
+        _filePathMeta,
+        filePath.isAcceptableOrUnknown(data['file_path']!, _filePathMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_filePathMeta);
+    }
+    if (data.containsKey('note')) {
+      context.handle(
+        _noteMeta,
+        note.isAcceptableOrUnknown(data['note']!, _noteMeta),
+      );
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  TankPhoto map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return TankPhoto(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}id'],
+      )!,
+      tankId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}tank_id'],
+      )!,
+      filePath: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}file_path'],
+      )!,
+      note: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}note'],
+      ),
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}created_at'],
+      )!,
+    );
+  }
+
+  @override
+  $TankPhotosTable createAlias(String alias) {
+    return $TankPhotosTable(attachedDatabase, alias);
+  }
+}
+
+class TankPhoto extends DataClass implements Insertable<TankPhoto> {
+  final int id;
+  final String tankId;
+  final String filePath;
+  final String? note;
+  final DateTime createdAt;
+  const TankPhoto({
+    required this.id,
+    required this.tankId,
+    required this.filePath,
+    this.note,
+    required this.createdAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<int>(id);
+    map['tank_id'] = Variable<String>(tankId);
+    map['file_path'] = Variable<String>(filePath);
+    if (!nullToAbsent || note != null) {
+      map['note'] = Variable<String>(note);
+    }
+    map['created_at'] = Variable<DateTime>(createdAt);
+    return map;
+  }
+
+  TankPhotosCompanion toCompanion(bool nullToAbsent) {
+    return TankPhotosCompanion(
+      id: Value(id),
+      tankId: Value(tankId),
+      filePath: Value(filePath),
+      note: note == null && nullToAbsent ? const Value.absent() : Value(note),
+      createdAt: Value(createdAt),
+    );
+  }
+
+  factory TankPhoto.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return TankPhoto(
+      id: serializer.fromJson<int>(json['id']),
+      tankId: serializer.fromJson<String>(json['tankId']),
+      filePath: serializer.fromJson<String>(json['filePath']),
+      note: serializer.fromJson<String?>(json['note']),
+      createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<int>(id),
+      'tankId': serializer.toJson<String>(tankId),
+      'filePath': serializer.toJson<String>(filePath),
+      'note': serializer.toJson<String?>(note),
+      'createdAt': serializer.toJson<DateTime>(createdAt),
+    };
+  }
+
+  TankPhoto copyWith({
+    int? id,
+    String? tankId,
+    String? filePath,
+    Value<String?> note = const Value.absent(),
+    DateTime? createdAt,
+  }) => TankPhoto(
+    id: id ?? this.id,
+    tankId: tankId ?? this.tankId,
+    filePath: filePath ?? this.filePath,
+    note: note.present ? note.value : this.note,
+    createdAt: createdAt ?? this.createdAt,
+  );
+  TankPhoto copyWithCompanion(TankPhotosCompanion data) {
+    return TankPhoto(
+      id: data.id.present ? data.id.value : this.id,
+      tankId: data.tankId.present ? data.tankId.value : this.tankId,
+      filePath: data.filePath.present ? data.filePath.value : this.filePath,
+      note: data.note.present ? data.note.value : this.note,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('TankPhoto(')
+          ..write('id: $id, ')
+          ..write('tankId: $tankId, ')
+          ..write('filePath: $filePath, ')
+          ..write('note: $note, ')
+          ..write('createdAt: $createdAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(id, tankId, filePath, note, createdAt);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is TankPhoto &&
+          other.id == this.id &&
+          other.tankId == this.tankId &&
+          other.filePath == this.filePath &&
+          other.note == this.note &&
+          other.createdAt == this.createdAt);
+}
+
+class TankPhotosCompanion extends UpdateCompanion<TankPhoto> {
+  final Value<int> id;
+  final Value<String> tankId;
+  final Value<String> filePath;
+  final Value<String?> note;
+  final Value<DateTime> createdAt;
+  const TankPhotosCompanion({
+    this.id = const Value.absent(),
+    this.tankId = const Value.absent(),
+    this.filePath = const Value.absent(),
+    this.note = const Value.absent(),
+    this.createdAt = const Value.absent(),
+  });
+  TankPhotosCompanion.insert({
+    this.id = const Value.absent(),
+    required String tankId,
+    required String filePath,
+    this.note = const Value.absent(),
+    this.createdAt = const Value.absent(),
+  }) : tankId = Value(tankId),
+       filePath = Value(filePath);
+  static Insertable<TankPhoto> custom({
+    Expression<int>? id,
+    Expression<String>? tankId,
+    Expression<String>? filePath,
+    Expression<String>? note,
+    Expression<DateTime>? createdAt,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (tankId != null) 'tank_id': tankId,
+      if (filePath != null) 'file_path': filePath,
+      if (note != null) 'note': note,
+      if (createdAt != null) 'created_at': createdAt,
+    });
+  }
+
+  TankPhotosCompanion copyWith({
+    Value<int>? id,
+    Value<String>? tankId,
+    Value<String>? filePath,
+    Value<String?>? note,
+    Value<DateTime>? createdAt,
+  }) {
+    return TankPhotosCompanion(
+      id: id ?? this.id,
+      tankId: tankId ?? this.tankId,
+      filePath: filePath ?? this.filePath,
+      note: note ?? this.note,
+      createdAt: createdAt ?? this.createdAt,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<int>(id.value);
+    }
+    if (tankId.present) {
+      map['tank_id'] = Variable<String>(tankId.value);
+    }
+    if (filePath.present) {
+      map['file_path'] = Variable<String>(filePath.value);
+    }
+    if (note.present) {
+      map['note'] = Variable<String>(note.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<DateTime>(createdAt.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('TankPhotosCompanion(')
+          ..write('id: $id, ')
+          ..write('tankId: $tankId, ')
+          ..write('filePath: $filePath, ')
+          ..write('note: $note, ')
+          ..write('createdAt: $createdAt')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $TasksTable extends Tasks with TableInfo<$TasksTable, Task> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $TasksTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<int> id = GeneratedColumn<int>(
+    'id',
+    aliasedName,
+    false,
+    hasAutoIncrement: true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'PRIMARY KEY AUTOINCREMENT',
+    ),
+  );
+  static const VerificationMeta _tankIdMeta = const VerificationMeta('tankId');
+  @override
+  late final GeneratedColumn<String> tankId = GeneratedColumn<String>(
+    'tank_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _descriptionMeta = const VerificationMeta(
+    'description',
+  );
+  @override
+  late final GeneratedColumn<String> description = GeneratedColumn<String>(
+    'description',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _dueDateMeta = const VerificationMeta(
+    'dueDate',
+  );
+  @override
+  late final GeneratedColumn<String> dueDate = GeneratedColumn<String>(
+    'due_date',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _priorityMeta = const VerificationMeta(
+    'priority',
+  );
+  @override
+  late final GeneratedColumn<String> priority = GeneratedColumn<String>(
+    'priority',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('normal'),
+  );
+  static const VerificationMeta _sourceMeta = const VerificationMeta('source');
+  @override
+  late final GeneratedColumn<String> source = GeneratedColumn<String>(
+    'source',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('ai'),
+  );
+  static const VerificationMeta _isDismissedMeta = const VerificationMeta(
+    'isDismissed',
+  );
+  @override
+  late final GeneratedColumn<bool> isDismissed = GeneratedColumn<bool>(
+    'is_dismissed',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("is_dismissed" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
+  static const VerificationMeta _dismissedAtMeta = const VerificationMeta(
+    'dismissedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> dismissedAt = GeneratedColumn<DateTime>(
+    'dismissed_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: false,
+    defaultValue: Constant(DateTime.now()),
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    tankId,
+    description,
+    dueDate,
+    priority,
+    source,
+    isDismissed,
+    dismissedAt,
+    createdAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'tasks';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<Task> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('tank_id')) {
+      context.handle(
+        _tankIdMeta,
+        tankId.isAcceptableOrUnknown(data['tank_id']!, _tankIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_tankIdMeta);
+    }
+    if (data.containsKey('description')) {
+      context.handle(
+        _descriptionMeta,
+        description.isAcceptableOrUnknown(
+          data['description']!,
+          _descriptionMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_descriptionMeta);
+    }
+    if (data.containsKey('due_date')) {
+      context.handle(
+        _dueDateMeta,
+        dueDate.isAcceptableOrUnknown(data['due_date']!, _dueDateMeta),
+      );
+    }
+    if (data.containsKey('priority')) {
+      context.handle(
+        _priorityMeta,
+        priority.isAcceptableOrUnknown(data['priority']!, _priorityMeta),
+      );
+    }
+    if (data.containsKey('source')) {
+      context.handle(
+        _sourceMeta,
+        source.isAcceptableOrUnknown(data['source']!, _sourceMeta),
+      );
+    }
+    if (data.containsKey('is_dismissed')) {
+      context.handle(
+        _isDismissedMeta,
+        isDismissed.isAcceptableOrUnknown(
+          data['is_dismissed']!,
+          _isDismissedMeta,
+        ),
+      );
+    }
+    if (data.containsKey('dismissed_at')) {
+      context.handle(
+        _dismissedAtMeta,
+        dismissedAt.isAcceptableOrUnknown(
+          data['dismissed_at']!,
+          _dismissedAtMeta,
+        ),
+      );
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  Task map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return Task(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}id'],
+      )!,
+      tankId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}tank_id'],
+      )!,
+      description: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}description'],
+      )!,
+      dueDate: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}due_date'],
+      ),
+      priority: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}priority'],
+      )!,
+      source: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}source'],
+      )!,
+      isDismissed: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}is_dismissed'],
+      )!,
+      dismissedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}dismissed_at'],
+      ),
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}created_at'],
+      )!,
+    );
+  }
+
+  @override
+  $TasksTable createAlias(String alias) {
+    return $TasksTable(attachedDatabase, alias);
+  }
+}
+
+class Task extends DataClass implements Insertable<Task> {
+  final int id;
+  final String tankId;
+  final String description;
+  final String? dueDate;
+  final String priority;
+  final String source;
+  final bool isDismissed;
+  final DateTime? dismissedAt;
+  final DateTime createdAt;
+  const Task({
+    required this.id,
+    required this.tankId,
+    required this.description,
+    this.dueDate,
+    required this.priority,
+    required this.source,
+    required this.isDismissed,
+    this.dismissedAt,
+    required this.createdAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<int>(id);
+    map['tank_id'] = Variable<String>(tankId);
+    map['description'] = Variable<String>(description);
+    if (!nullToAbsent || dueDate != null) {
+      map['due_date'] = Variable<String>(dueDate);
+    }
+    map['priority'] = Variable<String>(priority);
+    map['source'] = Variable<String>(source);
+    map['is_dismissed'] = Variable<bool>(isDismissed);
+    if (!nullToAbsent || dismissedAt != null) {
+      map['dismissed_at'] = Variable<DateTime>(dismissedAt);
+    }
+    map['created_at'] = Variable<DateTime>(createdAt);
+    return map;
+  }
+
+  TasksCompanion toCompanion(bool nullToAbsent) {
+    return TasksCompanion(
+      id: Value(id),
+      tankId: Value(tankId),
+      description: Value(description),
+      dueDate: dueDate == null && nullToAbsent
+          ? const Value.absent()
+          : Value(dueDate),
+      priority: Value(priority),
+      source: Value(source),
+      isDismissed: Value(isDismissed),
+      dismissedAt: dismissedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(dismissedAt),
+      createdAt: Value(createdAt),
+    );
+  }
+
+  factory Task.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return Task(
+      id: serializer.fromJson<int>(json['id']),
+      tankId: serializer.fromJson<String>(json['tankId']),
+      description: serializer.fromJson<String>(json['description']),
+      dueDate: serializer.fromJson<String?>(json['dueDate']),
+      priority: serializer.fromJson<String>(json['priority']),
+      source: serializer.fromJson<String>(json['source']),
+      isDismissed: serializer.fromJson<bool>(json['isDismissed']),
+      dismissedAt: serializer.fromJson<DateTime?>(json['dismissedAt']),
+      createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<int>(id),
+      'tankId': serializer.toJson<String>(tankId),
+      'description': serializer.toJson<String>(description),
+      'dueDate': serializer.toJson<String?>(dueDate),
+      'priority': serializer.toJson<String>(priority),
+      'source': serializer.toJson<String>(source),
+      'isDismissed': serializer.toJson<bool>(isDismissed),
+      'dismissedAt': serializer.toJson<DateTime?>(dismissedAt),
+      'createdAt': serializer.toJson<DateTime>(createdAt),
+    };
+  }
+
+  Task copyWith({
+    int? id,
+    String? tankId,
+    String? description,
+    Value<String?> dueDate = const Value.absent(),
+    String? priority,
+    String? source,
+    bool? isDismissed,
+    Value<DateTime?> dismissedAt = const Value.absent(),
+    DateTime? createdAt,
+  }) => Task(
+    id: id ?? this.id,
+    tankId: tankId ?? this.tankId,
+    description: description ?? this.description,
+    dueDate: dueDate.present ? dueDate.value : this.dueDate,
+    priority: priority ?? this.priority,
+    source: source ?? this.source,
+    isDismissed: isDismissed ?? this.isDismissed,
+    dismissedAt: dismissedAt.present ? dismissedAt.value : this.dismissedAt,
+    createdAt: createdAt ?? this.createdAt,
+  );
+  Task copyWithCompanion(TasksCompanion data) {
+    return Task(
+      id: data.id.present ? data.id.value : this.id,
+      tankId: data.tankId.present ? data.tankId.value : this.tankId,
+      description: data.description.present
+          ? data.description.value
+          : this.description,
+      dueDate: data.dueDate.present ? data.dueDate.value : this.dueDate,
+      priority: data.priority.present ? data.priority.value : this.priority,
+      source: data.source.present ? data.source.value : this.source,
+      isDismissed: data.isDismissed.present
+          ? data.isDismissed.value
+          : this.isDismissed,
+      dismissedAt: data.dismissedAt.present
+          ? data.dismissedAt.value
+          : this.dismissedAt,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('Task(')
+          ..write('id: $id, ')
+          ..write('tankId: $tankId, ')
+          ..write('description: $description, ')
+          ..write('dueDate: $dueDate, ')
+          ..write('priority: $priority, ')
+          ..write('source: $source, ')
+          ..write('isDismissed: $isDismissed, ')
+          ..write('dismissedAt: $dismissedAt, ')
+          ..write('createdAt: $createdAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    tankId,
+    description,
+    dueDate,
+    priority,
+    source,
+    isDismissed,
+    dismissedAt,
+    createdAt,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is Task &&
+          other.id == this.id &&
+          other.tankId == this.tankId &&
+          other.description == this.description &&
+          other.dueDate == this.dueDate &&
+          other.priority == this.priority &&
+          other.source == this.source &&
+          other.isDismissed == this.isDismissed &&
+          other.dismissedAt == this.dismissedAt &&
+          other.createdAt == this.createdAt);
+}
+
+class TasksCompanion extends UpdateCompanion<Task> {
+  final Value<int> id;
+  final Value<String> tankId;
+  final Value<String> description;
+  final Value<String?> dueDate;
+  final Value<String> priority;
+  final Value<String> source;
+  final Value<bool> isDismissed;
+  final Value<DateTime?> dismissedAt;
+  final Value<DateTime> createdAt;
+  const TasksCompanion({
+    this.id = const Value.absent(),
+    this.tankId = const Value.absent(),
+    this.description = const Value.absent(),
+    this.dueDate = const Value.absent(),
+    this.priority = const Value.absent(),
+    this.source = const Value.absent(),
+    this.isDismissed = const Value.absent(),
+    this.dismissedAt = const Value.absent(),
+    this.createdAt = const Value.absent(),
+  });
+  TasksCompanion.insert({
+    this.id = const Value.absent(),
+    required String tankId,
+    required String description,
+    this.dueDate = const Value.absent(),
+    this.priority = const Value.absent(),
+    this.source = const Value.absent(),
+    this.isDismissed = const Value.absent(),
+    this.dismissedAt = const Value.absent(),
+    this.createdAt = const Value.absent(),
+  }) : tankId = Value(tankId),
+       description = Value(description);
+  static Insertable<Task> custom({
+    Expression<int>? id,
+    Expression<String>? tankId,
+    Expression<String>? description,
+    Expression<String>? dueDate,
+    Expression<String>? priority,
+    Expression<String>? source,
+    Expression<bool>? isDismissed,
+    Expression<DateTime>? dismissedAt,
+    Expression<DateTime>? createdAt,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (tankId != null) 'tank_id': tankId,
+      if (description != null) 'description': description,
+      if (dueDate != null) 'due_date': dueDate,
+      if (priority != null) 'priority': priority,
+      if (source != null) 'source': source,
+      if (isDismissed != null) 'is_dismissed': isDismissed,
+      if (dismissedAt != null) 'dismissed_at': dismissedAt,
+      if (createdAt != null) 'created_at': createdAt,
+    });
+  }
+
+  TasksCompanion copyWith({
+    Value<int>? id,
+    Value<String>? tankId,
+    Value<String>? description,
+    Value<String?>? dueDate,
+    Value<String>? priority,
+    Value<String>? source,
+    Value<bool>? isDismissed,
+    Value<DateTime?>? dismissedAt,
+    Value<DateTime>? createdAt,
+  }) {
+    return TasksCompanion(
+      id: id ?? this.id,
+      tankId: tankId ?? this.tankId,
+      description: description ?? this.description,
+      dueDate: dueDate ?? this.dueDate,
+      priority: priority ?? this.priority,
+      source: source ?? this.source,
+      isDismissed: isDismissed ?? this.isDismissed,
+      dismissedAt: dismissedAt ?? this.dismissedAt,
+      createdAt: createdAt ?? this.createdAt,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<int>(id.value);
+    }
+    if (tankId.present) {
+      map['tank_id'] = Variable<String>(tankId.value);
+    }
+    if (description.present) {
+      map['description'] = Variable<String>(description.value);
+    }
+    if (dueDate.present) {
+      map['due_date'] = Variable<String>(dueDate.value);
+    }
+    if (priority.present) {
+      map['priority'] = Variable<String>(priority.value);
+    }
+    if (source.present) {
+      map['source'] = Variable<String>(source.value);
+    }
+    if (isDismissed.present) {
+      map['is_dismissed'] = Variable<bool>(isDismissed.value);
+    }
+    if (dismissedAt.present) {
+      map['dismissed_at'] = Variable<DateTime>(dismissedAt.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<DateTime>(createdAt.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('TasksCompanion(')
+          ..write('id: $id, ')
+          ..write('tankId: $tankId, ')
+          ..write('description: $description, ')
+          ..write('dueDate: $dueDate, ')
+          ..write('priority: $priority, ')
+          ..write('source: $source, ')
+          ..write('isDismissed: $isDismissed, ')
+          ..write('dismissedAt: $dismissedAt, ')
+          ..write('createdAt: $createdAt')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDb extends GeneratedDatabase {
   _$AppDb(QueryExecutor e) : super(e);
   $AppDbManager get managers => $AppDbManager(this);
@@ -1560,6 +2456,8 @@ abstract class _$AppDb extends GeneratedDatabase {
   late final $InhabitantsTable inhabitants = $InhabitantsTable(this);
   late final $PlantsTable plants = $PlantsTable(this);
   late final $LogsTable logs = $LogsTable(this);
+  late final $TankPhotosTable tankPhotos = $TankPhotosTable(this);
+  late final $TasksTable tasks = $TasksTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -1569,6 +2467,8 @@ abstract class _$AppDb extends GeneratedDatabase {
     inhabitants,
     plants,
     logs,
+    tankPhotos,
+    tasks,
   ];
 }
 
@@ -2386,6 +3286,461 @@ typedef $$LogsTableProcessedTableManager =
       Log,
       PrefetchHooks Function()
     >;
+typedef $$TankPhotosTableCreateCompanionBuilder =
+    TankPhotosCompanion Function({
+      Value<int> id,
+      required String tankId,
+      required String filePath,
+      Value<String?> note,
+      Value<DateTime> createdAt,
+    });
+typedef $$TankPhotosTableUpdateCompanionBuilder =
+    TankPhotosCompanion Function({
+      Value<int> id,
+      Value<String> tankId,
+      Value<String> filePath,
+      Value<String?> note,
+      Value<DateTime> createdAt,
+    });
+
+class $$TankPhotosTableFilterComposer
+    extends Composer<_$AppDb, $TankPhotosTable> {
+  $$TankPhotosTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get tankId => $composableBuilder(
+    column: $table.tankId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get filePath => $composableBuilder(
+    column: $table.filePath,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get note => $composableBuilder(
+    column: $table.note,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$TankPhotosTableOrderingComposer
+    extends Composer<_$AppDb, $TankPhotosTable> {
+  $$TankPhotosTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get tankId => $composableBuilder(
+    column: $table.tankId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get filePath => $composableBuilder(
+    column: $table.filePath,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get note => $composableBuilder(
+    column: $table.note,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$TankPhotosTableAnnotationComposer
+    extends Composer<_$AppDb, $TankPhotosTable> {
+  $$TankPhotosTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get tankId =>
+      $composableBuilder(column: $table.tankId, builder: (column) => column);
+
+  GeneratedColumn<String> get filePath =>
+      $composableBuilder(column: $table.filePath, builder: (column) => column);
+
+  GeneratedColumn<String> get note =>
+      $composableBuilder(column: $table.note, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+}
+
+class $$TankPhotosTableTableManager
+    extends
+        RootTableManager<
+          _$AppDb,
+          $TankPhotosTable,
+          TankPhoto,
+          $$TankPhotosTableFilterComposer,
+          $$TankPhotosTableOrderingComposer,
+          $$TankPhotosTableAnnotationComposer,
+          $$TankPhotosTableCreateCompanionBuilder,
+          $$TankPhotosTableUpdateCompanionBuilder,
+          (TankPhoto, BaseReferences<_$AppDb, $TankPhotosTable, TankPhoto>),
+          TankPhoto,
+          PrefetchHooks Function()
+        > {
+  $$TankPhotosTableTableManager(_$AppDb db, $TankPhotosTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$TankPhotosTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$TankPhotosTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$TankPhotosTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<int> id = const Value.absent(),
+                Value<String> tankId = const Value.absent(),
+                Value<String> filePath = const Value.absent(),
+                Value<String?> note = const Value.absent(),
+                Value<DateTime> createdAt = const Value.absent(),
+              }) => TankPhotosCompanion(
+                id: id,
+                tankId: tankId,
+                filePath: filePath,
+                note: note,
+                createdAt: createdAt,
+              ),
+          createCompanionCallback:
+              ({
+                Value<int> id = const Value.absent(),
+                required String tankId,
+                required String filePath,
+                Value<String?> note = const Value.absent(),
+                Value<DateTime> createdAt = const Value.absent(),
+              }) => TankPhotosCompanion.insert(
+                id: id,
+                tankId: tankId,
+                filePath: filePath,
+                note: note,
+                createdAt: createdAt,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$TankPhotosTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDb,
+      $TankPhotosTable,
+      TankPhoto,
+      $$TankPhotosTableFilterComposer,
+      $$TankPhotosTableOrderingComposer,
+      $$TankPhotosTableAnnotationComposer,
+      $$TankPhotosTableCreateCompanionBuilder,
+      $$TankPhotosTableUpdateCompanionBuilder,
+      (TankPhoto, BaseReferences<_$AppDb, $TankPhotosTable, TankPhoto>),
+      TankPhoto,
+      PrefetchHooks Function()
+    >;
+typedef $$TasksTableCreateCompanionBuilder =
+    TasksCompanion Function({
+      Value<int> id,
+      required String tankId,
+      required String description,
+      Value<String?> dueDate,
+      Value<String> priority,
+      Value<String> source,
+      Value<bool> isDismissed,
+      Value<DateTime?> dismissedAt,
+      Value<DateTime> createdAt,
+    });
+typedef $$TasksTableUpdateCompanionBuilder =
+    TasksCompanion Function({
+      Value<int> id,
+      Value<String> tankId,
+      Value<String> description,
+      Value<String?> dueDate,
+      Value<String> priority,
+      Value<String> source,
+      Value<bool> isDismissed,
+      Value<DateTime?> dismissedAt,
+      Value<DateTime> createdAt,
+    });
+
+class $$TasksTableFilterComposer extends Composer<_$AppDb, $TasksTable> {
+  $$TasksTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get tankId => $composableBuilder(
+    column: $table.tankId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get description => $composableBuilder(
+    column: $table.description,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get dueDate => $composableBuilder(
+    column: $table.dueDate,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get priority => $composableBuilder(
+    column: $table.priority,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get source => $composableBuilder(
+    column: $table.source,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get isDismissed => $composableBuilder(
+    column: $table.isDismissed,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get dismissedAt => $composableBuilder(
+    column: $table.dismissedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$TasksTableOrderingComposer extends Composer<_$AppDb, $TasksTable> {
+  $$TasksTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get tankId => $composableBuilder(
+    column: $table.tankId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get description => $composableBuilder(
+    column: $table.description,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get dueDate => $composableBuilder(
+    column: $table.dueDate,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get priority => $composableBuilder(
+    column: $table.priority,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get source => $composableBuilder(
+    column: $table.source,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get isDismissed => $composableBuilder(
+    column: $table.isDismissed,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get dismissedAt => $composableBuilder(
+    column: $table.dismissedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$TasksTableAnnotationComposer extends Composer<_$AppDb, $TasksTable> {
+  $$TasksTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get tankId =>
+      $composableBuilder(column: $table.tankId, builder: (column) => column);
+
+  GeneratedColumn<String> get description => $composableBuilder(
+    column: $table.description,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get dueDate =>
+      $composableBuilder(column: $table.dueDate, builder: (column) => column);
+
+  GeneratedColumn<String> get priority =>
+      $composableBuilder(column: $table.priority, builder: (column) => column);
+
+  GeneratedColumn<String> get source =>
+      $composableBuilder(column: $table.source, builder: (column) => column);
+
+  GeneratedColumn<bool> get isDismissed => $composableBuilder(
+    column: $table.isDismissed,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get dismissedAt => $composableBuilder(
+    column: $table.dismissedAt,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+}
+
+class $$TasksTableTableManager
+    extends
+        RootTableManager<
+          _$AppDb,
+          $TasksTable,
+          Task,
+          $$TasksTableFilterComposer,
+          $$TasksTableOrderingComposer,
+          $$TasksTableAnnotationComposer,
+          $$TasksTableCreateCompanionBuilder,
+          $$TasksTableUpdateCompanionBuilder,
+          (Task, BaseReferences<_$AppDb, $TasksTable, Task>),
+          Task,
+          PrefetchHooks Function()
+        > {
+  $$TasksTableTableManager(_$AppDb db, $TasksTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$TasksTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$TasksTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$TasksTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<int> id = const Value.absent(),
+                Value<String> tankId = const Value.absent(),
+                Value<String> description = const Value.absent(),
+                Value<String?> dueDate = const Value.absent(),
+                Value<String> priority = const Value.absent(),
+                Value<String> source = const Value.absent(),
+                Value<bool> isDismissed = const Value.absent(),
+                Value<DateTime?> dismissedAt = const Value.absent(),
+                Value<DateTime> createdAt = const Value.absent(),
+              }) => TasksCompanion(
+                id: id,
+                tankId: tankId,
+                description: description,
+                dueDate: dueDate,
+                priority: priority,
+                source: source,
+                isDismissed: isDismissed,
+                dismissedAt: dismissedAt,
+                createdAt: createdAt,
+              ),
+          createCompanionCallback:
+              ({
+                Value<int> id = const Value.absent(),
+                required String tankId,
+                required String description,
+                Value<String?> dueDate = const Value.absent(),
+                Value<String> priority = const Value.absent(),
+                Value<String> source = const Value.absent(),
+                Value<bool> isDismissed = const Value.absent(),
+                Value<DateTime?> dismissedAt = const Value.absent(),
+                Value<DateTime> createdAt = const Value.absent(),
+              }) => TasksCompanion.insert(
+                id: id,
+                tankId: tankId,
+                description: description,
+                dueDate: dueDate,
+                priority: priority,
+                source: source,
+                isDismissed: isDismissed,
+                dismissedAt: dismissedAt,
+                createdAt: createdAt,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$TasksTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDb,
+      $TasksTable,
+      Task,
+      $$TasksTableFilterComposer,
+      $$TasksTableOrderingComposer,
+      $$TasksTableAnnotationComposer,
+      $$TasksTableCreateCompanionBuilder,
+      $$TasksTableUpdateCompanionBuilder,
+      (Task, BaseReferences<_$AppDb, $TasksTable, Task>),
+      Task,
+      PrefetchHooks Function()
+    >;
 
 class $AppDbManager {
   final _$AppDb _db;
@@ -2397,4 +3752,8 @@ class $AppDbManager {
   $$PlantsTableTableManager get plants =>
       $$PlantsTableTableManager(_db, _db.plants);
   $$LogsTableTableManager get logs => $$LogsTableTableManager(_db, _db.logs);
+  $$TankPhotosTableTableManager get tankPhotos =>
+      $$TankPhotosTableTableManager(_db, _db.tankPhotos);
+  $$TasksTableTableManager get tasks =>
+      $$TasksTableTableManager(_db, _db.tasks);
 }

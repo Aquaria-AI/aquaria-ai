@@ -71,12 +71,44 @@ class Logs extends Table {
       ];
 }
 
-@DriftDatabase(tables: [Tanks, Inhabitants, Plants, Logs])
+class TankPhotos extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  TextColumn get tankId => text()();
+  TextColumn get filePath => text()();
+  TextColumn get note => text().nullable()();
+  DateTimeColumn get createdAt =>
+      dateTime().withDefault(Constant(DateTime.now()))();
+
+  @override
+  List<String> get customConstraints => [
+        'FOREIGN KEY(tank_id) REFERENCES tanks(id) ON DELETE CASCADE',
+      ];
+}
+
+class Tasks extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  TextColumn get tankId => text()();
+  TextColumn get description => text()();
+  TextColumn get dueDate => text().nullable()(); // ISO date string YYYY-MM-DD
+  TextColumn get priority => text().withDefault(const Constant('normal'))();
+  TextColumn get source => text().withDefault(const Constant('ai'))(); // 'ai' or 'alert'
+  BoolColumn get isDismissed => boolean().withDefault(const Constant(false))();
+  DateTimeColumn get dismissedAt => dateTime().nullable()();
+  DateTimeColumn get createdAt =>
+      dateTime().withDefault(Constant(DateTime.now()))();
+
+  @override
+  List<String> get customConstraints => [
+        'FOREIGN KEY(tank_id) REFERENCES tanks(id) ON DELETE CASCADE',
+      ];
+}
+
+@DriftDatabase(tables: [Tanks, Inhabitants, Plants, Logs, TankPhotos, Tasks])
 class AppDb extends _$AppDb {
   AppDb() : super(_openConnection());
 
   @override
-  int get schemaVersion => 7;
+  int get schemaVersion => 9;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -108,6 +140,12 @@ class AppDb extends _$AppDb {
             await customStatement(
               'CREATE TABLE IF NOT EXISTS dismissed_tasks (task_key TEXT PRIMARY KEY)',
             );
+          }
+          if (from <= 7) {
+            await migrator.createTable(tankPhotos);
+          }
+          if (from <= 8) {
+            await migrator.createTable(tasks);
           }
         },
       );
@@ -235,6 +273,60 @@ class AppDb extends _$AppDb {
       'INSERT OR IGNORE INTO dismissed_tasks (task_key) VALUES (?)',
       [key],
     );
+  }
+
+  // ---------- Tasks ----------
+  Future<List<Task>> tasksForTank(String tankId) {
+    return (select(tasks)
+          ..where((r) => r.tankId.equals(tankId) & r.isDismissed.equals(false))
+          ..orderBy([(r) => OrderingTerm.desc(r.createdAt)]))
+        .get();
+  }
+
+  Future<List<Task>> allActiveTasks() {
+    return (select(tasks)
+          ..where((r) => r.isDismissed.equals(false))
+          ..orderBy([(r) => OrderingTerm.desc(r.createdAt)]))
+        .get();
+  }
+
+  Future<void> insertTask(TasksCompanion entry) => into(tasks).insert(entry);
+
+  Future<void> dismissTaskById(int id) async {
+    await (update(tasks)..where((r) => r.id.equals(id))).write(
+      TasksCompanion(
+        isDismissed: const Value(true),
+        dismissedAt: Value(DateTime.now()),
+      ),
+    );
+  }
+
+  Future<void> deleteTask(int id) async {
+    await (delete(tasks)..where((r) => r.id.equals(id))).go();
+  }
+
+  // ---------- Tank Photos ----------
+  Future<List<TankPhoto>> photosForTank(String tankId) {
+    return (select(tankPhotos)
+          ..where((r) => r.tankId.equals(tankId))
+          ..orderBy([(r) => OrderingTerm.desc(r.createdAt)]))
+        .get();
+  }
+
+  Future<void> insertPhoto(TankPhotosCompanion entry) =>
+      into(tankPhotos).insert(entry);
+
+  Future<void> deletePhoto(int id) async {
+    await (delete(tankPhotos)..where((r) => r.id.equals(id))).go();
+  }
+
+  Future<void> clearAll() async {
+    await delete(tasks).go();
+    await delete(logs).go();
+    await delete(inhabitants).go();
+    await delete(plants).go();
+    await customStatement('DELETE FROM dismissed_tasks');
+    await delete(tanks).go();
   }
 }
 
