@@ -1222,14 +1222,21 @@ def chat_tank(req: ChatRequest):
         if should_extract_tasks:
             today_str = date.today().isoformat()
             extraction_prompt = _TASK_EXTRACT_PROMPT.format(today=today_str)
-            # Build full conversation for extraction — include all history + current exchange
+            # Build conversation for extraction — skip leading assistant messages
+            # (Anthropic API requires first message to be 'user')
             convo_parts = []
             for h in (req.history or []):
                 role = h.get("role", "user")
                 content = h.get("content", "")
+                # Skip assistant messages before the first user message
+                if not convo_parts and role == "assistant":
+                    continue
                 convo_parts.append({"role": role, "content": content})
             convo_parts.append({"role": "user", "content": req.message})
             convo_parts.append({"role": "assistant", "content": reply})
+            # Ensure we have at least a user message
+            if not any(m["role"] == "user" for m in convo_parts):
+                convo_parts.insert(0, {"role": "user", "content": req.message})
             try:
                 ex_response = _chat(client,
                     model="claude-haiku-4-5",
