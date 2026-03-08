@@ -1241,7 +1241,10 @@ def chat_tank(req: ChatRequest):
             # Ensure we have at least a user message
             if not any(m["role"] == "user" for m in convo_parts):
                 convo_parts.insert(0, {"role": "user", "content": req.message})
+            extraction_error = None
+            extraction_raw = None
             try:
+                print(f"[TaskExtract] convo_parts: {convo_parts}")
                 ex_response = _chat(client,
                     model="claude-haiku-4-5",
                     max_tokens=256,
@@ -1249,6 +1252,7 @@ def chat_tank(req: ChatRequest):
                     messages=convo_parts,
                 )
                 raw = ex_response.content[0].text.strip()
+                extraction_raw = raw
                 raw = re.sub(r"^```(?:json)?\s*", "", raw)
                 raw = re.sub(r"\s*```$", "", raw).strip()
                 parsed = json.loads(raw)
@@ -1257,6 +1261,7 @@ def chat_tank(req: ChatRequest):
                 print(f"[TaskExtract] AI extracted {len(extracted_tasks)} task(s): {extracted_tasks}")
             except Exception as e:
                 import traceback
+                extraction_error = str(e)
                 print(f"[Chat/TaskExtract] error: {e}")
                 traceback.print_exc()
 
@@ -1372,6 +1377,8 @@ def chat_tank(req: ChatRequest):
                 "user_explicit": user_explicit_task_request,
                 "is_affirmation": _is_affirmation(req.message),
                 "history_has_reminder": history_has_reminder,
+                "extraction_raw": extraction_raw if should_extract_tasks else None,
+                "extraction_error": extraction_error if should_extract_tasks else None,
             },
         }
     except Exception as e:
