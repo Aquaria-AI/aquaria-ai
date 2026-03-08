@@ -103,12 +103,21 @@ class Tasks extends Table {
       ];
 }
 
-@DriftDatabase(tables: [Tanks, Inhabitants, Plants, Logs, TankPhotos, Tasks])
+class ChatSessions extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  TextColumn get tankId => text().nullable()();
+  TextColumn get summary => text()();
+  IntColumn get messageCount => integer().withDefault(const Constant(0))();
+  DateTimeColumn get createdAt =>
+      dateTime().withDefault(Constant(DateTime.now()))();
+}
+
+@DriftDatabase(tables: [Tanks, Inhabitants, Plants, Logs, TankPhotos, Tasks, ChatSessions])
 class AppDb extends _$AppDb {
   AppDb() : super(_openConnection());
 
   @override
-  int get schemaVersion => 9;
+  int get schemaVersion => 10;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -146,6 +155,9 @@ class AppDb extends _$AppDb {
           }
           if (from <= 8) {
             await migrator.createTable(tasks);
+          }
+          if (from <= 9) {
+            await migrator.createTable(chatSessions);
           }
         },
       );
@@ -320,7 +332,22 @@ class AppDb extends _$AppDb {
     await (delete(tankPhotos)..where((r) => r.id.equals(id))).go();
   }
 
+  // ---------- Chat Sessions ----------
+  Future<List<ChatSession>> recentSessionsForTank(String? tankId, {int limit = 5}) {
+    final q = select(chatSessions)
+      ..orderBy([(r) => OrderingTerm.desc(r.createdAt)])
+      ..limit(limit);
+    if (tankId != null) {
+      q.where((r) => r.tankId.equals(tankId));
+    }
+    return q.get();
+  }
+
+  Future<void> insertChatSession(ChatSessionsCompanion entry) =>
+      into(chatSessions).insert(entry);
+
   Future<void> clearAll() async {
+    await delete(chatSessions).go();
     await delete(tasks).go();
     await delete(logs).go();
     await delete(inhabitants).go();

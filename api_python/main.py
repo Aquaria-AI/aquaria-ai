@@ -216,6 +216,14 @@ class ChatRequest(BaseModel):
     history: Optional[List[Dict[str, Any]]] = None
     recent_logs: Optional[List[str]] = None
     system_context: Optional[str] = None
+    health_profile: Optional[Dict[str, Any]] = None
+    behavior_profile: Optional[Dict[str, Any]] = None
+    session_summaries: Optional[List[str]] = None
+
+
+class SummarizeSessionRequest(BaseModel):
+    messages: List[Dict[str, Any]]
+    tank_name: Optional[str] = None
 
 
 class FeedbackRequest(BaseModel):
@@ -746,6 +754,21 @@ def summarize_tank_logs(req: SummaryRequest):
 
 _CHAT_SYSTEM_PROMPT = """You are Ariel, a knowledgeable aquarium assistant embedded in a tank journal app. Your name is Ariel — use it naturally when introducing yourself, but do not repeat it unnecessarily in every reply. The user can log tank events (measurements, actions, observations) by typing in the chat, and you respond conversationally.
 
+SAFETY FIRST — this overrides everything else:
+The health and safety of aquatic life and the user is your highest priority. You provide guidance to help users make informed decisions — you do NOT give specific medical or veterinary advice. All actions are ultimately the user's decision.
+
+Safety rules:
+- NEVER suggest risky treatments, chemicals, or procedures. If the user reveals they are already using or considering a risky treatment, make them aware of the risks clearly and calmly — but do not tell them what to do. Present the information so they can decide.
+- When discussing any chemical, medication, or equipment, present a balanced view including potential downsides and common misconceptions. Avoid one-sided recommendations.
+- When unsure whether a recommendation is safe for the specific inhabitants, say so and recommend the most conservative approach.
+- Flag dangerous conditions immediately and clearly: ammonia or nitrite above 0, extreme pH swings, temperature shock, copper exposure to invertebrates, overstocking, mixing incompatible species.
+- If a user describes an emergency (fish gasping, mass die-off, chemical spill), prioritize immediate actionable guidance: water change, remove the source, isolate affected fish. Keep it short and urgent.
+- Never recommend mixing chemicals (e.g. pH up + pH down, multiple medications simultaneously) without warning about interactions.
+- Always recommend testing water before and after any chemical treatment.
+- When discussing medications, recommend following manufacturer instructions and warn about impacts on the nitrogen cycle and sensitive inhabitants. Do NOT prescribe specific dosages.
+- When discussing electrical equipment near water (heaters, pumps, lights), always mention GFCI protection as a safety essential — not just for livestock but for the user's personal safety.
+- Frame all guidance as information to help the user decide, not as directives. Use language like "you may want to consider", "many keepers find", "one approach is" rather than "you should" or "you must".
+
 Your full capabilities include:
 - Logging water parameters, observations, actions, and notes
 - Setting aquarium-related reminders and tasks (water changes, testing schedules, dosing, etc.)
@@ -866,6 +889,15 @@ If a "Tap water profile" is provided in the tank context, use it when giving adv
 - If the tap water pH is high (e.g. 8.2) and the user's tank pH is elevated, clarify that water changes will bring pH back toward the tap water level, not lower it.
 - If the tap water has detectable ammonia or nitrates, warn the user and suggest using a water conditioner and testing source water regularly.
 - If no tap water profile is present and it would be helpful, gently suggest the user test their tap water and add the results on the tank details page so advice can be more accurate.
+
+CONTINUOUS LEARNING:
+When a tank health profile is provided in the context, use it to give proactive, personalized guidance:
+- If the user hasn't tested in over 7 days, mention it naturally (e.g. "It's been a little while since your last test — how's everything looking?").
+- If a parameter trend shows "rising" toward a concerning level, flag it early.
+- If the user tests irregularly, gently encourage a routine without being pushy.
+- Reference their recurring issues when relevant (e.g. "Nitrate has been creeping up — you may want to consider an extra water change this week").
+- If past conversation summaries are available, reference them naturally to show continuity (e.g. "Last time we discussed your pH — any improvement?").
+- Never be judgmental about testing frequency or habits. Be supportive and encouraging.
 
 UNKNOWN INHABITANTS:
 If the user mentions an animal (fish, shrimp, snail, coral, etc.) that is NOT in the current inhabitants list, treat it as a new discovery. Do the following in this order:
@@ -1052,6 +1084,35 @@ def _history_has_inhabitant_add_offer(history: list) -> tuple[bool, str]:
     return False, ""
 
 
+@app.post("/chat/summarize")
+def chat_summarize(req: SummarizeSessionRequest):
+    """Generate a 1-2 sentence summary of a chat session."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return {"summary": ""}
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        # Filter to just user/assistant messages with content
+        msgs = [{"role": m.get("role", "user"), "content": m.get("content", "")}
+                for m in req.messages if m.get("content")]
+        # Skip leading assistant messages
+        while msgs and msgs[0]["role"] == "assistant":
+            msgs.pop(0)
+        if len(msgs) < 2:
+            return {"summary": ""}
+        tank_note = f" The tank discussed is '{req.tank_name}'." if req.tank_name else ""
+        resp = _chat(client,
+            model="claude-haiku-4-5",
+            max_tokens=100,
+            system=f"Summarize this aquarium chat session in 1-2 sentences. Focus on what was logged, discussed, decided, or any issues raised.{tank_note} Return ONLY the summary text.",
+            messages=msgs,
+        )
+        return {"summary": resp.content[0].text.strip()}
+    except Exception as e:
+        print(f"[Summarize] error: {e}")
+        return {"summary": ""}
+
+
 @app.post("/chat/tank")
 def chat_tank(req: ChatRequest):
     api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -1158,6 +1219,54 @@ def chat_tank(req: ChatRequest):
     if req.recent_logs:
         recent = "\n".join(f"- {l}" for l in req.recent_logs[:5])
         tank_context += f"Recent log entries:\n{recent}\n"
+
+    # Health profile — computed stats from the user's log history
+    if req.health_profile:
+        hp = req.health_profile
+        hp_parts = []
+        if "days_since_last_test" in hp:
+            hp_parts.append(f"Last test: {hp['days_since_last_test']} day(s) ago")
+        if "avg_days_between_tests" in hp:
+            hp_parts.append(f"Avg interval between tests: {hp['avg_days_between_tests']} days")
+        if "water_changes_last_30d" in hp:
+            hp_parts.append(f"Water changes in last 30 days: {hp['water_changes_last_30d']}")
+        if hp.get("parameter_averages"):
+            avgs = ", ".join(f"{k}: {v}" for k, v in hp["parameter_averages"].items())
+            hp_parts.append(f"30-day averages: {avgs}")
+        if hp.get("parameter_trends"):
+            trends = ", ".join(f"{k} {v}" for k, v in hp["parameter_trends"].items())
+            hp_parts.append(f"Trends: {trends}")
+        if hp_parts:
+            tank_context += "Tank health profile:\n" + "\n".join(f"  - {p}" for p in hp_parts) + "\n"
+            tank_context += "Use this to proactively mention if the user hasn't tested recently or if a trend is concerning. Be natural, not robotic.\n"
+
+    # User behavior patterns — testing habits and follow-through
+    if req.behavior_profile:
+        bp = req.behavior_profile
+        bp_parts = []
+        if "tests_per_month" in bp:
+            bp_parts.append(f"Tests ~{bp['tests_per_month']:.1f}x/month")
+        if bp.get("most_tested"):
+            bp_parts.append(f"Regularly tests: {', '.join(bp['most_tested'])}")
+        if bp.get("least_tested"):
+            bp_parts.append(f"Rarely tests: {', '.join(bp['least_tested'])}")
+        if bp.get("recurring_issues"):
+            bp_parts.append(f"Recurring concerns: {', '.join(bp['recurring_issues'])}")
+        if "task_completion_rate" in bp:
+            bp_parts.append(f"Task follow-through: {bp['task_completion_rate']:.0%}")
+        if bp.get("testing_regularity"):
+            bp_parts.append(f"Testing pattern: {bp['testing_regularity']}")
+        if bp_parts:
+            tank_context += "User behavior patterns:\n" + "\n".join(f"  - {p}" for p in bp_parts) + "\n"
+            tank_context += "Personalize advice based on these patterns. Reference habits naturally — never be judgmental about frequency.\n"
+
+    # Session summaries — memory of past conversations
+    if req.session_summaries:
+        summaries = req.session_summaries[:5]  # limit to 5 most recent
+        tank_context += "Previous conversation summaries (most recent first):\n"
+        for s in summaries:
+            tank_context += f"  - {s}\n"
+        tank_context += "Reference past conversations naturally when relevant — e.g. 'Last time we talked about...' — but don't force it.\n"
 
     # RAG: inject relevant community knowledge
     water_type = tank.get("water_type", "freshwater")

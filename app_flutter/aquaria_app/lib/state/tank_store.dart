@@ -546,6 +546,26 @@ class TankStore {
     await _db.deletePhoto(id);
   }
 
+  // ---------- Chat Sessions ----------
+  Future<void> saveChatSession({
+    String? tankId,
+    required String summary,
+    int messageCount = 0,
+  }) async {
+    await _db.insertChatSession(
+      db.ChatSessionsCompanion.insert(
+        tankId: Value(tankId),
+        summary: summary,
+        messageCount: Value(messageCount),
+        createdAt: Value(DateTime.now()),
+      ),
+    );
+  }
+
+  Future<List<db.ChatSession>> recentSessions(String? tankId, {int limit = 5}) {
+    return _db.recentSessionsForTank(tankId, limit: limit);
+  }
+
   Future<void> addLog({
     required String tankId,
     required String rawText,

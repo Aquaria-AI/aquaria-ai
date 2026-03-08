@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:fl_chart/fl_chart.dart';
@@ -185,7 +186,7 @@ AppBar _buildAppBar(BuildContext context, String title, {List<Widget>? actions})
           icon: const Icon(Icons.person_add_outlined),
           onPressed: () async {
             try {
-              await Share.share('Check out Aquaria — an AI-powered aquarium companion app! https://aquaria.app');
+              await Share.share('Check out Aquaria — an AI-powered aquarium companion app!');
             } catch (e) {
               debugPrint('[Share] error: $e');
             }
@@ -197,6 +198,8 @@ AppBar _buildAppBar(BuildContext context, String title, {List<Widget>? actions})
           onSelected: (value) async {
             if (value == 'feedback') {
               _showFeedbackSheet(context);
+            } else if (value == 'experience') {
+              _showExperiencePicker(context);
             } else if (value == 'sign_out') {
               await SupabaseService.signOut();
               await TankStore.instance.clearLocal();
@@ -218,6 +221,17 @@ AppBar _buildAppBar(BuildContext context, String title, {List<Widget>? actions})
                   style: const TextStyle(color: Colors.black54, fontSize: 13),
                 ),
               ),
+              PopupMenuItem(
+                value: 'experience',
+                child: FutureBuilder<String>(
+                  future: _loadExperienceLevel(),
+                  builder: (_, snap) {
+                    final level = snap.data ?? 'beginner';
+                    final label = level[0].toUpperCase() + level.substring(1);
+                    return Text('Level: $label', style: const TextStyle(color: Colors.black54, fontSize: 13));
+                  },
+                ),
+              ),
               const PopupMenuDivider(),
             ],
             const PopupMenuItem(value: 'feedback', child: Text('Feedback')),
@@ -226,19 +240,77 @@ AppBar _buildAppBar(BuildContext context, String title, {List<Widget>? actions})
           ],
         ),
       ],
-      flexibleSpace: Container(
-        color: Colors.white,
-        child: SafeArea(
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: Padding(
-              padding: const EdgeInsets.only(left: 47),
-              child: Image.asset('assets/images/logo-side.png', height: 39, fit: BoxFit.contain),
+      flexibleSpace: Builder(
+        builder: (ctx) {
+          final hasBackButton = Navigator.of(ctx).canPop();
+          return Container(
+            color: Colors.white,
+            child: SafeArea(
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Padding(
+                  padding: EdgeInsets.only(left: hasBackButton ? 47 : 16),
+                  child: Image.asset('assets/images/logo-side.png', height: 39, fit: BoxFit.contain),
+                ),
+              ),
             ),
-          ),
-        ),
+          );
+        },
       ),
     );
+
+void _showExperiencePicker(BuildContext context) {
+  showModalBottomSheet<String>(
+    context: context,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+    ),
+    builder: (ctx) => SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Experience Level',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: _cDark)),
+            const SizedBox(height: 16),
+            for (final entry in [
+              ('beginner', 'Beginner', 'New to fishkeeping'),
+              ('intermediate', 'Intermediate', 'Comfortable with the basics'),
+              ('expert', 'Expert', 'Advanced reefing & breeding'),
+            ])
+              ListTile(
+                leading: FutureBuilder<String>(
+                  future: _loadExperienceLevel(),
+                  builder: (_, snap) => Icon(
+                    (snap.data ?? 'beginner') == entry.$1
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_unchecked,
+                    color: _cDark,
+                  ),
+                ),
+                title: Text(entry.$2, style: const TextStyle(fontWeight: FontWeight.w600)),
+                subtitle: Text(entry.$3, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                onTap: () async {
+                  await _saveExperienceLevel(entry.$1);
+                  if (ctx.mounted) Navigator.of(ctx).pop(entry.$1);
+                },
+              ),
+          ],
+        ),
+      ),
+    ),
+  ).then((selected) {
+    if (selected != null) {
+      // Find the TankListScreen state and update experience
+      final state = context.findAncestorStateOfType<_TankListScreenState>();
+      if (state != null && state.mounted) {
+        state.setState(() => state._experience = selected);
+      }
+    }
+  });
+}
 
 void _showFeedbackSheet(BuildContext context) {
   showModalBottomSheet(
@@ -638,6 +710,39 @@ Future<void> _markDailyTipShown() async {
   } catch (_) {}
 }
 
+/// Returns the next tip index for the given experience level and advances it.
+Future<int> _nextTipIndex(String level) async {
+  try {
+    final dir = await getApplicationDocumentsDirectory();
+    final f = File('${dir.path}/.tip_index_$level');
+    int idx = 0;
+    if (f.existsSync()) {
+      idx = int.tryParse(f.readAsStringSync().trim()) ?? 0;
+    }
+    final tips = _kDailyTips[level] ?? _kDailyTips['beginner']!;
+    final current = idx % tips.length;
+    await f.writeAsString('${idx + 1}');
+    return current;
+  } catch (_) {
+    return 0;
+  }
+}
+
+/// Returns the current tip index (without advancing).
+Future<int> _currentTipIndex(String level) async {
+  try {
+    final dir = await getApplicationDocumentsDirectory();
+    final f = File('${dir.path}/.tip_index_$level');
+    if (f.existsSync()) {
+      final idx = int.tryParse(f.readAsStringSync().trim()) ?? 0;
+      final tips = _kDailyTips[level] ?? _kDailyTips['beginner']!;
+      // Index points to next tip, so current shown is idx - 1
+      return idx > 0 ? (idx - 1) % tips.length : 0;
+    }
+  } catch (_) {}
+  return 0;
+}
+
 // ── Daily tip catalogue ───────────────────────────────────────────────────────
 
 const _kDailyTips = <String, List<({String category, String tip})>>{
@@ -737,7 +842,7 @@ const _kDailyTips = <String, List<({String category, String tip})>>{
     (category: 'Alkalinity', tip: 'Alkalinity consumption rate is a more accurate proxy for coral growth rate than any visual assessment.'),
     (category: 'Skimmer', tip: 'Clean your skimmer neck weekly. Protein buildup on the neck drastically reduces skimming efficiency.'),
     (category: 'Lighting', tip: 'Ramp LED intensity slowly over several weeks when introducing SPS corals. Sudden intensity causes bleaching.'),
-    (category: 'Stray Voltage', tip: 'Stray voltage stresses fish and livestock. Use a titanium grounding probe to eliminate it from your system.'),
+    (category: 'Electrical Safety', tip: 'Stray voltage can stress livestock, but a grounding probe alone is only half the solution. Always use a GFCI outlet for all aquarium equipment first — it protects both you and your fish. A grounding probe can complement a GFCI but should never replace one.'),
     (category: 'Multi-Tank', tip: 'Cross-contamination is the greatest risk in multi-tank systems. Dedicated equipment per tank is non-negotiable.'),
     (category: 'Copepods', tip: 'Mandarin dragonets decimate pod populations. Maintain a seeded refugium or replenish pods regularly.'),
     (category: 'Anthias', tip: 'Lyretail anthias harems maintain one male. When the male is lost, the dominant female will sex-change to replace him.'),
@@ -985,9 +1090,9 @@ class _ObLogoBar extends StatelessWidget {
       child: SafeArea(
         bottom: false,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(47, 8, 16, 8),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           child: Align(
-            alignment: Alignment.centerLeft,
+            alignment: Alignment.center,
             child: Image.asset('assets/images/logo-side.png', height: 39, fit: BoxFit.contain),
           ),
         ),
@@ -1194,31 +1299,22 @@ class _BeginnerVideoHeaderState extends State<_BeginnerVideoHeader> {
       children: [
         const _ObLogoBar(),
         SizedBox(
-          height: 120,
           width: double.infinity,
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              Container(
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [_cDark, _cMid],
+          child: _ready
+              ? AspectRatio(
+                  aspectRatio: _ctrl.value.aspectRatio,
+                  child: VideoPlayer(_ctrl),
+                )
+              : Container(
+                  height: 120,
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [_cDark, _cMid],
+                    ),
                   ),
                 ),
-              ),
-              if (_ready)
-                FittedBox(
-                  fit: BoxFit.cover,
-                  child: SizedBox(
-                    width: _ctrl.value.size.width,
-                    height: _ctrl.value.size.height,
-                    child: VideoPlayer(_ctrl),
-                  ),
-                ),
-            ],
-          ),
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
@@ -1278,18 +1374,14 @@ class _PouringVideoHeaderState extends State<_PouringVideoHeader> {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: 150,
       width: double.infinity,
       child: _ready
-          ? FittedBox(
-              fit: BoxFit.cover,
-              child: SizedBox(
-                width: _ctrl.value.size.width,
-                height: _ctrl.value.size.height,
-                child: VideoPlayer(_ctrl),
-              ),
+          ? AspectRatio(
+              aspectRatio: _ctrl.value.aspectRatio,
+              child: VideoPlayer(_ctrl),
             )
           : Container(
+              height: 150,
               decoration: const BoxDecoration(
                 gradient: LinearGradient(
                   begin: Alignment.topLeft,
@@ -1849,18 +1941,14 @@ class _DropInVideoHeaderState extends State<_DropInVideoHeader> {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: 150,
       width: double.infinity,
       child: _ready
-          ? FittedBox(
-              fit: BoxFit.cover,
-              child: SizedBox(
-                width: _ctrl.value.size.width,
-                height: _ctrl.value.size.height,
-                child: VideoPlayer(_ctrl),
-              ),
+          ? AspectRatio(
+              aspectRatio: _ctrl.value.aspectRatio,
+              child: VideoPlayer(_ctrl),
             )
           : Container(
+              height: 150,
               decoration: const BoxDecoration(
                 gradient: LinearGradient(
                   begin: Alignment.topLeft,
@@ -1980,7 +2068,7 @@ class _ObInhabitantsPageState extends State<_ObInhabitantsPage> {
           child: CustomScrollView(
             slivers: [
               const SliverToBoxAdapter(child: _ObLogoBar()),
-              const SliverToBoxAdapter(child: SizedBox(height: 16)),
+              const SliverToBoxAdapter(child: SizedBox(height: 8)),
               const SliverToBoxAdapter(child: _DropInVideoHeader()),
               const SliverToBoxAdapter(child: SizedBox(height: 16)),
               SliverToBoxAdapter(
@@ -2653,7 +2741,7 @@ class _ObWaterQualityPageState extends State<_ObWaterQualityPage> {
               const SizedBox(height: 8),
               TextButton(
                 onPressed: () => Navigator.of(ctx).pop(false),
-                child: const Text('Not right now', style: TextStyle(color: Colors.grey, fontSize: 14)),
+                child: const Text('Later', style: TextStyle(color: Colors.grey, fontSize: 14)),
               ),
             ],
           ),
@@ -2922,7 +3010,7 @@ class _ObWaterQualityPageState extends State<_ObWaterQualityPage> {
         ),
         // Input row
         Padding(
-          padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+          padding: const EdgeInsets.fromLTRB(24, 8, 12, 4),
           child: Row(children: [
             Expanded(
               child: TextField(
@@ -3316,6 +3404,7 @@ class _TankListScreenState extends State<TankListScreen> {
   Set<String> _tanksWithoutInhabitants = {};
   Set<String> _tanksWithoutLogs = {};
   String _tankSort = 'newest'; // 'newest' | 'oldest' | 'az' | 'za'
+  int _tipCardIndex = 0; // current tip shown on the card
 
   @override
   void initState() {
@@ -3323,9 +3412,17 @@ class _TankListScreenState extends State<TankListScreen> {
     _loadExperienceLevel().then((v) async {
       if (!mounted) return;
       setState(() => _experience = v);
-      if (v == 'beginner' && await _shouldShowDailyTip()) {
+      // Load tip card index
+      final tipIdx = await _currentTipIndex(v);
+      if (mounted) setState(() => _tipCardIndex = tipIdx);
+      // Show popup once per day
+      if (await _shouldShowDailyTip()) {
+        final newIdx = await _nextTipIndex(v);
         await _markDailyTipShown();
-        if (mounted) _showDailyTipOverlay();
+        if (mounted) {
+          setState(() => _tipCardIndex = newIdx);
+          _showDailyTipOverlay();
+        }
       }
     });
     _refresh().then((_) {
@@ -3334,15 +3431,31 @@ class _TankListScreenState extends State<TankListScreen> {
   }
 
   void _showDailyTipOverlay() {
-    final tips = _kDailyTips['beginner']!;
-    final now = DateTime.now();
-    final dayOfYear = now.difference(DateTime(now.year, 1, 1)).inDays;
-    final tip = tips[dayOfYear % tips.length];
+    final allTips = _kDailyTips[_experience] ?? _kDailyTips['beginner']!;
+    final waterTypes = TankStore.instance.tanks.map((t) => t.waterType).toSet();
+    final tips = _filterTipsByWaterType(allTips, waterTypes);
+    if (tips.isEmpty) return;
+    final tip = tips[_tipCardIndex % tips.length];
     showDialog<void>(
       context: context,
       barrierColor: Colors.black54,
       builder: (_) => _DailyTipDialog(tip: tip),
     );
+  }
+
+  static List<({String category, String tip})> _filterTipsByWaterType(
+    List<({String category, String tip})> tips, Set<WaterType> waterTypes,
+  ) {
+    if (waterTypes.isEmpty) return tips;
+    final hasFW = waterTypes.contains(WaterType.freshwater);
+    final hasSW = waterTypes.contains(WaterType.saltwater) ||
+        waterTypes.contains(WaterType.reef);
+    if (hasFW && hasSW) return tips;
+    return tips.where((t) {
+      if (hasFW && !hasSW && _TipCard._isSaltwaterTip(t)) return false;
+      if (hasSW && !hasFW && _TipCard._isFreshwaterTip(t)) return false;
+      return true;
+    }).toList();
   }
 
   void _showWelcomeDialog() {
@@ -3590,6 +3703,12 @@ class _TankListScreenState extends State<TankListScreen> {
                     )
                   : Column(
                       children: [
+                        _TipCard(
+                          experience: _experience,
+                          tipIndex: _tipCardIndex,
+                          onIndexChanged: (i) => setState(() => _tipCardIndex = i),
+                          userWaterTypes: tanks.map((t) => t.waterType).toSet(),
+                        ),
                         _NotificationsCard(
                           tanks: tanks,
                           tasksByTank: _tasksByTank,
@@ -4092,6 +4211,108 @@ class _DailyTipDialog extends StatelessWidget {
                 child: const Text('Got it', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TipCard extends StatelessWidget {
+  final String experience;
+  final int tipIndex;
+  final ValueChanged<int> onIndexChanged;
+  final Set<WaterType> userWaterTypes;
+
+  const _TipCard({
+    required this.experience,
+    required this.tipIndex,
+    required this.onIndexChanged,
+    this.userWaterTypes = const {},
+  });
+
+  // Keywords in category or tip text that indicate saltwater-only content
+  static const _saltwaterKeywords = [
+    'reef', 'coral', 'sps', 'lps', 'icp', 'salinity', 'salt mix',
+    'skimmer', 'dosing', 'alkalinity', 'ato ', 'refugium', 'frag',
+    'zoanthid', 'palytoxin', 'acropora', 'montipora', 'copepod',
+    'anthias', 'mandarin', 'anemone', 'reefer', 'orp ',
+  ];
+
+  // Keywords that indicate freshwater-only content
+  static const _freshwaterKeywords = [
+    'betta', 'epsom salt', 'apistogramma', 'cichlid',
+  ];
+
+  static bool _isSaltwaterTip(({String category, String tip}) t) {
+    final text = '${t.category} ${t.tip}'.toLowerCase();
+    return _saltwaterKeywords.any((kw) => text.contains(kw));
+  }
+
+  static bool _isFreshwaterTip(({String category, String tip}) t) {
+    final text = '${t.category} ${t.tip}'.toLowerCase();
+    return _freshwaterKeywords.any((kw) => text.contains(kw));
+  }
+
+  List<({String category, String tip})> _filteredTips() {
+    final all = _kDailyTips[experience] ?? _kDailyTips['beginner']!;
+    if (userWaterTypes.isEmpty) return all;
+    final hasFreshwater = userWaterTypes.contains(WaterType.freshwater);
+    final hasSaltwater = userWaterTypes.contains(WaterType.saltwater) ||
+        userWaterTypes.contains(WaterType.reef);
+    // If user has both types, show all tips
+    if (hasFreshwater && hasSaltwater) return all;
+    return all.where((t) {
+      if (hasFreshwater && !hasSaltwater && _isSaltwaterTip(t)) return false;
+      if (hasSaltwater && !hasFreshwater && _isFreshwaterTip(t)) return false;
+      return true;
+    }).toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final tips = _filteredTips();
+    if (tips.isEmpty) return const SizedBox.shrink();
+    final idx = tipIndex % tips.length;
+    final tip = tips[idx];
+    final hasPrevious = tipIndex > 0;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(14),
+          boxShadow: [
+            BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 6, offset: const Offset(0, 2)),
+          ],
+        ),
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Text('💡', style: TextStyle(fontSize: 18)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(tip.category,
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _cDark)),
+                ),
+                GestureDetector(
+                  onTap: () => onIndexChanged((tipIndex - 1) % tips.length),
+                  child: const Icon(Icons.chevron_left, size: 22, color: Colors.grey),
+                ),
+                const SizedBox(width: 4),
+                GestureDetector(
+                  onTap: () => onIndexChanged((tipIndex + 1) % tips.length),
+                  child: const Icon(Icons.chevron_right, size: 22, color: Colors.grey),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(tip.tip,
+                style: const TextStyle(fontSize: 13, color: Color(0xFF444444), height: 1.45)),
           ],
         ),
       ),
@@ -5215,9 +5436,11 @@ class _ChatSheetState extends State<_ChatSheet> {
   List<db.Inhabitant> _inhabitants = [];
   List<db.Plant> _plants = [];
   List<String> _recentLogs = [];
+  List<db.Log> _allLogs = [];
   String? _tapWaterJson;
   bool _hasCsvImports = false;
   List<Map<String, dynamic>> _pendingTasks = [];
+  List<String> _sessionSummaries = [];
 
   @override
   void initState() {
@@ -5244,13 +5467,16 @@ class _ChatSheetState extends State<_ChatSheet> {
     final plants = await TankStore.instance.plantsFor(tank.id);
     final logs = await TankStore.instance.logsFor(tank.id);
     final tapWaterJson = await TankStore.instance.tapWaterJsonFor(tank.id);
+    final sessions = await TankStore.instance.recentSessions(tank.id);
     if (mounted) {
       setState(() {
         _inhabitants = inhabitants;
         _plants = plants;
         _recentLogs = logs.take(10).map((l) => l.rawText).toList();
+        _allLogs = logs;
         _tapWaterJson = tapWaterJson;
         _hasCsvImports = logs.any((l) => l.rawText == 'CSV import');
+        _sessionSummaries = sessions.map((s) => s.summary).toList();
       });
     }
   }
@@ -5262,9 +5488,43 @@ class _ChatSheetState extends State<_ChatSheet> {
 
   @override
   void dispose() {
+    _summarizeAndSaveSession();
     _inputController.dispose();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  void _summarizeAndSaveSession() {
+    // Only summarize if there were meaningful user messages (4+ messages total)
+    final userMsgCount = _chatMessages.where((m) => m.role == 'user').length;
+    if (userMsgCount < 2) return;
+    final tankId = _selectedTank?.id;
+    final tankName = _selectedTank?.name;
+    final messages = _chatMessages
+        .map((m) => {'role': m.role, 'content': m.content})
+        .toList();
+    final msgCount = _chatMessages.length;
+    // Fire and forget — don't block dispose
+    http.post(
+      Uri.parse('$_baseUrl/chat/summarize'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'messages': messages,
+        'tank_name': tankName,
+      }),
+    ).then((resp) {
+      if (resp.statusCode == 200) {
+        final data = jsonDecode(resp.body);
+        final summary = data['summary']?.toString() ?? '';
+        if (summary.isNotEmpty) {
+          TankStore.instance.saveChatSession(
+            tankId: tankId,
+            summary: summary,
+            messageCount: msgCount,
+          );
+        }
+      }
+    }).catchError((_) {});
   }
 
   void _scrollToBottom() {
@@ -5285,6 +5545,233 @@ class _ChatSheetState extends State<_ChatSheet> {
       _cancelled = true;
       _aiResponding = false;
     });
+  }
+
+  /// Parse a log's parsedJson into a Map, returning null on failure.
+  Map<String, dynamic>? _parseParsedJson(db.Log log) {
+    if (log.parsedJson == null) return null;
+    try {
+      final decoded = jsonDecode(log.parsedJson!);
+      return decoded is Map<String, dynamic> ? decoded : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Map<String, dynamic> _buildHealthProfile() {
+    final now = DateTime.now();
+    final thirtyDaysAgo = now.subtract(const Duration(days: 30));
+
+    // Collect logs that have measurements
+    final logsWithMeasurements = <db.Log>[];
+    final allParamValues30d = <String, List<double>>{};
+    final lastTwoReadings = <String, List<double>>{};
+    int waterChanges30d = 0;
+    final testedParams = <String>{};
+
+    for (final log in _allLogs) {
+      final parsed = _parseParsedJson(log);
+      if (parsed == null) continue;
+
+      final measurements = parsed['measurements'];
+      final hasMeasurements = measurements is Map && measurements.isNotEmpty;
+      if (hasMeasurements) {
+        logsWithMeasurements.add(log);
+        testedParams.addAll(
+          (measurements as Map).keys.map((k) => k.toString()),
+        );
+      }
+
+      // Count water changes in last 30 days
+      if (!log.createdAt.isBefore(thirtyDaysAgo)) {
+        final actions = parsed['actions'];
+        if (actions is List) {
+          for (final a in actions) {
+            if (a.toString().toLowerCase().contains('water change')) {
+              waterChanges30d++;
+            }
+          }
+        }
+
+        // Collect parameter values for 30-day averages
+        if (hasMeasurements) {
+          (measurements as Map).forEach((key, value) {
+            final v = (value is num) ? value.toDouble() : double.tryParse('$value');
+            if (v != null) {
+              allParamValues30d.putIfAbsent(key.toString(), () => []).add(v);
+            }
+          });
+        }
+      }
+
+      // Collect last 2 readings per parameter (logs are sorted newest-first)
+      if (hasMeasurements) {
+        (measurements as Map).forEach((key, value) {
+          final k = key.toString();
+          final v = (value is num) ? value.toDouble() : double.tryParse('$value');
+          if (v != null) {
+            final list = lastTwoReadings.putIfAbsent(k, () => []);
+            if (list.length < 2) list.add(v);
+          }
+        });
+      }
+    }
+
+    // Days since last test
+    final daysSinceLastTest = logsWithMeasurements.isNotEmpty
+        ? now.difference(logsWithMeasurements.first.createdAt).inDays
+        : null;
+
+    // Average days between tests
+    double? avgDaysBetweenTests;
+    if (logsWithMeasurements.length >= 2) {
+      double totalGap = 0;
+      for (int i = 0; i < logsWithMeasurements.length - 1; i++) {
+        totalGap += logsWithMeasurements[i]
+            .createdAt
+            .difference(logsWithMeasurements[i + 1].createdAt)
+            .inDays
+            .abs();
+      }
+      avgDaysBetweenTests = totalGap / (logsWithMeasurements.length - 1);
+    }
+
+    // Parameter averages (30 days)
+    final parameterAverages = <String, double>{};
+    allParamValues30d.forEach((key, values) {
+      parameterAverages[key] =
+          double.parse((values.reduce((a, b) => a + b) / values.length).toStringAsFixed(2));
+    });
+
+    // Parameter trends
+    final parameterTrends = <String, String>{};
+    lastTwoReadings.forEach((key, values) {
+      if (values.length == 2) {
+        final diff = values[0] - values[1]; // newest - second newest
+        if (diff.abs() < 0.01) {
+          parameterTrends[key] = 'stable';
+        } else if (diff > 0) {
+          parameterTrends[key] = 'rising';
+        } else {
+          parameterTrends[key] = 'falling';
+        }
+      }
+    });
+
+    return {
+      'days_since_last_test': daysSinceLastTest,
+      'avg_days_between_tests': avgDaysBetweenTests != null
+          ? double.parse(avgDaysBetweenTests.toStringAsFixed(1))
+          : null,
+      'water_changes_last_30d': waterChanges30d,
+      'parameter_averages': parameterAverages,
+      'parameter_trends': parameterTrends,
+      'parameters_tested': testedParams.toList(),
+    };
+  }
+
+  Future<Map<String, dynamic>> _buildBehaviorProfile() async {
+    final now = DateTime.now();
+    final ninetyDaysAgo = now.subtract(const Duration(days: 90));
+
+    // Normal ranges for common parameters (freshwater defaults)
+    const normalRanges = <String, List<double>>{
+      'pH': [6.5, 7.5],
+      'ammonia': [0, 0.25],
+      'nitrite': [0, 0.25],
+      'nitrate': [0, 40],
+      'GH': [4, 12],
+      'KH': [3, 8],
+    };
+
+    // Logs within 90 days with measurements
+    final testDates = <DateTime>[];
+    final paramFrequency = <String, int>{};
+    final paramExceedCount = <String, int>{};
+
+    for (final log in _allLogs) {
+      if (log.createdAt.isBefore(ninetyDaysAgo)) continue;
+      final parsed = _parseParsedJson(log);
+      if (parsed == null) continue;
+      final measurements = parsed['measurements'];
+      if (measurements is! Map || measurements.isEmpty) continue;
+
+      testDates.add(log.createdAt);
+      measurements.forEach((key, value) {
+        final k = key.toString();
+        paramFrequency[k] = (paramFrequency[k] ?? 0) + 1;
+        final v = (value is num) ? value.toDouble() : double.tryParse('$value');
+        if (v != null && normalRanges.containsKey(k)) {
+          final range = normalRanges[k]!;
+          if (v < range[0] || v > range[1]) {
+            paramExceedCount[k] = (paramExceedCount[k] ?? 0) + 1;
+          }
+        }
+      });
+    }
+
+    // Tests per month (over 90 days = 3 months)
+    final testsPerMonth = testDates.isEmpty
+        ? 0.0
+        : double.parse((testDates.length / 3.0).toStringAsFixed(1));
+
+    // Most tested (top 3)
+    final sortedParams = paramFrequency.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    final mostTested = sortedParams.take(3).map((e) => e.key).toList();
+
+    // Least tested (fewer than 3 times in 90 days)
+    final leastTested = paramFrequency.entries
+        .where((e) => e.value < 3)
+        .map((e) => e.key)
+        .toList();
+
+    // Recurring issues (params exceeding range in >= 30% of tests)
+    final recurringIssues = <String>[];
+    paramExceedCount.forEach((key, count) {
+      final total = paramFrequency[key] ?? 1;
+      if (count / total >= 0.3) recurringIssues.add(key);
+    });
+
+    // Task completion rate
+    double? taskCompletionRate;
+    if (_selectedTank != null) {
+      try {
+        // Get all tasks (both active and dismissed) via raw query
+        final allTasks = await TankStore.instance.tasksForTank(_selectedTank!.id);
+        // tasksForTank only returns non-dismissed; we approximate with what we have
+        // For a proper ratio we note that dismissed = completed
+        final activeTasks = allTasks.length;
+        // We can't easily get dismissed count from TankStore, so we report active count
+        // A simple heuristic: if there are pending tasks, rate < 1.0
+        taskCompletionRate = activeTasks == 0 ? 1.0 : null;
+      } catch (_) {}
+    }
+
+    // Testing regularity based on std dev of intervals
+    String testingRegularity = 'unknown';
+    if (testDates.length >= 3) {
+      testDates.sort((a, b) => a.compareTo(b));
+      final intervals = <double>[];
+      for (int i = 1; i < testDates.length; i++) {
+        intervals.add(testDates[i].difference(testDates[i - 1]).inDays.toDouble());
+      }
+      final mean = intervals.reduce((a, b) => a + b) / intervals.length;
+      final variance =
+          intervals.map((x) => (x - mean) * (x - mean)).reduce((a, b) => a + b) /
+              intervals.length;
+      final stdDev = math.sqrt(variance);
+      testingRegularity = stdDev <= mean * 0.5 ? 'regular' : 'irregular';
+    }
+
+    return {
+      'tests_per_month': testsPerMonth,
+      'most_tested': mostTested,
+      'least_tested': leastTested,
+      'recurring_issues': recurringIssues,
+      if (taskCompletionRate != null) 'task_completion_rate': taskCompletionRate,
+      'testing_regularity': testingRegularity,
+    };
   }
 
   Future<void> _submit() async {
@@ -5437,6 +5924,8 @@ class _ChatSheetState extends State<_ChatSheet> {
           .toList();
       debugPrint('[Chat] sending message: "$text"');
       debugPrint('[Chat] history (${history.length} msgs): ${history.map((h) => "${h['role']}: ${(h['content'] as String).substring(0, (h['content'] as String).length.clamp(0, 50))}").toList()}');
+      final healthProfile = _buildHealthProfile();
+      final behaviorProfile = await _buildBehaviorProfile();
       final resp = await http
           .post(Uri.parse('$_baseUrl/chat/tank'),
               headers: {'Content-Type': 'application/json'},
@@ -5460,6 +5949,9 @@ class _ChatSheetState extends State<_ChatSheet> {
                 'message': text,
                 'history': history,
                 'recent_logs': _recentLogs,
+                'health_profile': healthProfile,
+                'behavior_profile': behaviorProfile,
+                if (_sessionSummaries.isNotEmpty) 'session_summaries': _sessionSummaries,
               }))
           .timeout(const Duration(seconds: 30));
       if (resp.statusCode == 200 && mounted && !_cancelled) {
