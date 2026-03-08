@@ -1905,7 +1905,7 @@ class _DropInVideoHeaderState extends State<_DropInVideoHeader> {
   late VideoPlayerController _ctrl;
   bool _ready = false;
   bool _seeking = false;
-  static const _loopStart = Duration(milliseconds: 2020);
+  static const _loopStart = Duration(milliseconds: 4000);
 
   @override
   void initState() {
@@ -3405,6 +3405,11 @@ class _TankListScreenState extends State<TankListScreen> {
   Set<String> _tanksWithoutLogs = {};
   String _tankSort = 'newest'; // 'newest' | 'oldest' | 'az' | 'za'
   int _tipCardIndex = 0; // current tip shown on the card
+  bool _showNudgeOnCard = false; // true = nudge, false = tip on the merged card
+
+  bool _expReady = false;
+  bool _refreshReady = false;
+  bool _dailyPopupPending = false;
 
   @override
   void initState() {
@@ -3412,25 +3417,60 @@ class _TankListScreenState extends State<TankListScreen> {
     _loadExperienceLevel().then((v) async {
       if (!mounted) return;
       setState(() => _experience = v);
-      // Load tip card index
       final tipIdx = await _currentTipIndex(v);
       if (mounted) setState(() => _tipCardIndex = tipIdx);
-      // Show popup once per day
+      final showNudge = await _loadAndToggleCardMode();
+      if (mounted) setState(() => _showNudgeOnCard = showNudge);
       if (await _shouldShowDailyTip()) {
         final newIdx = await _nextTipIndex(v);
         await _markDailyTipShown();
-        if (mounted) {
-          setState(() => _tipCardIndex = newIdx);
-          _showDailyTipOverlay();
-        }
+        if (mounted) setState(() => _tipCardIndex = newIdx);
+        _dailyPopupPending = true;
       }
+      _expReady = true;
+      _tryShowDailyPopup();
     });
     _refresh().then((_) {
+      _refreshReady = true;
+      _tryShowDailyPopup();
       if (widget.showWelcome && mounted) _showWelcomeDialog();
     });
   }
 
+  void _tryShowDailyPopup() {
+    if (!_expReady || !_refreshReady || !_dailyPopupPending || !mounted) return;
+    _dailyPopupPending = false;
+    _showDailyTipOverlay();
+  }
+
+  /// Reads the last card mode and toggles it for next login.
+  /// Returns true if this login should show the nudge.
+  Future<bool> _loadAndToggleCardMode() async {
+    final dir = await getApplicationDocumentsDirectory();
+    final f = File('${dir.path}/.home_card_mode');
+    String last = 'tip'; // default: last was tip → show nudge first
+    try {
+      if (await f.exists()) last = await f.readAsString();
+    } catch (_) {}
+    final showNudge = last.trim() == 'tip';
+    await f.writeAsString(showNudge ? 'nudge' : 'tip');
+    return showNudge;
+  }
+
   void _showDailyTipOverlay() {
+    // Check if this login shows a nudge instead of a tip
+    final nudge = _buildHomeNudge();
+    if (_showNudgeOnCard && nudge != null) {
+      showDialog<void>(
+        context: context,
+        barrierColor: Colors.black54,
+        builder: (_) => _DailyTipDialog(
+          tip: (category: 'Quick Reminder', tip: nudge.text),
+          emoji: nudge.emoji,
+        ),
+      );
+      return;
+    }
     final allTips = _kDailyTips[_experience] ?? _kDailyTips['beginner']!;
     final waterTypes = TankStore.instance.tanks.map((t) => t.waterType).toSet();
     final tips = _filterTipsByWaterType(allTips, waterTypes);
@@ -3441,6 +3481,47 @@ class _TankListScreenState extends State<TankListScreen> {
       barrierColor: Colors.black54,
       builder: (_) => _DailyTipDialog(tip: tip),
     );
+  }
+
+  /// Build a nudge for the home page (same logic as _MergedTopCard).
+  ({String emoji, String text})? _buildHomeNudge() {
+    final tanks = TankStore.instance.tanks;
+    if (tanks.isEmpty) {
+      return (emoji: '🐠', text: 'Welcome! Add your first tank to get started.');
+    }
+    if (_tanksWithoutInhabitants.isNotEmpty) {
+      final count = _tanksWithoutInhabitants.length;
+      if (count == tanks.length && count > 1) {
+        return (emoji: '🐟', text: 'None of your tanks have inhabitants yet — add some so Ariel can help care for them.');
+      } else if (count > 1) {
+        return (emoji: '🐟', text: '$count of your tanks have no inhabitants — add some so Ariel can give tailored advice.');
+      } else {
+        final name = tanks.firstWhere((t) => _tanksWithoutInhabitants.contains(t.id), orElse: () => tanks.first).name;
+        return (emoji: '🐟', text: '$name has no inhabitants yet — add some so Ariel can help care for them.');
+      }
+    }
+    if (_tanksWithoutLogs.isNotEmpty) {
+      final noLogCount = _tanksWithoutLogs.length;
+      if (noLogCount == tanks.length && noLogCount > 1) {
+        return (emoji: '📋', text: 'None of your tanks have test results logged yet — test your water and tell Ariel.');
+      } else if (noLogCount > 1) {
+        return (emoji: '📋', text: '$noLogCount of your tanks have no test results logged — test your water and tell Ariel.');
+      } else {
+        final name = tanks.firstWhere((t) => _tanksWithoutLogs.contains(t.id), orElse: () => tanks.first).name;
+        return (emoji: '📋', text: '$name has no logs yet — test your water and log the results to start tracking.');
+      }
+    }
+    // Inactive for 3+ days
+    if (_lastLogDate != null) {
+      final daysSince = DateTime.now().difference(_lastLogDate!).inDays;
+      if (daysSince >= 7) {
+        return (emoji: '👋', text: 'It\'s been a week — how are your tanks doing? Log an update or ask Ariel.');
+      }
+      if (daysSince >= 3) {
+        return (emoji: '💧', text: 'It\'s been $daysSince days since your last log. Time for a check-in?');
+      }
+    }
+    return null;
   }
 
   static List<({String category, String tip})> _filterTipsByWaterType(
@@ -3703,19 +3784,21 @@ class _TankListScreenState extends State<TankListScreen> {
                     )
                   : Column(
                       children: [
-                        _TipCard(
+                        _MergedTopCard(
                           experience: _experience,
                           tipIndex: _tipCardIndex,
                           onIndexChanged: (i) => setState(() => _tipCardIndex = i),
                           userWaterTypes: tanks.map((t) => t.waterType).toSet(),
+                          showNudge: _showNudgeOnCard,
+                          tanks: tanks,
+                          tanksWithoutInhabitants: _tanksWithoutInhabitants,
+                          tanksWithoutLogs: _tanksWithoutLogs,
+                          lastLogDate: _lastLogDate,
                         ),
                         _NotificationsCard(
                           tanks: tanks,
                           tasksByTank: _tasksByTank,
                           onDismissed: () => setState(() {}),
-                          lastLogDate: _lastLogDate,
-                          tanksWithoutInhabitants: _tanksWithoutInhabitants,
-                          tanksWithoutLogs: _tanksWithoutLogs,
                         ),
                         Padding(
                           padding: const EdgeInsets.fromLTRB(20, 16, 8, 0),
@@ -3922,6 +4005,23 @@ class _TankListScreenState extends State<TankListScreen> {
                                       ),
                                     ],
                                   ),
+                                  // Contextual nudges
+                                  if (_tanksWithoutInhabitants.contains(t.id))
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 6),
+                                      child: Text(
+                                        'Add inhabitants so Ariel can give tailored advice',
+                                        style: TextStyle(fontSize: 11, color: Color(0xFF757575), fontStyle: FontStyle.italic),
+                                      ),
+                                    ),
+                                  if (_tanksWithoutLogs.contains(t.id))
+                                    Padding(
+                                      padding: EdgeInsets.only(top: _tanksWithoutInhabitants.contains(t.id) ? 2 : 6),
+                                      child: Text(
+                                        'Log your first water test to start tracking',
+                                        style: TextStyle(fontSize: 11, color: Color(0xFF757575), fontStyle: FontStyle.italic),
+                                      ),
+                                    ),
                                 ],
                               ),
                             ),
@@ -3952,19 +4052,10 @@ class _NotificationsCard extends StatefulWidget {
   final List<TankModel> tanks;
   final Map<String, List<db.Task>> tasksByTank;
   final VoidCallback onDismissed;
-  /// Most recent log date across all tanks (null = no logs at all).
-  final DateTime? lastLogDate;
-  /// Tank IDs that have no inhabitants.
-  final Set<String> tanksWithoutInhabitants;
-  /// Tank IDs that have no logs.
-  final Set<String> tanksWithoutLogs;
   const _NotificationsCard({
     required this.tanks,
     required this.tasksByTank,
     required this.onDismissed,
-    this.lastLogDate,
-    this.tanksWithoutInhabitants = const {},
-    this.tanksWithoutLogs = const {},
   });
 
   @override
@@ -3974,49 +4065,6 @@ class _NotificationsCard extends StatefulWidget {
 class _NotificationsCardState extends State<_NotificationsCard> {
   static const _kLimit = 2;
   bool _expanded = false;
-
-  ({String emoji, String text})? _buildPrompt() {
-    final tanks = widget.tanks;
-    if (tanks.isEmpty) {
-      return (emoji: '🐠', text: 'Welcome! Add your first tank to get started.');
-    }
-    // Tanks with no inhabitants
-    if (widget.tanksWithoutInhabitants.isNotEmpty) {
-      final count = widget.tanksWithoutInhabitants.length;
-      if (count == tanks.length && count > 1) {
-        return (emoji: '🐟', text: 'None of your tanks have inhabitants yet — add some so Ariel can help care for them.');
-      } else if (count > 1) {
-        return (emoji: '🐟', text: '$count of your tanks have no inhabitants — add some so Ariel can give tailored advice.');
-      } else {
-        final name = tanks.firstWhere((t) => widget.tanksWithoutInhabitants.contains(t.id), orElse: () => tanks.first).name;
-        return (emoji: '🐟', text: '$name has no inhabitants yet — add some so Ariel can help care for them.');
-      }
-    }
-    // Tanks with no logs
-    if (widget.tanksWithoutLogs.isNotEmpty) {
-      final noLogCount = widget.tanksWithoutLogs.length;
-      if (noLogCount == tanks.length && noLogCount > 1) {
-        return (emoji: '📋', text: 'None of your tanks have test results logged yet — test your water and tell Ariel.');
-      } else if (noLogCount > 1) {
-        return (emoji: '📋', text: '$noLogCount of your tanks have no test results logged — test your water and tell Ariel.');
-      } else if (noLogCount == 1) {
-        final name = tanks.firstWhere((t) => widget.tanksWithoutLogs.contains(t.id), orElse: () => tanks.first).name;
-        return (emoji: '📋', text: '$name has no logs yet — test your water and log the results to start tracking.');
-      }
-    }
-    if (widget.lastLogDate == null) {
-      return (emoji: '📋', text: 'No logs yet! Test your water and log the results to start tracking.');
-    }
-    // Inactive for 3+ days
-    final daysSince = DateTime.now().difference(widget.lastLogDate!).inDays;
-    if (daysSince >= 7) {
-      return (emoji: '👋', text: 'It\'s been a week — how are your tanks doing? Log an update or ask Ariel.');
-    }
-    if (daysSince >= 3) {
-      return (emoji: '💧', text: 'It\'s been $daysSince days since your last log. Time for a check-in?');
-    }
-    return null;
-  }
 
   static String _fmtDue(String raw) {
     final dt = DateTime.tryParse(raw);
@@ -4035,34 +4083,7 @@ class _NotificationsCardState extends State<_NotificationsCard> {
       }
     }
 
-    // When no task-based notifications, show a contextual prompt
-    if (items.isEmpty) {
-      final prompt = _buildPrompt();
-      if (prompt == null) return const SizedBox.shrink();
-      return Card(
-        margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
-        elevation: 1,
-        shadowColor: Colors.black12,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-          side: BorderSide(color: _cLight),
-        ),
-        color: _cMint,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-          child: Row(
-            children: [
-              Text(prompt.emoji, style: const TextStyle(fontSize: 20)),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(prompt.text,
-                    style: const TextStyle(fontSize: 13, color: Colors.black87, height: 1.4)),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
+    if (items.isEmpty) return const SizedBox.shrink();
 
     final showAll = _expanded || items.length <= _kLimit;
     final visible = showAll ? items : items.take(_kLimit).toList();
@@ -4158,10 +4179,12 @@ class _NotificationsCardState extends State<_NotificationsCard> {
 
 class _DailyTipDialog extends StatelessWidget {
   final ({String category, String tip}) tip;
-  const _DailyTipDialog({required this.tip});
+  final String? emoji;
+  const _DailyTipDialog({required this.tip, this.emoji});
 
   @override
   Widget build(BuildContext context) {
+    final isNudge = emoji != null;
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       backgroundColor: Colors.white,
@@ -4179,15 +4202,15 @@ class _DailyTipDialog extends StatelessWidget {
                     color: _cMint,
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: const Text('💡', style: TextStyle(fontSize: 22)),
+                  child: Text(emoji ?? '💡', style: const TextStyle(fontSize: 22)),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text("Let's Learn!",
-                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: _cDark)),
+                      Text(isNudge ? 'Heads Up' : "Let's Learn!",
+                          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: _cDark)),
                       Text(tip.category,
                           style: const TextStyle(fontSize: 12, color: Color(0xFF888888), fontWeight: FontWeight.w500)),
                     ],
@@ -4218,20 +4241,110 @@ class _DailyTipDialog extends StatelessWidget {
   }
 }
 
-class _TipCard extends StatelessWidget {
+class _MergedTopCard extends StatelessWidget {
   final String experience;
   final int tipIndex;
   final ValueChanged<int> onIndexChanged;
   final Set<WaterType> userWaterTypes;
+  final bool showNudge;
+  final List<TankModel> tanks;
+  final Set<String> tanksWithoutInhabitants;
+  final Set<String> tanksWithoutLogs;
+  final DateTime? lastLogDate;
+
+  const _MergedTopCard({
+    required this.experience,
+    required this.tipIndex,
+    required this.onIndexChanged,
+    this.userWaterTypes = const {},
+    required this.showNudge,
+    required this.tanks,
+    this.tanksWithoutInhabitants = const {},
+    this.tanksWithoutLogs = const {},
+    this.lastLogDate,
+  });
+
+  /// Returns a contextual nudge if criteria are met.
+  ({String emoji, String text})? _buildNudge() {
+    if (tanks.isEmpty) {
+      return (emoji: '🐠', text: 'Welcome! Add your first tank to get started.');
+    }
+    if (tanksWithoutInhabitants.isNotEmpty) {
+      final count = tanksWithoutInhabitants.length;
+      if (count == tanks.length && count > 1) {
+        return (emoji: '🐟', text: 'None of your tanks have inhabitants yet — add some so Ariel can help care for them.');
+      } else if (count > 1) {
+        return (emoji: '🐟', text: '$count of your tanks have no inhabitants — add some so Ariel can give tailored advice.');
+      } else {
+        final name = tanks.firstWhere((t) => tanksWithoutInhabitants.contains(t.id), orElse: () => tanks.first).name;
+        return (emoji: '🐟', text: '$name has no inhabitants yet — add some so Ariel can help care for them.');
+      }
+    }
+    if (tanksWithoutLogs.isNotEmpty) {
+      final noLogCount = tanksWithoutLogs.length;
+      if (noLogCount == tanks.length && noLogCount > 1) {
+        return (emoji: '📋', text: 'None of your tanks have test results logged yet — test your water and tell Ariel.');
+      } else if (noLogCount > 1) {
+        return (emoji: '📋', text: '$noLogCount of your tanks have no test results logged — test your water and tell Ariel.');
+      } else {
+        final name = tanks.firstWhere((t) => tanksWithoutLogs.contains(t.id), orElse: () => tanks.first).name;
+        return (emoji: '📋', text: '$name has no logs yet — test your water and log the results to start tracking.');
+      }
+    }
+    // Inactive for 3+ days
+    if (lastLogDate != null) {
+      final daysSince = DateTime.now().difference(lastLogDate!).inDays;
+      if (daysSince >= 7) {
+        return (emoji: '👋', text: 'It\'s been a week — how are your tanks doing? Log an update or ask Ariel.');
+      }
+      if (daysSince >= 3) {
+        return (emoji: '💧', text: 'It\'s been $daysSince days since your last log. Time for a check-in?');
+      }
+    }
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final nudge = _buildNudge();
+    // If nudge turn and nudge exists, show nudge; otherwise show tip
+    // If no nudge exists, always show tip
+    if (showNudge && nudge != null) {
+      return _TipCard(
+        experience: experience,
+        tipIndex: tipIndex,
+        onIndexChanged: onIndexChanged,
+        userWaterTypes: userWaterTypes,
+        overrideContent: nudge,
+      );
+    }
+    return _TipCard(
+      experience: experience,
+      tipIndex: tipIndex,
+      onIndexChanged: onIndexChanged,
+      userWaterTypes: userWaterTypes,
+    );
+  }
+}
+
+class _TipCard extends StatefulWidget {
+  final String experience;
+  final int tipIndex;
+  final ValueChanged<int> onIndexChanged;
+  final Set<WaterType> userWaterTypes;
+  final ({String emoji, String text})? overrideContent;
 
   const _TipCard({
     required this.experience,
     required this.tipIndex,
     required this.onIndexChanged,
     this.userWaterTypes = const {},
+    this.overrideContent,
   });
 
-  // Keywords in category or tip text that indicate saltwater-only content
+  @override
+  State<_TipCard> createState() => _TipCardState();
+
   static const _saltwaterKeywords = [
     'reef', 'coral', 'sps', 'lps', 'icp', 'salinity', 'salt mix',
     'skimmer', 'dosing', 'alkalinity', 'ato ', 'refugium', 'frag',
@@ -4239,7 +4352,6 @@ class _TipCard extends StatelessWidget {
     'anthias', 'mandarin', 'anemone', 'reefer', 'orp ',
   ];
 
-  // Keywords that indicate freshwater-only content
   static const _freshwaterKeywords = [
     'betta', 'epsom salt', 'apistogramma', 'cichlid',
   ];
@@ -4253,29 +4365,56 @@ class _TipCard extends StatelessWidget {
     final text = '${t.category} ${t.tip}'.toLowerCase();
     return _freshwaterKeywords.any((kw) => text.contains(kw));
   }
+}
+
+class _TipCardState extends State<_TipCard> {
+  bool _showingOverride = true;
 
   List<({String category, String tip})> _filteredTips() {
-    final all = _kDailyTips[experience] ?? _kDailyTips['beginner']!;
-    if (userWaterTypes.isEmpty) return all;
-    final hasFreshwater = userWaterTypes.contains(WaterType.freshwater);
-    final hasSaltwater = userWaterTypes.contains(WaterType.saltwater) ||
-        userWaterTypes.contains(WaterType.reef);
-    // If user has both types, show all tips
+    final all = _kDailyTips[widget.experience] ?? _kDailyTips['beginner']!;
+    if (widget.userWaterTypes.isEmpty) return all;
+    final hasFreshwater = widget.userWaterTypes.contains(WaterType.freshwater);
+    final hasSaltwater = widget.userWaterTypes.contains(WaterType.saltwater) ||
+        widget.userWaterTypes.contains(WaterType.reef);
     if (hasFreshwater && hasSaltwater) return all;
     return all.where((t) {
-      if (hasFreshwater && !hasSaltwater && _isSaltwaterTip(t)) return false;
-      if (hasSaltwater && !hasFreshwater && _isFreshwaterTip(t)) return false;
+      if (hasFreshwater && !hasSaltwater && _TipCard._isSaltwaterTip(t)) return false;
+      if (hasSaltwater && !hasFreshwater && _TipCard._isFreshwaterTip(t)) return false;
       return true;
     }).toList();
+  }
+
+  void _navigate(int delta) {
+    final tips = _filteredTips();
+    if (tips.isEmpty) return;
+    setState(() => _showingOverride = false);
+    widget.onIndexChanged((widget.tipIndex + delta) % tips.length);
   }
 
   @override
   Widget build(BuildContext context) {
     final tips = _filteredTips();
-    if (tips.isEmpty) return const SizedBox.shrink();
-    final idx = tipIndex % tips.length;
-    final tip = tips[idx];
-    final hasPrevious = tipIndex > 0;
+    if (tips.isEmpty && widget.overrideContent == null) return const SizedBox.shrink();
+
+    final override = widget.overrideContent;
+    final bool showNudge = _showingOverride && override != null;
+
+    String emoji;
+    String heading;
+    String body;
+
+    if (showNudge) {
+      emoji = override.emoji;
+      heading = 'Quick Reminder';
+      body = override.text;
+    } else {
+      if (tips.isEmpty) return const SizedBox.shrink();
+      final idx = widget.tipIndex % tips.length;
+      final tip = tips[idx];
+      emoji = '💡';
+      heading = tip.category;
+      body = tip.tip;
+    }
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
@@ -4293,25 +4432,25 @@ class _TipCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                const Text('💡', style: TextStyle(fontSize: 18)),
+                Text(emoji, style: const TextStyle(fontSize: 18)),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: Text(tip.category,
+                  child: Text(heading,
                       style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _cDark)),
                 ),
                 GestureDetector(
-                  onTap: () => onIndexChanged((tipIndex - 1) % tips.length),
+                  onTap: () => _navigate(-1),
                   child: const Icon(Icons.chevron_left, size: 22, color: Colors.grey),
                 ),
                 const SizedBox(width: 4),
                 GestureDetector(
-                  onTap: () => onIndexChanged((tipIndex + 1) % tips.length),
+                  onTap: () => _navigate(1),
                   child: const Icon(Icons.chevron_right, size: 22, color: Colors.grey),
                 ),
               ],
             ),
             const SizedBox(height: 8),
-            Text(tip.tip,
+            Text(body,
                 style: const TextStyle(fontSize: 13, color: Color(0xFF444444), height: 1.45)),
           ],
         ),
@@ -4842,7 +4981,11 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
 
     setState(() => _summaryLoading = true);
     try {
-      final logsData = _logs.take(10).map((l) => {'text': l.rawText}).toList();
+      final logsData = _logs.take(10).map((l) {
+        final map = <String, dynamic>{'text': l.rawText};
+        if (l.parsedJson != null) map['parsed'] = l.parsedJson;
+        return map;
+      }).toList();
       final resp = await http
           .post(
             Uri.parse('$_baseUrl/summary/tank-logs'),
@@ -5908,7 +6051,7 @@ class _ChatSheetState extends State<_ChatSheet> {
       r'water\s*change|dose[d]?|dosing|fed|feed|clean|trim|prune|'
       r'test|tested|measure|reading|parameters|levels|results|'
       r'added|removed|replaced|installed|treated|'
-      r'cloudy|clear|algae|bloom|sick|dead|died|spawn|'
+      r'cloudy|clear|brown|yellow|green|murky|hazy|milky|foamy|smelly|odor|algae|bloom|sick|dead|died|spawn|'
       r'filter|heater|light|pump|skimmer)\b',
       caseSensitive: false,
     );
@@ -6116,8 +6259,9 @@ class _ChatSheetState extends State<_ChatSheet> {
     if (RegExp(r'(fish|shrimp|snail|coral|inhabitant).{0,20}(sick|ill|dying|dead|lethargic|stress)|(sick|ill|dying|dead|lethargic|stress).{0,20}(fish|shrimp|snail|coral|inhabitant)').hasMatch(t)) {
       alerts.add('Inhabitant health concern — monitor closely and check water parameters');
     }
-    if (RegExp(r'\b(cloudy|murky)\b').hasMatch(t)) {
-      alerts.add('Water clarity issue — water appears cloudy or murky');
+    if (RegExp(r'\b(cloudy|murky|brown|yellow|green|hazy|milky|foamy)\b').hasMatch(t) &&
+        !RegExp(r'(leaves?|plant|fish|shrimp|coral).{0,15}(brown|yellow|green)').hasMatch(t)) {
+      alerts.add('Water clarity issue — water appears discolored or cloudy');
     }
     if (RegExp(r'\b(white\s*spot|ich|ick|velvet|fungus|disease)\b').hasMatch(t)) {
       alerts.add('Possible disease detected — consider treatment and quarantine');

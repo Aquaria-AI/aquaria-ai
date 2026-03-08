@@ -730,9 +730,34 @@ def summarize_tank_logs(req: SummaryRequest):
     if not req.logs:
         return {"summary": None}
 
-    entries = "\n".join(
-        f"- {log.get('text', '')}" for log in req.logs[:10] if log.get("text")
-    )
+    lines = []
+    for log in req.logs[:10]:
+        text = log.get("text", "")
+        parsed_str = log.get("parsed", "")
+        if parsed_str and not text:
+            # Reconstruct a readable summary from the parsed JSON
+            try:
+                import json as _json
+                parsed = _json.loads(parsed_str) if isinstance(parsed_str, str) else parsed_str
+                parts = []
+                if parsed.get("measurements"):
+                    parts.append("Measurements: " + ", ".join(
+                        f"{k}={v}" for k, v in parsed["measurements"].items()
+                    ))
+                if parsed.get("notes"):
+                    parts.append("Notes: " + "; ".join(parsed["notes"]))
+                if parsed.get("actions"):
+                    parts.append("Actions: " + "; ".join(parsed["actions"]))
+                if parsed.get("observations"):
+                    parts.append("Observations: " + "; ".join(parsed["observations"]))
+                text = " | ".join(parts) if parts else ""
+            except Exception:
+                pass
+        if text:
+            lines.append(f"- {text}")
+    entries = "\n".join(lines)
+    if not entries.strip():
+        return {"summary": None}
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
