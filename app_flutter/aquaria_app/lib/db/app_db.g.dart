@@ -1989,6 +1989,17 @@ class $TasksTable extends Tasks with TableInfo<$TasksTable, Task> {
     type: DriftSqlType.dateTime,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _repeatDaysMeta = const VerificationMeta(
+    'repeatDays',
+  );
+  @override
+  late final GeneratedColumn<int> repeatDays = GeneratedColumn<int>(
+    'repeat_days',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _createdAtMeta = const VerificationMeta(
     'createdAt',
   );
@@ -2011,6 +2022,7 @@ class $TasksTable extends Tasks with TableInfo<$TasksTable, Task> {
     source,
     isDismissed,
     dismissedAt,
+    repeatDays,
     createdAt,
   ];
   @override
@@ -2083,6 +2095,12 @@ class $TasksTable extends Tasks with TableInfo<$TasksTable, Task> {
         ),
       );
     }
+    if (data.containsKey('repeat_days')) {
+      context.handle(
+        _repeatDaysMeta,
+        repeatDays.isAcceptableOrUnknown(data['repeat_days']!, _repeatDaysMeta),
+      );
+    }
     if (data.containsKey('created_at')) {
       context.handle(
         _createdAtMeta,
@@ -2130,6 +2148,10 @@ class $TasksTable extends Tasks with TableInfo<$TasksTable, Task> {
         DriftSqlType.dateTime,
         data['${effectivePrefix}dismissed_at'],
       ),
+      repeatDays: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}repeat_days'],
+      ),
       createdAt: attachedDatabase.typeMapping.read(
         DriftSqlType.dateTime,
         data['${effectivePrefix}created_at'],
@@ -2152,6 +2174,7 @@ class Task extends DataClass implements Insertable<Task> {
   final String source;
   final bool isDismissed;
   final DateTime? dismissedAt;
+  final int? repeatDays;
   final DateTime createdAt;
   const Task({
     required this.id,
@@ -2162,6 +2185,7 @@ class Task extends DataClass implements Insertable<Task> {
     required this.source,
     required this.isDismissed,
     this.dismissedAt,
+    this.repeatDays,
     required this.createdAt,
   });
   @override
@@ -2178,6 +2202,9 @@ class Task extends DataClass implements Insertable<Task> {
     map['is_dismissed'] = Variable<bool>(isDismissed);
     if (!nullToAbsent || dismissedAt != null) {
       map['dismissed_at'] = Variable<DateTime>(dismissedAt);
+    }
+    if (!nullToAbsent || repeatDays != null) {
+      map['repeat_days'] = Variable<int>(repeatDays);
     }
     map['created_at'] = Variable<DateTime>(createdAt);
     return map;
@@ -2197,6 +2224,9 @@ class Task extends DataClass implements Insertable<Task> {
       dismissedAt: dismissedAt == null && nullToAbsent
           ? const Value.absent()
           : Value(dismissedAt),
+      repeatDays: repeatDays == null && nullToAbsent
+          ? const Value.absent()
+          : Value(repeatDays),
       createdAt: Value(createdAt),
     );
   }
@@ -2215,6 +2245,7 @@ class Task extends DataClass implements Insertable<Task> {
       source: serializer.fromJson<String>(json['source']),
       isDismissed: serializer.fromJson<bool>(json['isDismissed']),
       dismissedAt: serializer.fromJson<DateTime?>(json['dismissedAt']),
+      repeatDays: serializer.fromJson<int?>(json['repeatDays']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
     );
   }
@@ -2230,6 +2261,7 @@ class Task extends DataClass implements Insertable<Task> {
       'source': serializer.toJson<String>(source),
       'isDismissed': serializer.toJson<bool>(isDismissed),
       'dismissedAt': serializer.toJson<DateTime?>(dismissedAt),
+      'repeatDays': serializer.toJson<int?>(repeatDays),
       'createdAt': serializer.toJson<DateTime>(createdAt),
     };
   }
@@ -2243,6 +2275,7 @@ class Task extends DataClass implements Insertable<Task> {
     String? source,
     bool? isDismissed,
     Value<DateTime?> dismissedAt = const Value.absent(),
+    Value<int?> repeatDays = const Value.absent(),
     DateTime? createdAt,
   }) => Task(
     id: id ?? this.id,
@@ -2253,6 +2286,7 @@ class Task extends DataClass implements Insertable<Task> {
     source: source ?? this.source,
     isDismissed: isDismissed ?? this.isDismissed,
     dismissedAt: dismissedAt.present ? dismissedAt.value : this.dismissedAt,
+    repeatDays: repeatDays.present ? repeatDays.value : this.repeatDays,
     createdAt: createdAt ?? this.createdAt,
   );
   Task copyWithCompanion(TasksCompanion data) {
@@ -2271,6 +2305,9 @@ class Task extends DataClass implements Insertable<Task> {
       dismissedAt: data.dismissedAt.present
           ? data.dismissedAt.value
           : this.dismissedAt,
+      repeatDays: data.repeatDays.present
+          ? data.repeatDays.value
+          : this.repeatDays,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
     );
   }
@@ -2286,6 +2323,7 @@ class Task extends DataClass implements Insertable<Task> {
           ..write('source: $source, ')
           ..write('isDismissed: $isDismissed, ')
           ..write('dismissedAt: $dismissedAt, ')
+          ..write('repeatDays: $repeatDays, ')
           ..write('createdAt: $createdAt')
           ..write(')'))
         .toString();
@@ -2301,6 +2339,7 @@ class Task extends DataClass implements Insertable<Task> {
     source,
     isDismissed,
     dismissedAt,
+    repeatDays,
     createdAt,
   );
   @override
@@ -2315,6 +2354,7 @@ class Task extends DataClass implements Insertable<Task> {
           other.source == this.source &&
           other.isDismissed == this.isDismissed &&
           other.dismissedAt == this.dismissedAt &&
+          other.repeatDays == this.repeatDays &&
           other.createdAt == this.createdAt);
 }
 
@@ -2327,6 +2367,7 @@ class TasksCompanion extends UpdateCompanion<Task> {
   final Value<String> source;
   final Value<bool> isDismissed;
   final Value<DateTime?> dismissedAt;
+  final Value<int?> repeatDays;
   final Value<DateTime> createdAt;
   const TasksCompanion({
     this.id = const Value.absent(),
@@ -2337,6 +2378,7 @@ class TasksCompanion extends UpdateCompanion<Task> {
     this.source = const Value.absent(),
     this.isDismissed = const Value.absent(),
     this.dismissedAt = const Value.absent(),
+    this.repeatDays = const Value.absent(),
     this.createdAt = const Value.absent(),
   });
   TasksCompanion.insert({
@@ -2348,6 +2390,7 @@ class TasksCompanion extends UpdateCompanion<Task> {
     this.source = const Value.absent(),
     this.isDismissed = const Value.absent(),
     this.dismissedAt = const Value.absent(),
+    this.repeatDays = const Value.absent(),
     this.createdAt = const Value.absent(),
   }) : tankId = Value(tankId),
        description = Value(description);
@@ -2360,6 +2403,7 @@ class TasksCompanion extends UpdateCompanion<Task> {
     Expression<String>? source,
     Expression<bool>? isDismissed,
     Expression<DateTime>? dismissedAt,
+    Expression<int>? repeatDays,
     Expression<DateTime>? createdAt,
   }) {
     return RawValuesInsertable({
@@ -2371,6 +2415,7 @@ class TasksCompanion extends UpdateCompanion<Task> {
       if (source != null) 'source': source,
       if (isDismissed != null) 'is_dismissed': isDismissed,
       if (dismissedAt != null) 'dismissed_at': dismissedAt,
+      if (repeatDays != null) 'repeat_days': repeatDays,
       if (createdAt != null) 'created_at': createdAt,
     });
   }
@@ -2384,6 +2429,7 @@ class TasksCompanion extends UpdateCompanion<Task> {
     Value<String>? source,
     Value<bool>? isDismissed,
     Value<DateTime?>? dismissedAt,
+    Value<int?>? repeatDays,
     Value<DateTime>? createdAt,
   }) {
     return TasksCompanion(
@@ -2395,6 +2441,7 @@ class TasksCompanion extends UpdateCompanion<Task> {
       source: source ?? this.source,
       isDismissed: isDismissed ?? this.isDismissed,
       dismissedAt: dismissedAt ?? this.dismissedAt,
+      repeatDays: repeatDays ?? this.repeatDays,
       createdAt: createdAt ?? this.createdAt,
     );
   }
@@ -2426,6 +2473,9 @@ class TasksCompanion extends UpdateCompanion<Task> {
     if (dismissedAt.present) {
       map['dismissed_at'] = Variable<DateTime>(dismissedAt.value);
     }
+    if (repeatDays.present) {
+      map['repeat_days'] = Variable<int>(repeatDays.value);
+    }
     if (createdAt.present) {
       map['created_at'] = Variable<DateTime>(createdAt.value);
     }
@@ -2443,6 +2493,7 @@ class TasksCompanion extends UpdateCompanion<Task> {
           ..write('source: $source, ')
           ..write('isDismissed: $isDismissed, ')
           ..write('dismissedAt: $dismissedAt, ')
+          ..write('repeatDays: $repeatDays, ')
           ..write('createdAt: $createdAt')
           ..write(')'))
         .toString();
@@ -3838,6 +3889,7 @@ typedef $$TasksTableCreateCompanionBuilder =
       Value<String> source,
       Value<bool> isDismissed,
       Value<DateTime?> dismissedAt,
+      Value<int?> repeatDays,
       Value<DateTime> createdAt,
     });
 typedef $$TasksTableUpdateCompanionBuilder =
@@ -3850,6 +3902,7 @@ typedef $$TasksTableUpdateCompanionBuilder =
       Value<String> source,
       Value<bool> isDismissed,
       Value<DateTime?> dismissedAt,
+      Value<int?> repeatDays,
       Value<DateTime> createdAt,
     });
 
@@ -3898,6 +3951,11 @@ class $$TasksTableFilterComposer extends Composer<_$AppDb, $TasksTable> {
 
   ColumnFilters<DateTime> get dismissedAt => $composableBuilder(
     column: $table.dismissedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get repeatDays => $composableBuilder(
+    column: $table.repeatDays,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -3955,6 +4013,11 @@ class $$TasksTableOrderingComposer extends Composer<_$AppDb, $TasksTable> {
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<int> get repeatDays => $composableBuilder(
+    column: $table.repeatDays,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<DateTime> get createdAt => $composableBuilder(
     column: $table.createdAt,
     builder: (column) => ColumnOrderings(column),
@@ -3999,6 +4062,11 @@ class $$TasksTableAnnotationComposer extends Composer<_$AppDb, $TasksTable> {
     builder: (column) => column,
   );
 
+  GeneratedColumn<int> get repeatDays => $composableBuilder(
+    column: $table.repeatDays,
+    builder: (column) => column,
+  );
+
   GeneratedColumn<DateTime> get createdAt =>
       $composableBuilder(column: $table.createdAt, builder: (column) => column);
 }
@@ -4039,6 +4107,7 @@ class $$TasksTableTableManager
                 Value<String> source = const Value.absent(),
                 Value<bool> isDismissed = const Value.absent(),
                 Value<DateTime?> dismissedAt = const Value.absent(),
+                Value<int?> repeatDays = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
               }) => TasksCompanion(
                 id: id,
@@ -4049,6 +4118,7 @@ class $$TasksTableTableManager
                 source: source,
                 isDismissed: isDismissed,
                 dismissedAt: dismissedAt,
+                repeatDays: repeatDays,
                 createdAt: createdAt,
               ),
           createCompanionCallback:
@@ -4061,6 +4131,7 @@ class $$TasksTableTableManager
                 Value<String> source = const Value.absent(),
                 Value<bool> isDismissed = const Value.absent(),
                 Value<DateTime?> dismissedAt = const Value.absent(),
+                Value<int?> repeatDays = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
               }) => TasksCompanion.insert(
                 id: id,
@@ -4071,6 +4142,7 @@ class $$TasksTableTableManager
                 source: source,
                 isDismissed: isDismissed,
                 dismissedAt: dismissedAt,
+                repeatDays: repeatDays,
                 createdAt: createdAt,
               ),
           withReferenceMapper: (p0) => p0

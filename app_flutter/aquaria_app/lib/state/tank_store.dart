@@ -434,13 +434,23 @@ class TankStore {
     String? dueDate,
     String priority = 'normal',
     String source = 'ai',
+    int? repeatDays,
   }) async {
+    // Prevent duplicate recurring tasks for the same tank + description
+    if (repeatDays != null && repeatDays > 0) {
+      final exists = await _db.hasActiveRecurringTask(tankId, description);
+      if (exists) {
+        debugPrint('[TankStore] addTask: skipping duplicate recurring task "$description"');
+        return;
+      }
+    }
     await _db.insertTask(db.TasksCompanion.insert(
       tankId: tankId,
       description: description,
       dueDate: Value(dueDate),
       priority: Value(priority),
       source: Value(source),
+      repeatDays: Value(repeatDays),
       createdAt: Value(DateTime.now()),
     ));
     // Schedule device notification
@@ -469,8 +479,24 @@ class TankStore {
   }
 
   Future<void> dismissTaskById(int id) async {
+    // Check if this is a recurring task before dismissing
+    final task = await _db.getTaskById(id);
     await _db.dismissTaskById(id);
     _cloudSync(() => SupabaseService.dismissTaskById(id));
+
+    // Auto-create next occurrence for recurring tasks
+    if (task != null && task.repeatDays != null && task.repeatDays! > 0) {
+      final nextDue = DateTime.now().add(Duration(days: task.repeatDays!));
+      final nextDueStr = '${nextDue.year}-${nextDue.month.toString().padLeft(2, '0')}-${nextDue.day.toString().padLeft(2, '0')}';
+      await addTask(
+        tankId: task.tankId,
+        description: task.description,
+        dueDate: nextDueStr,
+        priority: task.priority,
+        source: task.source,
+        repeatDays: task.repeatDays,
+      );
+    }
   }
 
   // ----------------------------------------------------------------

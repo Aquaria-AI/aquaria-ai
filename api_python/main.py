@@ -219,6 +219,8 @@ class ChatRequest(BaseModel):
     health_profile: Optional[Dict[str, Any]] = None
     behavior_profile: Optional[Dict[str, Any]] = None
     session_summaries: Optional[List[str]] = None
+    experience_level: Optional[str] = None  # 'beginner', 'intermediate', 'advanced'
+    extract_tasks_only: Optional[bool] = False
 
 
 class SummarizeSessionRequest(BaseModel):
@@ -734,12 +736,15 @@ def summarize_tank_logs(req: SummaryRequest):
     for log in req.logs[:10]:
         text = log.get("text", "")
         parsed_str = log.get("parsed", "")
-        if parsed_str and not text:
+        # Reconstruct from parsed JSON if text is empty or just a placeholder
+        if parsed_str and (not text or text.strip().lower() in ("csv import", "")):
             # Reconstruct a readable summary from the parsed JSON
             try:
                 import json as _json
                 parsed = _json.loads(parsed_str) if isinstance(parsed_str, str) else parsed_str
                 parts = []
+                if parsed.get("date"):
+                    parts.append(f"Date: {parsed['date']}")
                 if parsed.get("measurements"):
                     parts.append("Measurements: " + ", ".join(
                         f"{k}={v}" for k, v in parsed["measurements"].items()
@@ -787,7 +792,9 @@ Safety rules:
 - When discussing any chemical, medication, or equipment, present a balanced view including potential downsides and common misconceptions. Avoid one-sided recommendations.
 - When unsure whether a recommendation is safe for the specific inhabitants, say so and recommend the most conservative approach.
 - Flag dangerous conditions immediately and clearly: ammonia or nitrite above 0, extreme pH swings, temperature shock, copper exposure to invertebrates, overstocking, mixing incompatible species.
-- If a user describes an emergency (fish gasping, mass die-off, chemical spill), prioritize immediate actionable guidance: water change, remove the source, isolate affected fish. Keep it short and urgent.
+- When a user reports a concern (fish gasping, acting strange, looking sick), ALWAYS ask diagnostic questions first before suggesting actions. Start by asking if they have tested water parameters recently (ammonia, nitrite, nitrate). Only after understanding the situation should you suggest possible actions — and frame them as options, not directives.
+- If the user has ALREADY shared recent test results in the conversation or logs showing dangerous levels (ammonia/nitrite > 0), then you may suggest a water change as one option — but still frame it gently ("a water change could help" not "do a water change now").
+- Only skip the diagnostic step for true emergencies where the user explicitly describes an immediate chemical spill or equipment failure — not for general symptoms like gasping or lethargy.
 - Never recommend mixing chemicals (e.g. pH up + pH down, multiple medications simultaneously) without warning about interactions.
 - Always recommend testing water before and after any chemical treatment.
 - When discussing medications, recommend following manufacturer instructions and warn about impacts on the nitrogen cycle and sensitive inhabitants. Do NOT prescribe specific dosages.
@@ -1293,6 +1300,27 @@ def chat_tank(req: ChatRequest):
             tank_context += f"  - {s}\n"
         tank_context += "Reference past conversations naturally when relevant — e.g. 'Last time we talked about...' — but don't force it.\n"
 
+    # Experience level — adapt tone and depth
+    if req.experience_level:
+        level = req.experience_level.lower()
+        if level == 'beginner':
+            tank_context += (
+                "USER EXPERIENCE: Beginner. This user is new to fishkeeping. "
+                "When they report a problem, ask diagnostic questions first — don't assume they've tested water parameters. "
+                "Explain concepts simply. Suggest testing before recommending actions. "
+                "Frame suggestions gently: 'Have you tested your water recently?' before 'Try a water change.'\n"
+            )
+        elif level == 'intermediate':
+            tank_context += (
+                "USER EXPERIENCE: Intermediate. This user is comfortable with basics. "
+                "You can reference parameters and concepts without over-explaining, but still ask before assuming.\n"
+            )
+        elif level == 'advanced':
+            tank_context += (
+                "USER EXPERIENCE: Advanced. This user is experienced. "
+                "Be concise and technical. Skip basic explanations unless asked.\n"
+            )
+
     # RAG: inject relevant community knowledge
     water_type = tank.get("water_type", "freshwater")
     knowledge = _search_knowledge(req.message, water_type, inhabitants)
@@ -1309,6 +1337,48 @@ def chat_tank(req: ChatRequest):
 
     try:
         client = anthropic.Anthropic(api_key=api_key)
+
+        # Fast path: extract tasks from a manual note without generating a chat reply
+        if req.extract_tasks_only:
+            today_str = date.today().isoformat()
+            note_extract_prompt = (
+                "Analyze this aquarium journal note. If the note describes a problem or "
+                "concern that clearly warrants a follow-up action, extract ONE concise task. "
+                "If the note is just a routine observation, measurement, or log with nothing "
+                "actionable, return an empty task list.\n\n"
+                f"Today's date is {today_str}.\n\n"
+                "Return ONLY valid JSON (no markdown, no explanation):\n"
+                '{"tasks": [{"description": "short action", "due_date": "YYYY-MM-DD"}]}\n\n'
+                "Rules:\n"
+                "- Return at most ONE task — the single most important follow-up\n"
+                "- Only return a task if there is a clear problem or concern (sick fish, "
+                "equipment issue, parameter spike, etc.)\n"
+                "- Do NOT create tasks for routine observations like 'fed fish', "
+                "'water looks clear', 'did a water change'\n"
+                "- due_date: default to tomorrow unless urgency warrants today\n"
+                '- If nothing is actionable, return {"tasks": []}'
+            )
+            try:
+                ex_response = _chat(client,
+                    model="claude-haiku-4-5",
+                    max_tokens=256,
+                    system=note_extract_prompt,
+                    messages=[
+                        {"role": "user", "content": req.message},
+                    ],
+                )
+                raw = ex_response.content[0].text.strip()
+                json_match = re.search(r"\{.*\}", raw, flags=re.DOTALL)
+                if json_match:
+                    raw = json_match.group(0)
+                parsed = json.loads(raw)
+                tasks = parsed.get("tasks", [])
+                print(f"[NoteExtract] extracted {len(tasks)} task(s) from note: {tasks}")
+                return {"response": "", "tasks": tasks}
+            except Exception as e:
+                print(f"[NoteExtract] error: {e}")
+                return {"response": "", "tasks": []}
+
         response = _chat(client,
             model="claude-haiku-4-5",
             max_tokens=256,

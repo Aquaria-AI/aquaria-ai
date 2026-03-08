@@ -94,6 +94,7 @@ class Tasks extends Table {
   TextColumn get source => text().withDefault(const Constant('ai'))(); // 'ai' or 'alert'
   BoolColumn get isDismissed => boolean().withDefault(const Constant(false))();
   DateTimeColumn get dismissedAt => dateTime().nullable()();
+  IntColumn get repeatDays => integer().nullable()(); // recurrence interval in days (null = one-off)
   DateTimeColumn get createdAt =>
       dateTime().withDefault(Constant(DateTime.now()))();
 
@@ -117,7 +118,7 @@ class AppDb extends _$AppDb {
   AppDb() : super(_openConnection());
 
   @override
-  int get schemaVersion => 10;
+  int get schemaVersion => 11;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -158,6 +159,9 @@ class AppDb extends _$AppDb {
           }
           if (from <= 9) {
             await migrator.createTable(chatSessions);
+          }
+          if (from <= 10) {
+            await migrator.addColumn(tasks, tasks.repeatDays);
           }
         },
       );
@@ -303,6 +307,22 @@ class AppDb extends _$AppDb {
   }
 
   Future<void> insertTask(TasksCompanion entry) => into(tasks).insert(entry);
+
+  Future<bool> hasActiveRecurringTask(String tankId, String description) async {
+    final rows = await (select(tasks)
+          ..where((r) =>
+              r.tankId.equals(tankId) &
+              r.description.equals(description) &
+              r.isDismissed.equals(false) &
+              r.repeatDays.isNotNull()))
+        .get();
+    return rows.isNotEmpty;
+  }
+
+  Future<Task?> getTaskById(int id) async {
+    final rows = await (select(tasks)..where((r) => r.id.equals(id))).get();
+    return rows.isEmpty ? null : rows.first;
+  }
 
   Future<void> dismissTaskById(int id) async {
     await (update(tasks)..where((r) => r.id.equals(id))).write(
