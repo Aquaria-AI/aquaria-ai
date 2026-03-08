@@ -1195,11 +1195,14 @@ def chat_tank(req: ChatRequest):
 
         # Also trigger if the AI reply confirms a reminder AND history had a reminder discussion
         history_has_reminder = _history_has_reminder_offer(req.history or [])[0]
+        # Only extract tasks when the AI reply confirms a reminder was set.
+        # Don't extract on the first turn if AI is asking a follow-up question.
+        reply_is_question = reply.rstrip().endswith("?")
         should_extract_tasks = (
             (_is_affirmation(req.message) and history_has_reminder)
             or reply_confirms_task_set
-            or user_explicit_task_request
-            or (history_has_reminder and "reminder" in reply_lower)
+            or (user_explicit_task_request and not reply_is_question)
+            or (history_has_reminder and "reminder" in reply_lower and not reply_is_question)
         )
 
         print(f"[TaskExtract] should_extract={should_extract_tasks} reply_confirms={reply_confirms_task_set} user_explicit={user_explicit_task_request} is_affirmation={_is_affirmation(req.message)} user_msg='{req.message[:80]}' reply_snippet='{reply_lower[:80]}'")
