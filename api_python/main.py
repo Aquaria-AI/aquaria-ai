@@ -939,7 +939,7 @@ def _quick_extract_task(message: str, today: date) -> Optional[Dict[str, Any]]:
     return None
 
 
-_TASK_EXTRACT_PROMPT = """Based on this conversation, extract any reminder tasks or scheduled maintenance tasks that were discussed and agreed upon.
+_TASK_EXTRACT_PROMPT = """Extract the reminder or task from this conversation. The assistant has CONFIRMED setting a reminder, so there IS a task to extract.
 
 Today's date is {today}.
 
@@ -947,12 +947,12 @@ Return ONLY valid JSON (no markdown, no explanation):
 {{"tasks": [{{"description": "short action description", "due_date": "YYYY-MM-DD"}}]}}
 
 Rules:
+- ALWAYS extract at least one task — the assistant confirmed a reminder exists
 - due_date must be an absolute date (YYYY-MM-DD), computed from today's date
-- If a recurring interval was mentioned (daily, weekly, monthly), set due_date to the next occurrence from today
-- If no specific timeframe was mentioned, default to 1 week from today
-- description should be a short, clear action phrase
-- Only extract tasks the user explicitly requested or agreed to
-- If nothing actionable can be extracted, return {{"tasks": []}}"""
+- "tomorrow" = today + 1 day, "in N days" = today + N days, "next week" = today + 7 days
+- If no specific timeframe was mentioned, default to tomorrow
+- description should be a short, clear action phrase (e.g. "Check ammonia", "Water change")
+- Look at ALL user messages in the conversation history to find the original request"""
 
 
 _NEW_INHABITANT_EXTRACT_PROMPT = """Based on this conversation, extract the new inhabitant(s) the user wants to add to their tank profile.
@@ -1232,7 +1232,7 @@ def chat_tank(req: ChatRequest):
             convo_parts.append({"role": "assistant", "content": reply})
             try:
                 ex_response = _chat(client,
-                    model="claude-sonnet-4-6",
+                    model="claude-haiku-4-5",
                     max_tokens=256,
                     system=extraction_prompt,
                     messages=convo_parts,
