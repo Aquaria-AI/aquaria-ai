@@ -948,11 +948,13 @@ Return ONLY valid JSON (no markdown, no explanation):
 
 Rules:
 - ALWAYS extract at least one task — the assistant confirmed a reminder exists
+- Focus on the MOST RECENT task the assistant confirmed — the last reminder set in the conversation
+- Do NOT re-extract tasks that were already confirmed in earlier turns
 - due_date must be an absolute date (YYYY-MM-DD), computed from today's date
 - "tomorrow" = today + 1 day, "in N days" = today + N days, "next week" = today + 7 days
 - If no specific timeframe was mentioned, default to tomorrow
 - description should be a short, clear action phrase (e.g. "Check ammonia", "Water change")
-- Look at ALL user messages in the conversation history to find the original request"""
+- Look at the assistant's FINAL message to identify what was just confirmed"""
 
 
 _NEW_INHABITANT_EXTRACT_PROMPT = """Based on this conversation, extract the new inhabitant(s) the user wants to add to their tank profile.
@@ -1106,11 +1108,13 @@ def chat_tank(req: ChatRequest):
         tank_context = (
             f"Current tank context: {tank.get('name', 'Unknown')} — "
             f"{tank.get('gallons', '?')} gal, {tank.get('water_type', 'unknown')} water.\n"
+            f"The user opened this chat from WITHIN this tank. Default ALL tasks, reminders, and logs to this tank — "
+            f"do NOT ask which tank unless the user explicitly mentions a different tank by name.\n"
             f"Note: you can still create NEW tank profiles if the user asks — do not refuse.\n"
         )
         if len(available_tanks) > 1:
             tanks_list = "\n".join(f"  - {_fmt_tank(t)}" for t in available_tanks)
-            tank_context += f"The user also has these other tanks:\n{tanks_list}\nIf they ask to switch tanks or refer to another tank, use the details above to resolve which one.\n"
+            tank_context += f"The user also has these other tanks:\n{tanks_list}\nOnly switch if they explicitly mention one of these tanks.\n"
     if tank.get("has_csv_imports"):
         tank_context += "This tank has imported historical water parameter data from a CSV — treat it as an established, already-running tank. Do NOT ask about cycling or initial setup.\n"
     if inhabitants:
@@ -1249,9 +1253,12 @@ def chat_tank(req: ChatRequest):
                 raw = re.sub(r"\s*```$", "", raw).strip()
                 parsed = json.loads(raw)
                 extracted_tasks = parsed.get("tasks", [])
+                print(f"[TaskExtract] AI raw response: {raw}")
                 print(f"[TaskExtract] AI extracted {len(extracted_tasks)} task(s): {extracted_tasks}")
             except Exception as e:
+                import traceback
                 print(f"[Chat/TaskExtract] error: {e}")
+                traceback.print_exc()
 
         # Extract new tank — three triggers:
         # 1. User affirmed a prior offer ("yes, create it")
@@ -1354,7 +1361,19 @@ def chat_tank(req: ChatRequest):
             except Exception as e:
                 print(f"[Chat/InhabitantExtract] error: {e}")
 
-        return {"response": reply, "tasks": extracted_tasks, "new_tank": new_tank, "new_inhabitant": new_inhabitant}
+        return {
+            "response": reply,
+            "tasks": extracted_tasks,
+            "new_tank": new_tank,
+            "new_inhabitant": new_inhabitant,
+            "_debug": {
+                "should_extract": should_extract_tasks,
+                "reply_confirms": reply_confirms_task_set,
+                "user_explicit": user_explicit_task_request,
+                "is_affirmation": _is_affirmation(req.message),
+                "history_has_reminder": history_has_reminder,
+            },
+        }
     except Exception as e:
         print(f"[Chat] error: {e}")
         return {"response": "Sorry, I couldn't process that right now.", "tasks": []}

@@ -5435,6 +5435,8 @@ class _ChatSheetState extends State<_ChatSheet> {
           .take(_chatMessages.length - 1)
           .map((m) => {'role': m.role, 'content': m.content})
           .toList();
+      debugPrint('[Chat] sending message: "$text"');
+      debugPrint('[Chat] history (${history.length} msgs): ${history.map((h) => "${h['role']}: ${(h['content'] as String).substring(0, (h['content'] as String).length.clamp(0, 50))}").toList()}');
       final resp = await http
           .post(Uri.parse('$_baseUrl/chat/tank'),
               headers: {'Content-Type': 'application/json'},
@@ -5466,17 +5468,30 @@ class _ChatSheetState extends State<_ChatSheet> {
         _addMessage(_ChatMessage(role: 'assistant', content: reply));
         _scrollToBottom();
 
-        // If no tank is selected yet, try to detect which tank Ariel identified
-        // from the reply (e.g. "logging that for Reef Tank").
-        if (_selectedTank == null && _allTanks.length > 1) {
+        // Detect which tank Ariel identified from the reply or user message.
+        // Only set the tank when the reply CONFIRMS an action (not when asking
+        // "which tank?"). This prevents premature selection before user answers.
+        if (_allTanks.length > 1) {
           final replyLower = reply.toLowerCase();
-          for (final t in _allTanks) {
-            if (replyLower.contains(t.name.toLowerCase())) {
-              setState(() => _selectedTank = t);
-              await _loadTankData(t);
-              break;
+          final isQuestion = reply.trimRight().endsWith('?');
+          // Only auto-detect tank from a confirming reply, or from the user's
+          // message when the user explicitly names a tank.
+          if (!isQuestion) {
+            final msgLower = text.toLowerCase();
+            for (final t in _allTanks) {
+              final nameL = t.name.toLowerCase();
+              if (replyLower.contains(nameL) || msgLower.contains(nameL)) {
+                if (_selectedTank?.id != t.id) {
+                  debugPrint('[Chat] Tank detected: ${_selectedTank?.name} → ${t.name}');
+                  setState(() => _selectedTank = t);
+                  await _loadTankData(t);
+                }
+                break;
+              }
             }
           }
+        } else if (_selectedTank == null && _allTanks.length == 1) {
+          setState(() => _selectedTank = _allTanks.first);
         }
 
         // Create new tank if AI collected all details
