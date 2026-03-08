@@ -183,8 +183,12 @@ AppBar _buildAppBar(BuildContext context, String title, {List<Widget>? actions})
         IconButton(
           tooltip: 'Invite friends',
           icon: const Icon(Icons.person_add_outlined),
-          onPressed: () {
-            Share.share('Check out Aquaria — an AI-powered aquarium companion app! https://aquaria.app');
+          onPressed: () async {
+            try {
+              await Share.share('Check out Aquaria — an AI-powered aquarium companion app! https://aquaria.app');
+            } catch (e) {
+              debugPrint('[Share] error: $e');
+            }
           },
         ),
         PopupMenuButton<String>(
@@ -5530,9 +5534,13 @@ class _ChatSheetState extends State<_ChatSheet> {
         }
 
         // Save any tasks the AI confirmed scheduling
+        debugPrint('[Chat] data type: ${data.runtimeType}, data keys: ${data is Map ? data.keys.toList() : "not a map"}');
         final rawTasks = data is Map ? (data['tasks'] as List?)?.cast<Map<String, dynamic>>() : null;
+        debugPrint('[Chat] rawTasks: $rawTasks');
         final chatTasks = rawTasks != null ? await _moderateTasks(rawTasks) : null;
+        debugPrint('[Chat] chatTasks after moderation: $chatTasks');
         final taskTank = _selectedTank ?? (_allTanks.length == 1 ? _allTanks.first : null);
+        debugPrint('[Chat] taskTank: ${taskTank?.name ?? "null"}');
         if (chatTasks != null && chatTasks.isNotEmpty && taskTank == null) {
           // No tank selected yet — buffer tasks until tank is identified
           _pendingTasks.addAll(chatTasks);

@@ -889,6 +889,45 @@ When the user wants to add or set up a new tank (e.g. "add a tank", "I have a ne
 Once you have at minimum a name, size, and water type, summarize the details in one short sentence and say "I'll create this tank for you now." — then the app will handle saving it. Do NOT ask "Ready to create this tank?" — just confirm you're creating it. Do NOT ask all questions at once."""
 
 
+def _quick_extract_task(message: str, today: date) -> Optional[Dict[str, Any]]:
+    """Try to extract a task directly from a user message like 'remind me to X in N days'."""
+    from datetime import timedelta
+    msg = message.lower().strip()
+
+    # Match "remind me to <action> in N days/weeks"
+    m = re.search(r"remind\s+me\s+to\s+(.+?)\s+in\s+(\d+)\s+(day|week|month)s?", msg, re.IGNORECASE)
+    if m:
+        desc = m.group(1).strip().rstrip(".,!?")
+        n = int(m.group(2))
+        unit = m.group(3)
+        if unit == "day":
+            due = today + timedelta(days=n)
+        elif unit == "week":
+            due = today + timedelta(weeks=n)
+        elif unit == "month":
+            due = today + timedelta(days=n * 30)
+        else:
+            due = today + timedelta(days=7)
+        return {"description": desc.capitalize(), "due_date": due.isoformat()}
+
+    # Match "remind me to <action> tomorrow"
+    m = re.search(r"remind\s+me\s+to\s+(.+?)\s+tomorrow", msg, re.IGNORECASE)
+    if m:
+        desc = m.group(1).strip().rstrip(".,!?")
+        due = today + timedelta(days=1)
+        return {"description": desc.capitalize(), "due_date": due.isoformat()}
+
+    # Match "remind me to <action>" (no timeframe — default 1 week)
+    m = re.search(r"remind\s+me\s+to\s+(.+?)(?:\s*[.!?]?\s*$)", msg, re.IGNORECASE)
+    if m:
+        desc = m.group(1).strip().rstrip(".,!?")
+        if desc and len(desc) > 3:
+            due = today + timedelta(days=7)
+            return {"description": desc.capitalize(), "due_date": due.isoformat()}
+
+    return None
+
+
 _TASK_EXTRACT_PROMPT = """Based on this conversation, extract any reminder tasks or scheduled maintenance tasks that were discussed and agreed upon.
 
 Today's date is {today}.
@@ -1168,30 +1207,38 @@ def chat_tank(req: ChatRequest):
 
         if should_extract_tasks:
             today_str = date.today().isoformat()
-            extraction_prompt = _TASK_EXTRACT_PROMPT.format(today=today_str)
-            # Build full conversation context for extraction
-            convo_parts = []
-            for h in (req.history or []):
-                role = h.get("role", "user")
-                content = h.get("content", "")
-                convo_parts.append({"role": role, "content": content})
-            convo_parts.append({"role": "user", "content": req.message})
-            convo_parts.append({"role": "assistant", "content": reply})
-            try:
-                ex_response = _chat(client,
-                    model="claude-haiku-4-5",
-                    max_tokens=256,
-                    system=extraction_prompt,
-                    messages=convo_parts,
-                )
-                raw = ex_response.content[0].text.strip()
-                raw = re.sub(r"^```(?:json)?\s*", "", raw)
-                raw = re.sub(r"\s*```$", "", raw).strip()
-                parsed = json.loads(raw)
-                extracted_tasks = parsed.get("tasks", [])
-                print(f"[TaskExtract] extracted {len(extracted_tasks)} task(s): {extracted_tasks}")
-            except Exception as e:
-                print(f"[Chat/TaskExtract] error: {e}")
+            today_date = date.today()
+
+            # Quick extraction: parse due date from user message directly
+            quick_task = _quick_extract_task(req.message, today_date)
+            if quick_task:
+                extracted_tasks = [quick_task]
+                print(f"[TaskExtract] quick extracted: {extracted_tasks}")
+            else:
+                # Fall back to AI extraction
+                extraction_prompt = _TASK_EXTRACT_PROMPT.format(today=today_str)
+                convo_parts = []
+                for h in (req.history or []):
+                    role = h.get("role", "user")
+                    content = h.get("content", "")
+                    convo_parts.append({"role": role, "content": content})
+                convo_parts.append({"role": "user", "content": req.message})
+                convo_parts.append({"role": "assistant", "content": reply})
+                try:
+                    ex_response = _chat(client,
+                        model="claude-haiku-4-5",
+                        max_tokens=256,
+                        system=extraction_prompt,
+                        messages=convo_parts,
+                    )
+                    raw = ex_response.content[0].text.strip()
+                    raw = re.sub(r"^```(?:json)?\s*", "", raw)
+                    raw = re.sub(r"\s*```$", "", raw).strip()
+                    parsed = json.loads(raw)
+                    extracted_tasks = parsed.get("tasks", [])
+                    print(f"[TaskExtract] AI extracted {len(extracted_tasks)} task(s): {extracted_tasks}")
+                except Exception as e:
+                    print(f"[Chat/TaskExtract] error: {e}")
 
         # Extract new tank — three triggers:
         # 1. User affirmed a prior offer ("yes, create it")

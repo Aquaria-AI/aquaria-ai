@@ -454,13 +454,18 @@ class TankStore {
       task: {'description': description, 'due_date': dueDate},
     );
     // Cloud sync
-    _cloudSync(() => SupabaseService.insertTask(
-      tankId: tankId,
-      description: description,
-      dueDate: dueDate,
-      priority: priority,
-      source: source,
-    ));
+    debugPrint('[TankStore] addTask: syncing to cloud, loggedIn=${SupabaseService.isLoggedIn}');
+    _cloudSync(() async {
+      debugPrint('[TankStore] insertTask calling Supabase...');
+      await SupabaseService.insertTask(
+        tankId: tankId,
+        description: description,
+        dueDate: dueDate,
+        priority: priority,
+        source: source,
+      );
+      debugPrint('[TankStore] insertTask success');
+    });
   }
 
   Future<void> dismissTaskById(int id) async {

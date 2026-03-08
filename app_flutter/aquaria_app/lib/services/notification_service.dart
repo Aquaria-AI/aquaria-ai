@@ -27,17 +27,19 @@ class NotificationService {
 
   static Future<void> init() async {
     if (_ready) return;
+    debugPrint('[Notif] init starting...');
 
     // Timezone setup
     tz.initializeTimeZones();
     final localTz = await FlutterTimezone.getLocalTimezone();
+    debugPrint('[Notif] timezone: ${localTz.identifier}');
     tz.setLocalLocation(tz.getLocation(localTz.identifier));
 
     const android = AndroidInitializationSettings('@mipmap/ic_launcher');
     const ios = DarwinInitializationSettings(
-      requestAlertPermission: false, // asked explicitly via requestPermissions()
-      requestBadgePermission: false,
-      requestSoundPermission: false,
+      requestAlertPermission: true,
+      requestBadgePermission: true,
+      requestSoundPermission: true,
     );
 
     await _plugin.initialize(
@@ -47,6 +49,7 @@ class NotificationService {
     );
 
     _ready = true;
+    debugPrint('[Notif] init complete, ready=$_ready');
   }
 
   static Future<void> requestPermissions() async {
