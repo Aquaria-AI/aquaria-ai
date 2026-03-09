@@ -559,6 +559,8 @@ Return this exact shape — always a "logs" array, even for a single entry:
   ]
 }
 
+SINGLE-ENTRY RULE: Combine ALL measurements, actions, and notes from a single message into ONE log object. Do NOT split a single message into multiple log entries unless the user explicitly references different dates.
+
 MULTI-DATE ENTRIES: If the user mentions measurements or events across multiple distinct dates (e.g. "ca was 50ppm 2.22.26 next day 65 next day 75", or "on Monday pH was 7.2, Tuesday pH was 7.4"), create a SEPARATE log object for each date inside the "logs" array. Each entry should only contain the measurements/actions/notes relevant to that specific date. Relative day references like "next day" mean +1 day from the preceding date.
 
 "tasks" — scheduling or reminder requests from the user, ONLY if they relate to aquarium care.
