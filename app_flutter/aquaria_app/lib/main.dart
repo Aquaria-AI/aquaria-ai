@@ -6470,12 +6470,14 @@ class _ChatSheetState extends State<_ChatSheet> {
     final tank = _selectedTank ?? (widget.allTanks.length == 1 ? widget.allTanks.first : null);
     if (tank == null) return;
     for (final task in _pendingTasks) {
+      final rd = task['repeat_days'];
       TankStore.instance.addTask(
         tankId: tank.id,
         description: (task['description'] ?? '').toString(),
         dueDate: (task['due_date'] ?? task['due'])?.toString(),
         priority: (task['priority'] ?? 'normal').toString(),
-        source: 'ai',
+        source: rd != null ? 'recurring' : 'ai',
+        repeatDays: rd is int ? rd : (rd is num ? rd.toInt() : null),
       );
     }
     _pendingTasks = [];
@@ -6782,11 +6784,13 @@ class _ChatSheetState extends State<_ChatSheet> {
     Future<void> parseAndSaveLog() async {
       if (tankSnapshot == null) return;
       try {
+        debugPrint('[ParseLog] Sending parse request for: "$text"');
         final resp = await http
             .post(Uri.parse('$_baseUrl/parse/tank-log'),
                 headers: {'Content-Type': 'application/json'},
                 body: jsonEncode({'text': text}))
             .timeout(const Duration(seconds: 20));
+        debugPrint('[ParseLog] Response status=${resp.statusCode}, body=${resp.body}');
         if (resp.statusCode == 200) {
           final parsed = jsonDecode(resp.body);
           final logEntries = (parsed is Map && parsed['logs'] is List)
@@ -6812,18 +6816,21 @@ class _ChatSheetState extends State<_ChatSheet> {
             final hasMeasurements = (entry['measurements'] as Map?)?.isNotEmpty == true;
             final hasActions = (entry['actions'] as List?)?.isNotEmpty == true;
             final hasNotes = (entry['notes'] as List?)?.isNotEmpty == true;
+            debugPrint('[ParseLog] Entry $i: meas=$hasMeasurements, actions=$hasActions, notes=$hasNotes');
             if (!hasMeasurements && !hasActions && !hasNotes) continue;
             // Remove tasks from parse entries — chat path handles task saving
             entry.remove('tasks');
             final dateStr = entry['date'] as String?;
             final logDate = (dateStr != null ? DateTime.tryParse(dateStr) : null) ?? logDateSnapshot;
-            if (i == logEntries.length - 1 && mounted) setState(() => _logDate = logDate);
+            debugPrint('[ParseLog] Saving log entry $i for tank ${tankSnapshot.id}');
             await TankStore.instance.addLog(
               tankId: tankSnapshot.id,
               rawText: logEntries.length == 1 ? text : '',
               parsedJson: jsonEncode(entry),
               date: logDate,
             );
+            debugPrint('[ParseLog] Log entry $i saved successfully');
+            if (i == logEntries.length - 1 && mounted) setState(() => _logDate = logDate);
           }
           if (mounted) widget.onLogsChanged();
 
@@ -6869,7 +6876,9 @@ class _ChatSheetState extends State<_ChatSheet> {
           // Observation alerts are handled by the AI task extraction path —
           // no need to duplicate them here.
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[ParseLog] ERROR: $e');
+      }
       if (mounted) setState(() => _sending = false);
     }
 
@@ -7041,12 +7050,14 @@ class _ChatSheetState extends State<_ChatSheet> {
           if (allTasks.isNotEmpty) {
             try {
               for (final task in allTasks) {
+                final rd = task['repeat_days'];
                 await TankStore.instance.addTask(
                   tankId: taskTank.id,
                   description: (task['description'] ?? '').toString(),
                   dueDate: (task['due_date'] ?? task['due'])?.toString(),
                   priority: (task['priority'] ?? 'normal').toString(),
-                  source: 'ai',
+                  source: rd != null ? 'recurring' : 'ai',
+                  repeatDays: rd is int ? rd : (rd is num ? rd.toInt() : null),
                 );
               }
             } catch (e) {

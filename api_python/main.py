@@ -1082,7 +1082,7 @@ _TASK_EXTRACT_PROMPT = """Extract ONLY confirmed reminders/tasks from this conve
 Today's date is {today}.
 
 Return ONLY valid JSON (no markdown, no explanation):
-{{"tasks": [{{"description": "short action description", "due_date": "YYYY-MM-DD"}}]}}
+{{"tasks": [{{"description": "short action description", "due_date": "YYYY-MM-DD", "repeat_days": null}}]}}
 
 Rules:
 - Extract ONLY tasks that the assistant has EXPLICITLY CONFIRMED as set/scheduled in its FINAL message
@@ -1094,6 +1094,7 @@ Rules:
 - "tomorrow" = today + 1 day, "in N days" = today + N days, "next week" = today + 7 days
 - If no specific timeframe was mentioned, default to tomorrow
 - description should be a short, clear action phrase (e.g. "Check ammonia", "Water change")
+- repeat_days: if the user asked for a RECURRING reminder (e.g. "every week", "every 3 days", "weekly", "biweekly"), set this to the number of days between repeats (7 for weekly, 14 for biweekly, 30 for monthly, etc.). If not recurring, set to null.
 - When in doubt, return {{"tasks": []}} — it's better to miss a task than create a duplicate"""
 
 
