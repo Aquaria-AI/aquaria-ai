@@ -3325,14 +3325,10 @@ class _AppEntryState extends State<_AppEntry> {
   Future<Widget> _resolveMainScreen() async {
     final store = TankStore.instance;
     await store.load();
-    // Skip onboarding if the user already has tanks (returning user)
-    if (store.tanks.isNotEmpty) {
-      await _markOnboardingDone();
-      return const TankListScreen();
-    }
-    final done = await _isOnboardingDone();
-    if (!done) return const OnboardingScreen();
-    return const TankListScreen();
+    // Show onboarding unless the user has a real (non-sample) tank
+    final hasRealTank = store.tanks.any((t) => t.name != 'Sample Tank');
+    if (hasRealTank) return const TankListScreen();
+    return const OnboardingScreen();
   }
 
   @override
