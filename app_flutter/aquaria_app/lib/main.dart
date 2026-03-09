@@ -6886,6 +6886,8 @@ class _ChatSheetState extends State<_ChatSheet> {
       r'yellowing|browning|rotting|shedding|losing\s+leaves|plant|plants|'
       r'lethargic|gasping|hiding|aggressive|bloated|swollen|scratching|flashing|fin\s*rot|ich|ick|fungus|'
       r'ill|injured|infected|disease|parasite|worm|wormy|listless|clamped|erratic|darting|'
+      r'terrible|awful|bad|worse|weird|strange|odd|unusual|abnormal|struggling|suffering|distressed|stressed|'
+      r'not\s+eating|won.t\s+eat|stopped\s+eating|lost\s+color|losing\s+color|faded|discolored|'
       r'filter|heater|light|pump|skimmer)\b'
       r'|\b[kK]\s*[:=]?\s*\d',  // K followed by a number = potassium measurement
       caseSensitive: false,
