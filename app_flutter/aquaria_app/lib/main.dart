@@ -9686,6 +9686,50 @@ class _DailyLogsScreenState extends State<DailyLogsScreen> {
     if (mounted) setState(() => _logs = fresh);
   }
 
+  Future<void> _showAddNoteDialog() async {
+    final controller = TextEditingController();
+    final messenger = ScaffoldMessenger.of(context);
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Row(children: [
+          const Icon(Icons.note_add, color: _cDark, size: 22),
+          const SizedBox(width: 8),
+          Expanded(child: Text('Note — ${widget.tank.name}', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700))),
+        ]),
+        content: TextField(
+          controller: controller,
+          maxLines: 5,
+          minLines: 3,
+          autofocus: true,
+          textCapitalization: TextCapitalization.sentences,
+          decoration: const InputDecoration(
+            hintText: 'What did you observe?',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: _cDark),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    final noteText = controller.text.trim();
+    if (saved == true && noteText.isNotEmpty && mounted) {
+      await TankStore.instance.addLog(
+        tankId: widget.tank.id,
+        rawText: noteText,
+        parsedJson: jsonEncode({'source': 'manual_note', 'notes': [noteText]}),
+      );
+      await _reload();
+      messenger.showSnackBar(const SnackBar(content: Text('Note saved')));
+    }
+  }
+
   String _dayKey(db.Log l) {
     // Prefer the explicit date from parsedJson (e.g. CSV imports) over createdAt
     if (l.parsedJson != null) {
@@ -9755,10 +9799,34 @@ class _DailyLogsScreenState extends State<DailyLogsScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-            child: Text(
-              '${widget.tank.name} — Log History',
-              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: _cDark),
+            padding: const EdgeInsets.fromLTRB(16, 12, 4, 4),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '${widget.tank.name} — Log History',
+                    style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: _cDark),
+                  ),
+                ),
+                PopupMenuButton<String>(
+                  icon: const Icon(Icons.more_vert, size: 22),
+                  tooltip: 'More options',
+                  onSelected: (value) {
+                    if (value == 'add_note') {
+                      _showAddNoteDialog();
+                    }
+                    if (value == 'import_csv') {
+                      Navigator.of(context).push(MaterialPageRoute(
+                        builder: (_) => _CsvImportScreen(tank: widget.tank),
+                      )).then((_) => _reload());
+                    }
+                  },
+                  itemBuilder: (_) => const [
+                    PopupMenuItem(value: 'add_note', child: Text('Add Note')),
+                    PopupMenuItem(value: 'import_csv', child: Text('Import CSV')),
+                  ],
+                ),
+              ],
             ),
           ),
           Expanded(
