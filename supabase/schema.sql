@@ -303,5 +303,15 @@ begin
     insert into public.logs (tank_id, user_id, raw_text, parsed_json, created_at)
     values (new_tank_id, target_user_id, lg.raw_text, lg.parsed_json, lg.created_at);
   end loop;
+
+  -- Clone tasks (recurring and one-time, only active ones)
+  for lg in
+    select description, due_date, priority, source, repeat_days, is_paused
+    from public.tasks
+    where tank_id = src_tank.id and is_dismissed = false
+  loop
+    insert into public.tasks (tank_id, user_id, description, due_date, priority, source, repeat_days, is_paused)
+    values (new_tank_id, target_user_id, lg.description, lg.due_date, lg.priority, lg.source, lg.repeat_days, lg.is_paused);
+  end loop;
 end;
 $$ language plpgsql security definer;

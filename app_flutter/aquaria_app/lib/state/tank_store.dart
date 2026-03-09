@@ -129,13 +129,18 @@ class TankStore {
         await _db.insertDismissedTask(key);
       }
 
-      // Tasks
+      // Tasks — check for duplicates before inserting
       final cloudTasks = (data['tasks'] as List?) ?? [];
       for (final ct in cloudTasks) {
         final tm = ct as Map<String, dynamic>;
+        final desc = tm['description'] as String;
+        final tankId2 = tm['tank_id'] as String;
+        // Skip if we already have this task locally
+        final isDup = await _db.hasDuplicateTask(tankId2, desc, tm['due_date'] as String?);
+        if (isDup) continue;
         await _db.insertTask(db.TasksCompanion.insert(
-          tankId: tm['tank_id'] as String,
-          description: tm['description'] as String,
+          tankId: tankId2,
+          description: desc,
           dueDate: Value(tm['due_date'] as String?),
           priority: Value((tm['priority'] as String?) ?? 'normal'),
           source: Value((tm['source'] as String?) ?? 'ai'),
@@ -497,7 +502,13 @@ class TankStore {
     // Check if this is a recurring task before dismissing
     final task = await _db.getTaskById(id);
     await _db.dismissTaskById(id);
-    _cloudSync(() => SupabaseService.dismissTaskById(id));
+    if (task != null) {
+      _cloudSync(() => SupabaseService.dismissTaskByKey(
+        tankId: task.tankId,
+        description: task.description,
+        createdAt: task.createdAt,
+      ));
+    }
 
     // Auto-create next occurrence for recurring tasks (skip if paused)
     if (task != null && task.repeatDays != null && task.repeatDays! > 0 && !task.isPaused) {

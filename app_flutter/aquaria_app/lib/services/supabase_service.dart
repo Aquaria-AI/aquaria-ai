@@ -351,6 +351,24 @@ class SupabaseService {
     }).eq('id', id);
   }
 
+  /// Dismiss a task by matching key fields (works across local/cloud ID mismatch).
+  static Future<void> dismissTaskByKey({
+    required String tankId,
+    required String description,
+    required DateTime createdAt,
+  }) async {
+    final uid = userId;
+    if (uid == null) return;
+    await client.from('tasks').update({
+      'is_dismissed': true,
+      'dismissed_at': DateTime.now().toUtc().toIso8601String(),
+    })
+    .eq('user_id', uid)
+    .eq('tank_id', tankId)
+    .eq('description', description)
+    .eq('is_dismissed', false);
+  }
+
   // ── Dismissed Tasks (legacy) ───────────────────────────────────────────
 
   static Future<void> dismissTask(String taskKey) async {

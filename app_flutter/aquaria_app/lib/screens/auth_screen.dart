@@ -1,11 +1,49 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/supabase_service.dart';
 
 const _cDark  = Color(0xFF0E5A66);
 const _cMid   = Color(0xFF1FA2A8);
 const _cMint  = Color(0xFFD9F7F0);
+
+String _friendlyAuthError(Object e) {
+  final raw = e.toString().toLowerCase();
+  if (e is AuthException) {
+    final msg = e.message.toLowerCase();
+    if (msg.contains('invalid login credentials') || msg.contains('invalid_credentials')) {
+      return 'Incorrect email or password.';
+    }
+    if (msg.contains('email not confirmed')) {
+      return 'Please check your email and confirm your account.';
+    }
+    if (msg.contains('user already registered') || msg.contains('already been registered')) {
+      return 'An account with this email already exists. Try signing in.';
+    }
+    if (msg.contains('invalid email') || msg.contains('not a valid email')) {
+      return 'Please enter a valid email address.';
+    }
+    if (msg.contains('weak password') || msg.contains('too short')) {
+      return 'Password is too weak. Use at least 6 characters.';
+    }
+    if (msg.contains('rate limit') || msg.contains('too many requests')) {
+      return 'Too many attempts. Please wait a moment and try again.';
+    }
+    if (msg.contains('network') || msg.contains('socket') || msg.contains('connection')) {
+      return 'Network error. Please check your connection.';
+    }
+    // Return the original message cleaned up
+    return e.message;
+  }
+  if (raw.contains('network') || raw.contains('socket') || raw.contains('connection')) {
+    return 'Network error. Please check your connection.';
+  }
+  if (raw.contains('cancelled') || raw.contains('canceled')) {
+    return ''; // user cancelled, no error to show
+  }
+  return 'Something went wrong. Please try again.';
+}
 
 class AuthScreen extends StatefulWidget {
   final VoidCallback onAuthSuccess;
@@ -58,8 +96,9 @@ class _AuthScreenState extends State<AuthScreen> {
         });
       }
     } catch (e) {
+      final msg = _friendlyAuthError(e);
       setState(() {
-        _error = e.toString().replaceAll('Exception: ', '').replaceAll('AuthException(message: ', '').replaceAll(')', '');
+        _error = msg.isNotEmpty ? msg : null;
         _loading = false;
       });
     }
@@ -71,8 +110,9 @@ class _AuthScreenState extends State<AuthScreen> {
       await SupabaseService.signInWithGoogle();
       if (SupabaseService.isLoggedIn) widget.onAuthSuccess();
     } catch (e) {
+      final msg = _friendlyAuthError(e);
       setState(() {
-        _error = e.toString().contains('cancelled') ? null : 'Google sign-in failed.';
+        _error = msg.isNotEmpty ? msg : null;
         _loading = false;
       });
     }
@@ -84,8 +124,9 @@ class _AuthScreenState extends State<AuthScreen> {
       await SupabaseService.signInWithApple();
       if (SupabaseService.isLoggedIn) widget.onAuthSuccess();
     } catch (e) {
+      final msg = _friendlyAuthError(e);
       setState(() {
-        _error = e.toString().contains('cancelled') ? null : 'Apple sign-in failed.';
+        _error = msg.isNotEmpty ? msg : null;
         _loading = false;
       });
     }

@@ -239,7 +239,7 @@ AppBar _buildAppBar(BuildContext context, String title, {List<Widget>? actions})
                 child: FutureBuilder<String>(
                   future: _loadExperienceLevel(),
                   builder: (_, snap) {
-                    final level = snap.data ?? 'beginner';
+                    final level = (snap.data ?? 'beginner').isEmpty ? 'beginner' : snap.data!;
                     final label = level[0].toUpperCase() + level.substring(1);
                     return Text('Level: $label', style: const TextStyle(color: Colors.black54, fontSize: 13));
                   },
@@ -1023,7 +1023,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               children: [
                 _ObExperiencePage(
                     selected: _experience,
-                    onSelect: (e) => setState(() => _experience = e),
+                    onSelect: (e) {
+                      setState(() => _experience = e);
+                      Future.delayed(const Duration(milliseconds: 300), _goNext);
+                    },
                     onNext: _experience.isEmpty ? null : _goNext,
                   ),
                   _ObWelcomePage(experience: _experience, onNext: _goNext),
@@ -3322,11 +3325,13 @@ class _AppEntryState extends State<_AppEntry> {
   Future<Widget> _resolveMainScreen() async {
     final store = TankStore.instance;
     await store.load();
-    final done = await _isOnboardingDone();
-    if (!done) return const OnboardingScreen();
+    // Skip onboarding if the user already has tanks (returning user)
     if (store.tanks.isNotEmpty) {
+      await _markOnboardingDone();
       return const TankListScreen();
     }
+    final done = await _isOnboardingDone();
+    if (!done) return const OnboardingScreen();
     return const TankListScreen();
   }
 
@@ -4185,28 +4190,31 @@ class _TankListScreenState extends State<TankListScreen> {
                                         child: Text(t.name, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.black)),
                                       ),
                                       if (notifCount > 0)
-                                        Padding(
-                                          padding: const EdgeInsets.only(right: 10),
-                                          child: Stack(
-                                            clipBehavior: Clip.none,
-                                            children: [
-                                              const Icon(Icons.notifications, size: 22, color: Color(0xFFE65100)),
-                                              Positioned(
-                                                top: -4,
-                                                right: -4,
-                                                child: Container(
-                                                  padding: const EdgeInsets.all(3),
-                                                  decoration: const BoxDecoration(
-                                                    color: Color(0xFFE65100),
-                                                    shape: BoxShape.circle,
-                                                  ),
-                                                  child: Text(
-                                                    '$notifCount',
-                                                    style: const TextStyle(fontSize: 9, color: Colors.white, fontWeight: FontWeight.w700, height: 1),
+                                        GestureDetector(
+                                          onTap: () => _showNotificationsSheet([t]),
+                                          child: Padding(
+                                            padding: const EdgeInsets.only(right: 10),
+                                            child: Stack(
+                                              clipBehavior: Clip.none,
+                                              children: [
+                                                const Icon(Icons.notifications, size: 22, color: Color(0xFFE65100)),
+                                                Positioned(
+                                                  top: -4,
+                                                  right: -4,
+                                                  child: Container(
+                                                    padding: const EdgeInsets.all(3),
+                                                    decoration: const BoxDecoration(
+                                                      color: Color(0xFFE65100),
+                                                      shape: BoxShape.circle,
+                                                    ),
+                                                    child: Text(
+                                                      '$notifCount',
+                                                      style: const TextStyle(fontSize: 9, color: Colors.white, fontWeight: FontWeight.w700, height: 1),
+                                                    ),
                                                   ),
                                                 ),
-                                              ),
-                                            ],
+                                              ],
+                                            ),
                                           ),
                                         ),
                                       PopupMenuButton<String>(
