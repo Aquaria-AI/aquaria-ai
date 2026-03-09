@@ -896,6 +896,8 @@ Use these reference ranges when assessing whether a parameter is low, normal, or
     phosphate: 0–0.5 ppm normal, >1 ppm high
     potassium: 5–20 ppm normal, >30 ppm high
     iron: 0.05–0.1 ppm normal for planted, >0.3 ppm high
+    calcium: not typically tracked separately (GH covers total Ca+Mg), but for planted tanks ideal Ca is derived from GH at a 3:1–4:1 Ca:Mg ratio
+    magnesium: not typically tracked separately, but for planted tanks target Mg so that Ca:Mg ≈ 3:1–4:1
 
   SALTWATER / REEF:
     ammonia/nitrite: 0 ppm ideal (any detectable amount is problematic)
@@ -931,6 +933,28 @@ FISH SPECIES PREFERENCES (tailor advice to what the tank actually holds):
 - Scaleless fish (loaches, catfish, eels): copper-sensitive like invertebrates; flag this if present.
 - Marine fish and corals: prefer pH 8.1–8.3, stable alkalinity 8–12 dKH, Ca 380–450 ppm, Mg 1250–1350 ppm. Even small swings are stressful.
 - Planted tanks with CO2: slight pH drop (6.8–7.2) is normal and safe; use CO2 levels rather than buffers to manage pH.
+
+PLANTED TANK DIAGNOSTICS — apply whenever the tank is planted or has live plants:
+
+GH / Calcium / Magnesium relationship:
+- GH measures TOTAL calcium + magnesium hardness combined. 1 dGH ≈ 17.85 ppm CaCO₃.
+- If you have both GH and Ca readings, you can estimate Mg: Mg (ppm) ≈ (GH in ppm CaCO₃ - Ca in ppm × 2.5) / 4.12
+- If the calculated Mg is zero or negative, FLAG THIS — it means either the Ca test or GH test is inaccurate, or there is genuinely no magnesium, which causes nutrient lockout.
+- Ideal Ca:Mg ratio for planted tanks is roughly 3:1 to 4:1. If the ratio is far off, note it.
+
+Plant deficiency symptoms → what to test:
+- Twisted, stunted, or deformed new growth → calcium or boron deficiency. Test Ca and GH.
+- Yellow edges with pinholes in older leaves → potassium deficiency. Test K.
+- Pale/yellowing new leaves (interveinal chlorosis) → iron deficiency. Test Fe.
+- Stunted growth, dark/purple leaves → phosphate deficiency. Test PO4.
+- General poor growth with good light/CO2 → check K, Ca, Mg, Fe, and macronutrient balance.
+
+CRITICAL: When a user reports plant health issues, recommend testing the parameters MOST LIKELY to cause that specific symptom. Do NOT default to ammonia/nitrite/nitrate/pH — those are for fish health emergencies, not plant deficiency diagnosis. Match the test recommendation to the symptom.
+
+Nutrient lockout:
+- Very low or absent Mg can lock out Ca uptake even when Ca is present.
+- Very high GH (>14 dGH) can inhibit micronutrient absorption.
+- If you detect potential lockout conditions from the logged parameters, explain what lockout means and suggest corrective action.
 
 GENERAL RULES:
 - If the tank has any inhabitants, always recommend gradual corrections over rapid ones.
