@@ -735,6 +735,17 @@ Rules:
     phosphate: 0–0.5 ppm normal, >1 ppm high
     potassium: 5–20 ppm normal, >30 ppm high
     iron: 0.05–0.1 ppm normal for planted tanks, >0.3 ppm high
+    calcium: for planted tanks, ideal Ca depends on GH (Ca:Mg ratio should be 3:1–4:1)
+    magnesium: for planted tanks, can be estimated from GH and Ca (see planted tank rules below)
+
+  PLANTED TANK NUTRIENT ANALYSIS (apply when water_type is planted):
+  When GH and Ca are both logged, deduce approximate Mg:
+    Mg (ppm) ≈ (GH_in_dGH × 17.85 - Ca_ppm × 2.5) / 4.12
+  If the calculated Mg is zero or negative, note a potential testing inconsistency or magnesium deficiency.
+  Check the Ca:Mg ratio — ideal is 3:1 to 4:1. If significantly off, mention the imbalance.
+  If K is low (<5 ppm) alongside Ca/Mg issues, note the risk of multiple nutrient deficiencies.
+  Low or absent Mg can cause nutrient lockout — meaning plants cannot absorb Ca even when Ca is present.
+  Include these findings naturally in the summary (e.g. "Calculated magnesium appears very low based on GH and calcium readings, suggesting possible nutrient lockout.").
 
   SALTWATER / REEF:
     ammonia: 0 ppm ideal (any detectable amount is problematic)
