@@ -274,6 +274,11 @@ class AppDb extends _$AppDb {
     );
   }
 
+  Future<Log?> getLogById(int id) async {
+    final results = await (select(logs)..where((r) => r.id.equals(id))).get();
+    return results.isEmpty ? null : results.first;
+  }
+
   Future<void> deleteLog(int id) async {
     await (delete(logs)..where((r) => r.id.equals(id))).go();
   }

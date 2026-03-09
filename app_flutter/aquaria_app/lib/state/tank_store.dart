@@ -623,14 +623,20 @@ class TankStore {
     return _db.logForTankOnDate(tankId, date);
   }
 
-  Future<void> updateLog(int id, String rawText, String? parsedJson) {
-    _cloudSync(() => SupabaseService.updateLog(id, rawText, parsedJson));
-    return _db.updateLog(id, rawText, parsedJson);
+  Future<void> updateLog(int id, String rawText, String? parsedJson) async {
+    final log = await _db.getLogById(id);
+    await _db.updateLog(id, rawText, parsedJson);
+    if (log != null) {
+      _cloudSync(() => SupabaseService.updateLogByKey(log.tankId, log.createdAt, rawText, parsedJson));
+    }
   }
 
-  Future<void> deleteLog(int id) {
-    _cloudSync(() => SupabaseService.deleteLog(id));
-    return _db.deleteLog(id);
+  Future<void> deleteLog(int id) async {
+    final log = await _db.getLogById(id);
+    await _db.deleteLog(id);
+    if (log != null) {
+      await _cloudSync(() => SupabaseService.deleteLogByKey(log.tankId, log.createdAt));
+    }
   }
 
   Future<void> addLogAndInvalidateSummary({

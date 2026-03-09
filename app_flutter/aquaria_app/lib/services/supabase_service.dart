@@ -241,8 +241,28 @@ class SupabaseService {
     }).eq('id', id);
   }
 
+  static Future<void> updateLogByKey(String tankId, DateTime createdAt, String rawText, String? parsedJson) async {
+    final uid = userId;
+    if (uid == null) return;
+    await client.from('logs').update({
+      'raw_text': rawText,
+      'parsed_json': parsedJson,
+    }).eq('user_id', uid).eq('tank_id', tankId).eq('created_at', createdAt.toUtc().toIso8601String());
+  }
+
   static Future<void> deleteLog(int id) async {
     await client.from('logs').delete().eq('id', id);
+  }
+
+  static Future<void> deleteLogByKey(String tankId, DateTime createdAt) async {
+    final uid = userId;
+    if (uid == null) return;
+    await client
+        .from('logs')
+        .delete()
+        .eq('user_id', uid)
+        .eq('tank_id', tankId)
+        .eq('created_at', createdAt.toUtc().toIso8601String());
   }
 
   // ── Tasks ───────────────────────────────────────────────────────────

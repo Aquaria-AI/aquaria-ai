@@ -92,16 +92,16 @@ _SEED_ENTRIES = [
     ("any", "fish", "ich,white spots", "ich treatment",
      "White spots on fish (ich / white spot disease)", "Raise temperature gradually to 82-86°F over 48 hours to speed up the parasite lifecycle. Treat with ich medication — avoid copper if invertebrates are present. Continue for 2 weeks after spots disappear."),
     ("any", "fish", "velvet,gold dust", "velvet treatment",
-     "Gold or rust-coloured dust on fish skin (velvet)", "Velvet is more dangerous than ich. Dim the lights immediately (parasite is photosensitive). Treat with a copper-based medication in a hospital tank if invertebrates are present."),
+     "Gold or rust-colored dust on fish skin (velvet)", "Velvet is more dangerous than ich. Dim the lights immediately (parasite is photosensitive). Treat with a copper-based medication in a hospital tank if invertebrates are present."),
     ("any", "fish", "fin rot,fin damage", "fin rot treatment",
-     "Fins appear ragged, discoloured, or deteriorating", "Often stress or bacterial infection. Improve water quality first — do a 25% water change. Add aquarium salt (1 tsp/gallon) for freshwater fish. If worsening, treat with an antibacterial medication."),
+     "Fins appear ragged, discolored, or deteriorating", "Often stress or bacterial infection. Improve water quality first — do a 25% water change. Add aquarium salt (1 tsp/gallon) for freshwater fish. If worsening, treat with an antibacterial medication."),
     ("any", "fish", "bloat,dropsy,pinecone scales", "dropsy treatment",
      "Fish bloated with raised scales (pinecone appearance)", "Dropsy is usually organ failure — very difficult to treat. Isolate the fish immediately to reduce stress. Epsom salt (1 tbsp/5 gal) can reduce fluid retention. Antibiotics sometimes help if caught early."),
     ("any", "fish", "swim bladder,floating,sinking", "swim bladder issue",
      "Fish floating upside-down or struggling to maintain depth", "Fast the fish for 2-3 days. If constipation is the cause, feeding a peeled, cooked pea often helps. Avoid overfeeding going forward."),
     # Compatibility
     ("freshwater", "betta", "aggression,fighting", "betta compatibility",
-     "Betta attacking or fin-nipping tank mates", "Bettas are territorial. Remove long-finned or brightly coloured fish immediately. Bottom-dwellers and fast-moving schooling fish fare best. Only one male betta per tank."),
+     "Betta attacking or fin-nipping tank mates", "Bettas are territorial. Remove long-finned or brightly colored fish immediately. Bottom-dwellers and fast-moving schooling fish fare best. Only one male betta per tank."),
     ("freshwater", "cichlid,oscar,convict", "aggression,fighting,hiding", "cichlid aggression",
      "Aggressive cichlid bullying or injuring other fish", "Add dense cover — rocks, caves, tall plants — to break sightlines. Rearrange decor to reset territories. Consider separating persistent aggressors."),
     ("freshwater", "shrimp,neocaridina,caridina,cherry shrimp", "dying,death,disappearing", "shrimp dying",
@@ -517,7 +517,7 @@ def _is_action(fragment: str) -> bool:
 _LOG_SYSTEM_PROMPT = """You parse aquarium tank journal entries into three categories. Return ONLY valid JSON — no explanation, no markdown, no code fences.
 
 RELEVANCE RULE — apply before anything else:
-Only log content that is directly related to the aquarium hobby: water parameters, fish/plant/coral/invertebrate health and behaviour, tank equipment, feeding, maintenance, dosing, or scheduling aquarium-related tasks. If the user's message has nothing to do with their aquarium (e.g. personal reminders, jokes, unrelated life events), return all-empty output immediately.
+Only log content that is directly related to the aquarium hobby: water parameters, fish/plant/coral/invertebrate health and behavior, tank equipment, feeding, maintenance, dosing, or scheduling aquarium-related tasks. If the user's message has nothing to do with their aquarium (e.g. personal reminders, jokes, unrelated life events), return all-empty output immediately.
 
 CATEGORY RULES — read carefully:
 
@@ -710,7 +710,7 @@ def parse_tank_log(req: ParseRequest):
     return {"logs": logs}
 
 
-_SUMMARY_SYSTEM_PROMPT = """You are a concise aquarium assistant. Given recent tank journal entries, write a 2-3 sentence summary of the tank's current status. Focus on the most recent measurements, any logged concerns (deaths, high parameters, unusual smells), and recent maintenance. Be direct. Return ONLY the summary text — no JSON, no bullet points, no formatting.
+_SUMMARY_SYSTEM_PROMPT = """You are a concise aquarium assistant. Given recent tank journal entries, write a 2-3 sentence summary of the tank's current status. Focus on the most recent measurements, any logged concerns (deaths, high parameters, unusual smells), and recent maintenance. Be direct. Return ONLY the summary text — no JSON, no bullet points, no formatting. Always use American English spelling.
 
 Rules:
 - Summarize only. Do NOT ask questions. Do NOT request clarification. Do NOT prompt the user for more information.
@@ -817,6 +817,8 @@ def summarize_tank_logs(req: SummaryRequest):
 
 _CHAT_SYSTEM_PROMPT = """You are Ariel, a knowledgeable aquarium assistant embedded in a tank journal app. Your name is Ariel — use it naturally when introducing yourself, but do not repeat it unnecessarily in every reply. The user can log tank events (measurements, actions, observations) by typing in the chat, and you respond conversationally.
 
+LANGUAGE: Always use American English spelling (e.g. "summarizing" not "summarising", "color" not "colour", "behavior" not "behaviour").
+
 SAFETY FIRST — this overrides everything else:
 The health and safety of aquatic life and the user is your highest priority. You provide guidance to help users make informed decisions — you do NOT give specific medical or veterinary advice. All actions are ultimately the user's decision.
 
@@ -839,7 +841,7 @@ Your full capabilities include:
 - Setting aquarium-related reminders and tasks (water changes, testing schedules, dosing, etc.)
 - Creating new tank profiles when the user wants to add a tank
 - Answering aquarium questions and giving advice
-- Summarising tank health from recent logs
+- Summarizing tank health from recent logs
 Do NOT tell the user you cannot do any of the above. These are all things you can and should do.
 
 ABSOLUTE RULE — always follow this first, before anything else:
