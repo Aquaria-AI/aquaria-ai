@@ -205,6 +205,10 @@ AppBar _buildAppBar(BuildContext context, String title, {List<Widget>? actions})
               _showFeedbackSheet(context);
             } else if (value == 'experience') {
               _showExperiencePicker(context);
+            } else if (value == 'onboarding') {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const OnboardingScreen()),
+              );
             } else if (value == 'sign_out') {
               await SupabaseService.signOut();
               await TankStore.instance.clearLocal();
@@ -239,6 +243,7 @@ AppBar _buildAppBar(BuildContext context, String title, {List<Widget>? actions})
               ),
               const PopupMenuDivider(),
             ],
+            const PopupMenuItem(value: 'onboarding', child: Text('Onboarding')),
             const PopupMenuItem(value: 'feedback', child: Text('Feedback')),
             if (SupabaseService.isLoggedIn)
               const PopupMenuItem(value: 'sign_out', child: Text('Sign Out')),
@@ -3841,6 +3846,175 @@ class _TankListScreenState extends State<TankListScreen> {
     }
   }
 
+  int get _totalNotifCount {
+    int count = 0;
+    for (final tasks in _tasksByTank.values) {
+      count += tasks.length;
+    }
+    return count;
+  }
+
+  void _showNotificationsSheet(List<TankModel> tanks) {
+    final items = <({TankModel tank, db.Task task})>[];
+    for (final tank in tanks) {
+      final tasks = _tasksByTank[tank.id] ?? [];
+      for (final t in tasks) {
+        items.add((tank: tank, task: t));
+      }
+    }
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(builder: (ctx, setS) {
+          // Rebuild items from current state
+          final liveItems = <({TankModel tank, db.Task task})>[];
+          for (final tank in tanks) {
+            final tasks = _tasksByTank[tank.id] ?? [];
+            for (final t in tasks) {
+              liveItems.add((tank: tank, task: t));
+            }
+          }
+
+          return SafeArea(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.of(ctx).size.height * 0.5,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.notifications, size: 18, color: Color(0xFFE65100)),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Notifications (${liveItems.length})',
+                          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                        ),
+                        const Spacer(),
+                        IconButton(
+                          icon: const Icon(Icons.close, size: 20),
+                          onPressed: () => Navigator.pop(ctx),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Divider(height: 1),
+                  if (liveItems.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.all(32),
+                      child: Text('No notifications', style: TextStyle(color: Colors.grey)),
+                    )
+                  else
+                    Flexible(
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        itemCount: liveItems.length,
+                        separatorBuilder: (_, __) => const Divider(height: 1, indent: 14),
+                        itemBuilder: (_, i) {
+                          final item = liveItems[i];
+                          final desc = item.task.description;
+                          final label = desc.isEmpty ? '' : desc[0].toUpperCase() + desc.substring(1);
+                          final rawDue = item.task.dueDate;
+                          final dueLabel = (rawDue != null && rawDue.isNotEmpty) ? _fmtNotifDue(rawDue) : null;
+                          final isRecurring = item.task.repeatDays != null && item.task.repeatDays! > 0;
+                          return ListTile(
+                            dense: true,
+                            leading: Icon(
+                              isRecurring ? Icons.repeat : Icons.task_alt,
+                              size: 18,
+                              color: const Color(0xFFE65100),
+                            ),
+                            title: RichText(
+                              text: TextSpan(
+                                style: const TextStyle(fontSize: 13, color: Colors.black87, height: 1.4),
+                                children: [
+                                  TextSpan(
+                                    text: '${item.tank.name}  ',
+                                    style: const TextStyle(fontWeight: FontWeight.w600),
+                                  ),
+                                  TextSpan(text: label),
+                                  if (dueLabel != null)
+                                    TextSpan(
+                                      text: ' — $dueLabel',
+                                      style: const TextStyle(color: Color(0xFF8D6E63)),
+                                    ),
+                                ],
+                              ),
+                            ),
+                            trailing: IconButton(
+                              icon: const Icon(Icons.close, size: 16, color: Color(0xFF8D6E63)),
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                              onPressed: () {
+                                TankStore.instance.dismissTaskById(item.task.id);
+                                _refresh();
+                                setS(() {});
+                              },
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  const Divider(height: 1),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        icon: const Icon(Icons.repeat, size: 18),
+                        label: const Text('Recurring Tasks'),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: _cDark,
+                          side: const BorderSide(color: _cLight),
+                        ),
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          Navigator.of(context).push(MaterialPageRoute(
+                            builder: (_) => const _ManageRecurringTasksScreen(),
+                          )).then((_) => _refresh());
+                        },
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        });
+      },
+    );
+  }
+
+  static String _fmtNotifDue(String raw) {
+    final dt = DateTime.tryParse(raw);
+    if (dt == null) return raw;
+    const ms = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return '${ms[dt.month - 1]} ${dt.day}';
+  }
+
+  Widget _buildNotificationBell(List<TankModel> tanks) {
+    final count = _totalNotifCount;
+    return IconButton(
+      tooltip: 'Notifications',
+      icon: Badge(
+        isLabelVisible: count > 0,
+        label: Text('$count', style: const TextStyle(fontSize: 10)),
+        backgroundColor: const Color(0xFFE65100),
+        child: const Icon(Icons.notifications_none),
+      ),
+      onPressed: () => _showNotificationsSheet(tanks),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final tanks = () {
@@ -3857,15 +4031,11 @@ class _TankListScreenState extends State<TankListScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFFF0F0F0),
       appBar: _buildAppBar(context, '', actions: [
+          _buildNotificationBell(tanks),
           IconButton(
             tooltip: 'Add photo',
             icon: const Icon(Icons.add_a_photo_outlined),
             onPressed: () => pickAndSavePhoto(context),
-          ),
-          IconButton(
-            tooltip: 'Setup guide',
-            icon: const Icon(Icons.explore_outlined),
-            onPressed: _openOnboarding,
           ),
         ]),
       body: _loading
@@ -3879,11 +4049,6 @@ class _TankListScreenState extends State<TankListScreen> {
                     )
                   : Column(
                       children: [
-                        _NotificationsCard(
-                          tanks: tanks,
-                          tasksByTank: _tasksByTank,
-                          onDismissed: _refresh,
-                        ),
                         if (tanks.isEmpty)
                           Expanded(
                             child: Column(
@@ -3955,6 +4120,10 @@ class _TankListScreenState extends State<TankListScreen> {
                                                 Navigator.of(context).push(MaterialPageRoute(
                                                   builder: (_) => AllChartsScreen(tanks: TankStore.instance.tanks),
                                                 ));
+                                              } else if (value == 'recurring_tasks') {
+                                                Navigator.of(context).push(MaterialPageRoute(
+                                                  builder: (_) => const _ManageRecurringTasksScreen(),
+                                                )).then((_) => _refresh());
                                               } else if (value == 'archived') {
                                                 Navigator.of(context).push(MaterialPageRoute(
                                                   builder: (_) => const ArchivedTanksScreen(),
@@ -3972,6 +4141,7 @@ class _TankListScreenState extends State<TankListScreen> {
                                               const PopupMenuItem(value: 'za', child: Text('Sort: Z → A')),
                                               const PopupMenuDivider(),
                                               const PopupMenuItem(value: 'charts', child: Text('View All Charts')),
+                                              const PopupMenuItem(value: 'recurring_tasks', child: Text('Recurring Tasks')),
                                               const PopupMenuItem(value: 'archived', child: Text('Archived Tanks')),
                                             ],
                                           ),
@@ -4042,8 +4212,11 @@ class _TankListScreenState extends State<TankListScreen> {
                                             case 'note':
                                               await _showAddNoteDialog(t);
                                               break;
-                                            case 'recurring':
-                                              await _showRecurringTaskDialog(t);
+                                            case 'manage_recurring':
+                                              await Navigator.of(context).push(MaterialPageRoute(
+                                                builder: (_) => _ManageRecurringTasksScreen(tankId: t.id),
+                                              ));
+                                              await _refresh();
                                               break;
                                             case 'archive':
                                               await _archiveTank(t.id);
@@ -4060,8 +4233,8 @@ class _TankListScreenState extends State<TankListScreen> {
                                             child: Text('Add Note'),
                                           ),
                                           PopupMenuItem<String>(
-                                            value: 'recurring',
-                                            child: Text('Recurring Task'),
+                                            value: 'manage_recurring',
+                                            child: Text('Recurring Tasks'),
                                           ),
                                           PopupMenuItem<String>(
                                             value: 'archive',
@@ -5769,13 +5942,15 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
                     if (value == 'add_note') {
                       _showAddNoteDialog();
                     }
-                    if (value == 'recurring') {
-                      _showRecurringTaskDialog();
+                    if (value == 'manage_recurring') {
+                      Navigator.of(context).push(MaterialPageRoute(
+                        builder: (_) => _ManageRecurringTasksScreen(tankId: _tank.id),
+                      )).then((_) => _load());
                     }
                   },
                   itemBuilder: (_) => [
                     const PopupMenuItem(value: 'add_note', child: Text('Add Note')),
-                    const PopupMenuItem(value: 'recurring', child: Text('Recurring Task')),
+                    const PopupMenuItem(value: 'manage_recurring', child: Text('Recurring Tasks')),
                     const PopupMenuItem(value: 'photos', child: Text('Photos')),
                     const PopupMenuItem(value: 'edit_tank', child: Text('Edit Tank')),
                     const PopupMenuItem(value: 'tap_water', child: Text('Tap Water Profile')),
@@ -10838,6 +11013,268 @@ class _EditInhabitantsScreenState extends State<EditInhabitantsScreen> {
             }),
           ],
         ),
+      ),
+    );
+  }
+}
+
+String _frequencyLabel(int days) {
+  if (days == 1) return 'Daily';
+  if (days == 7) return 'Weekly';
+  if (days == 14) return 'Every 2 weeks';
+  if (days == 30) return 'Monthly';
+  if (days == 90) return 'Every 3 months';
+  if (days == 3) return 'Every 3 days';
+  return 'Every $days days';
+}
+
+class _ManageRecurringTasksScreen extends StatefulWidget {
+  final String? tankId; // if non-null, pre-filter to this tank
+  const _ManageRecurringTasksScreen({this.tankId});
+
+  @override
+  State<_ManageRecurringTasksScreen> createState() => _ManageRecurringTasksScreenState();
+}
+
+class _ManageRecurringTasksScreenState extends State<_ManageRecurringTasksScreen> {
+  bool _loading = true;
+  List<db.Task> _tasks = [];
+  Map<String, String> _tankNames = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final tasks = await TankStore.instance.getRecurringTasks(tankId: widget.tankId);
+    final names = <String, String>{};
+    for (final t in TankStore.instance.tanks) {
+      names[t.id] = t.name;
+    }
+    if (!mounted) return;
+    setState(() {
+      _tasks = tasks;
+      _tankNames = names;
+      _loading = false;
+    });
+  }
+
+  Future<void> _editFrequency(db.Task task) async {
+    final frequencies = [
+      (label: 'Daily', days: 1),
+      (label: 'Every 3 days', days: 3),
+      (label: 'Weekly', days: 7),
+      (label: 'Every 2 weeks', days: 14),
+      (label: 'Monthly', days: 30),
+      (label: 'Every 3 months', days: 90),
+    ];
+    int selected = frequencies.indexWhere((f) => f.days == task.repeatDays);
+    if (selected < 0) selected = 2;
+
+    final result = await showDialog<int>(
+      context: context,
+      builder: (ctx) {
+        int sel = selected;
+        return StatefulBuilder(builder: (ctx, setS) {
+          return AlertDialog(
+            title: const Text('Change Frequency', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: frequencies.asMap().entries.map((e) {
+                return RadioListTile<int>(
+                  title: Text(e.value.label),
+                  value: e.key,
+                  groupValue: sel,
+                  onChanged: (v) => setS(() => sel = v!),
+                  dense: true,
+                );
+              }).toList(),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+              FilledButton(onPressed: () => Navigator.pop(ctx, frequencies[sel].days), child: const Text('Save')),
+            ],
+          );
+        });
+      },
+    );
+    if (result != null && result != task.repeatDays) {
+      await TankStore.instance.updateTaskFrequency(task.id, result);
+      await _load();
+    }
+  }
+
+  Future<void> _confirmDelete(db.Task task) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Task', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+        content: Text('Delete "${task.description}"? This cannot be undone.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await TankStore.instance.deleteTask(task.id);
+      await _load();
+    }
+  }
+
+  Future<void> _createTask() async {
+    final tanks = TankStore.instance.tanks;
+    if (tanks.isEmpty) return;
+
+    TankModel target;
+    if (widget.tankId != null) {
+      target = tanks.firstWhere((t) => t.id == widget.tankId, orElse: () => tanks.first);
+    } else if (tanks.length == 1) {
+      target = tanks.first;
+    } else {
+      // Let user pick a tank first
+      final picked = await showDialog<TankModel>(
+        context: context,
+        builder: (ctx) => SimpleDialog(
+          title: const Text('Select Tank', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+          children: tanks.map((t) => SimpleDialogOption(
+            onPressed: () => Navigator.pop(ctx, t),
+            child: Text(t.name),
+          )).toList(),
+        ),
+      );
+      if (picked == null) return;
+      target = picked;
+    }
+
+    if (!mounted) return;
+    final result = await showDialog<({String task, int days, DateTime startDate})>(
+      context: context,
+      builder: (ctx) => _RecurringTaskPicker(tankName: target.name, waterType: target.waterType),
+    );
+    if (result != null && mounted) {
+      final due = result.startDate;
+      final dueStr = '${due.year}-${due.month.toString().padLeft(2, '0')}-${due.day.toString().padLeft(2, '0')}';
+      await TankStore.instance.addTask(
+        tankId: target.id,
+        description: result.task,
+        dueDate: dueStr,
+        source: 'recurring',
+        repeatDays: result.days,
+      );
+      await _load();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Recurring task added')));
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Group tasks by tank
+    final grouped = <String, List<db.Task>>{};
+    for (final t in _tasks) {
+      grouped.putIfAbsent(t.tankId, () => []).add(t);
+    }
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Recurring Tasks')),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _createTask,
+        backgroundColor: _cDark,
+        child: const Icon(Icons.add, color: Colors.white),
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : _tasks.isEmpty
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(32),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.repeat, size: 48, color: Colors.grey.shade400),
+                        const SizedBox(height: 12),
+                        Text('No recurring tasks yet',
+                            style: TextStyle(fontSize: 16, color: Colors.grey.shade600)),
+                        const SizedBox(height: 6),
+                        Text('Tap + to create one',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(fontSize: 13, color: Colors.grey.shade500)),
+                      ],
+                    ),
+                  ),
+                )
+              : ListView(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  children: grouped.entries.map((entry) {
+                    final tankName = _tankNames[entry.key] ?? 'Unknown Tank';
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                          child: Text(tankName,
+                              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _cDark)),
+                        ),
+                        ...entry.value.map((task) => _buildTaskTile(task)),
+                        const Divider(height: 1),
+                      ],
+                    );
+                  }).toList(),
+                ),
+    );
+  }
+
+  Widget _buildTaskTile(db.Task task) {
+    final freq = task.repeatDays != null ? _frequencyLabel(task.repeatDays!) : '—';
+    final paused = task.isPaused;
+    final dueDateStr = task.dueDate ?? '';
+
+    return ListTile(
+      leading: Icon(
+        paused ? Icons.pause_circle_filled : Icons.repeat,
+        color: paused ? Colors.orange : _cDark,
+        size: 22,
+      ),
+      title: Text(
+        task.description,
+        style: TextStyle(
+          fontSize: 14,
+          color: paused ? Colors.grey : Colors.black87,
+          decoration: paused ? TextDecoration.lineThrough : null,
+        ),
+      ),
+      subtitle: Text(
+        '$freq${dueDateStr.isNotEmpty ? ' · Next: $dueDateStr' : ''}',
+        style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+      ),
+      trailing: PopupMenuButton<String>(
+        icon: const Icon(Icons.more_vert, size: 20),
+        onSelected: (value) async {
+          if (value == 'pause') {
+            await TankStore.instance.toggleTaskPaused(task.id, !task.isPaused);
+            await _load();
+          } else if (value == 'frequency') {
+            await _editFrequency(task);
+          } else if (value == 'delete') {
+            await _confirmDelete(task);
+          }
+        },
+        itemBuilder: (_) => [
+          PopupMenuItem(
+            value: 'pause',
+            child: Text(paused ? 'Resume' : 'Pause'),
+          ),
+          const PopupMenuItem(value: 'frequency', child: Text('Change Frequency')),
+          const PopupMenuItem(value: 'delete', child: Text('Delete')),
+        ],
       ),
     );
   }

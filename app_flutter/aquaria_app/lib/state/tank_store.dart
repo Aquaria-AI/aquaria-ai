@@ -261,6 +261,11 @@ class TankStore {
     _dismissedTaskKeys
       ..clear()
       ..addAll(saved);
+    // One-time dedup of existing duplicate tasks
+    final removed = await _db.deduplicateActiveTasks();
+    if (removed > 0) {
+      debugPrint('[TankStore] Removed $removed duplicate task(s)');
+    }
   }
 
   Future<void> addFromParse({
@@ -482,8 +487,8 @@ class TankStore {
     await _db.dismissTaskById(id);
     _cloudSync(() => SupabaseService.dismissTaskById(id));
 
-    // Auto-create next occurrence for recurring tasks
-    if (task != null && task.repeatDays != null && task.repeatDays! > 0) {
+    // Auto-create next occurrence for recurring tasks (skip if paused)
+    if (task != null && task.repeatDays != null && task.repeatDays! > 0 && !task.isPaused) {
       final nextDue = DateTime.now().add(Duration(days: task.repeatDays!));
       final nextDueStr = '${nextDue.year}-${nextDue.month.toString().padLeft(2, '0')}-${nextDue.day.toString().padLeft(2, '0')}';
       await addTask(
@@ -495,6 +500,21 @@ class TankStore {
         repeatDays: task.repeatDays,
       );
     }
+  }
+
+  Future<List<db.Task>> getRecurringTasks({String? tankId}) =>
+      _db.allActiveRecurringTasks(tankId: tankId);
+
+  Future<void> updateTaskFrequency(int id, int newRepeatDays) async {
+    await _db.updateTaskRepeatDays(id, newRepeatDays);
+  }
+
+  Future<void> toggleTaskPaused(int id, bool paused) async {
+    await _db.setTaskPaused(id, paused);
+  }
+
+  Future<void> deleteTask(int id) async {
+    await _db.deleteTask(id);
   }
 
   // ----------------------------------------------------------------

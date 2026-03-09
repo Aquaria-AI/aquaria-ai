@@ -1077,7 +1077,7 @@ def _quick_extract_task(message: str, today: date) -> Optional[Dict[str, Any]]:
     return None
 
 
-_TASK_EXTRACT_PROMPT = """Extract the reminder or task from this conversation. The assistant has CONFIRMED setting a reminder, so there IS a task to extract.
+_TASK_EXTRACT_PROMPT = """Extract ONLY confirmed reminders/tasks from this conversation.
 
 Today's date is {today}.
 
@@ -1085,14 +1085,16 @@ Return ONLY valid JSON (no markdown, no explanation):
 {{"tasks": [{{"description": "short action description", "due_date": "YYYY-MM-DD"}}]}}
 
 Rules:
-- ALWAYS extract at least one task — the assistant confirmed a reminder exists
-- Focus on the MOST RECENT task the assistant confirmed — the last reminder set in the conversation
+- Extract ONLY tasks that the assistant has EXPLICITLY CONFIRMED as set/scheduled in its FINAL message
+- If the assistant merely OFFERED or SUGGESTED a reminder but the user hasn't confirmed yet, return {{"tasks": []}}
+- If the assistant is asking a follow-up question, return {{"tasks": []}}
+- Extract at most ONE task — the single most recent confirmed task
 - Do NOT re-extract tasks that were already confirmed in earlier turns
 - due_date must be an absolute date (YYYY-MM-DD), computed from today's date
 - "tomorrow" = today + 1 day, "in N days" = today + N days, "next week" = today + 7 days
 - If no specific timeframe was mentioned, default to tomorrow
 - description should be a short, clear action phrase (e.g. "Check ammonia", "Water change")
-- Look at the assistant's FINAL message to identify what was just confirmed"""
+- When in doubt, return {{"tasks": []}} — it's better to miss a task than create a duplicate"""
 
 
 _NEW_INHABITANT_EXTRACT_PROMPT = """Based on this conversation, extract the new inhabitant(s) the user wants to add to their tank profile.
@@ -1160,15 +1162,24 @@ def _history_has_tank_creation_offer(history: list) -> tuple[bool, str]:
 
 
 def _history_has_reminder_offer(history: list) -> tuple[bool, str]:
-    """Returns (has_offer, ai_message_text) scanning recent history for reminder context."""
-    # Check the last 6 messages (3 exchanges) for any reminder-related discussion
-    recent = (history or [])[-6:]
+    """Returns (has_offer, ai_message_text) if a recent AI message explicitly offered to set a reminder."""
+    # Only check the last 4 messages (2 exchanges) for an explicit AI offer
+    recent = (history or [])[-4:]
     for msg in reversed(recent):
+        if msg.get("role") != "assistant":
+            continue
         content = msg.get("content", "")
         lower = content.lower()
+        # Must be an explicit offer from the AI to set/create a reminder
         if any(k in lower for k in [
-            "reminder", "remind", "schedule", "would you like me to set",
-            "set a reminder", "which tank", "what tank",
+            "would you like me to set",
+            "would you like a reminder",
+            "want me to set a reminder",
+            "shall i set a reminder",
+            "i can set a reminder",
+            "i can remind you",
+            "want me to remind",
+            "shall i remind",
         ]):
             return True, content
     return False, ""
@@ -1482,13 +1493,14 @@ def chat_tank(req: ChatRequest):
         # 3. User explicitly requested a reminder/task
         extracted_tasks: List[Dict[str, Any]] = []
 
+        # Only match phrases that confirm a task/reminder WAS set (past tense / done),
+        # NOT future offers like "I'll remind you" or "would you like a reminder?"
         reply_confirms_task_set = any(k in reply_lower for k in [
             "i've set", "i have set", "reminder set", "reminder scheduled",
-            "i'll remind", "i will remind", "set a reminder", "scheduled a reminder",
-            "reminder for", "added a reminder", "task set", "i've added a reminder",
-            "i've created a reminder", "i have created a reminder",
-            "i'll set a reminder", "i'll add a reminder", "noted. i'll remind",
-            "remind you", "i've scheduled", "i have scheduled",
+            "scheduled a reminder", "added a reminder", "task set",
+            "i've added a reminder", "i've created a reminder", "i have created a reminder",
+            "i've scheduled", "i have scheduled", "done! i'll remind",
+            "all set", "reminder added", "task added", "task created",
         ])
 
         user_explicit_task_request = bool(re.search(
@@ -1509,7 +1521,6 @@ def chat_tank(req: ChatRequest):
             (_is_affirmation(req.message) and history_has_reminder)
             or reply_confirms_task_set
             or (user_explicit_task_request and not reply_is_question)
-            or (history_has_reminder and "reminder" in reply_lower and not reply_is_question)
         )
 
         print(f"[TaskExtract] should_extract={should_extract_tasks} reply_confirms={reply_confirms_task_set} user_explicit={user_explicit_task_request} is_affirmation={_is_affirmation(req.message)} user_msg='{req.message[:80]}' reply_snippet='{reply_lower[:80]}'")

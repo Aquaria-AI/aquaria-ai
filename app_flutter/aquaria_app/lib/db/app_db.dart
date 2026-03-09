@@ -95,6 +95,7 @@ class Tasks extends Table {
   BoolColumn get isDismissed => boolean().withDefault(const Constant(false))();
   DateTimeColumn get dismissedAt => dateTime().nullable()();
   IntColumn get repeatDays => integer().nullable()(); // recurrence interval in days (null = one-off)
+  BoolColumn get isPaused => boolean().withDefault(const Constant(false))();
   DateTimeColumn get createdAt =>
       dateTime().withDefault(Constant(DateTime.now()))();
 
@@ -118,7 +119,7 @@ class AppDb extends _$AppDb {
   AppDb() : super(_openConnection());
 
   @override
-  int get schemaVersion => 11;
+  int get schemaVersion => 12;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -162,6 +163,9 @@ class AppDb extends _$AppDb {
           }
           if (from <= 10) {
             await migrator.addColumn(tasks, tasks.repeatDays);
+          }
+          if (from <= 11) {
+            await migrator.addColumn(tasks, tasks.isPaused);
           }
         },
       );
@@ -325,21 +329,48 @@ class AppDb extends _$AppDb {
   }
 
   Future<bool> hasDuplicateTask(String tankId, String description, String? dueDate) async {
-    final query = select(tasks)
-      ..where((r) =>
-          r.tankId.equals(tankId) &
-          r.description.equals(description) &
-          r.isDismissed.equals(false));
-    if (dueDate != null) {
-      query.where((r) => r.dueDate.equals(dueDate));
+    // Check both active AND recently dismissed tasks (last 7 days) to avoid
+    // re-creating the same task that was just dismissed or already exists.
+    final cutoff = DateTime.now().subtract(const Duration(days: 7));
+    final allMatches = await (select(tasks)
+          ..where((r) => r.tankId.equals(tankId)))
+        .get();
+    final descLower = description.toLowerCase().trim();
+    for (final t in allMatches) {
+      if (t.description.toLowerCase().trim() != descLower) continue;
+      // Active (not dismissed) task with same description = duplicate
+      if (!t.isDismissed) return true;
+      // Recently dismissed task with same description = duplicate
+      if (t.dismissedAt != null && t.dismissedAt!.isAfter(cutoff)) return true;
     }
-    final rows = await query.get();
-    return rows.isNotEmpty;
+    return false;
   }
 
   Future<Task?> getTaskById(int id) async {
     final rows = await (select(tasks)..where((r) => r.id.equals(id))).get();
     return rows.isEmpty ? null : rows.first;
+  }
+
+  Future<List<Task>> allActiveRecurringTasks({String? tankId}) {
+    final q = select(tasks)
+      ..where((r) => r.isDismissed.equals(false) & r.repeatDays.isNotNull())
+      ..orderBy([(r) => OrderingTerm.asc(r.dueDate)]);
+    if (tankId != null) {
+      q.where((r) => r.tankId.equals(tankId));
+    }
+    return q.get();
+  }
+
+  Future<void> updateTaskRepeatDays(int id, int repeatDays) async {
+    await (update(tasks)..where((r) => r.id.equals(id))).write(
+      TasksCompanion(repeatDays: Value(repeatDays)),
+    );
+  }
+
+  Future<void> setTaskPaused(int id, bool paused) async {
+    await (update(tasks)..where((r) => r.id.equals(id))).write(
+      TasksCompanion(isPaused: Value(paused)),
+    );
   }
 
   Future<void> dismissTaskById(int id) async {
@@ -383,6 +414,26 @@ class AppDb extends _$AppDb {
 
   Future<void> insertChatSession(ChatSessionsCompanion entry) =>
       into(chatSessions).insert(entry);
+
+  /// Remove duplicate active tasks — keep only the oldest per (tankId, description).
+  Future<int> deduplicateActiveTasks() async {
+    final allActive = await (select(tasks)
+          ..where((r) => r.isDismissed.equals(false))
+          ..orderBy([(r) => OrderingTerm.asc(r.createdAt)]))
+        .get();
+    final seen = <String>{};
+    int removed = 0;
+    for (final t in allActive) {
+      final key = '${t.tankId}|${t.description.toLowerCase().trim()}';
+      if (seen.contains(key)) {
+        await (delete(tasks)..where((r) => r.id.equals(t.id))).go();
+        removed++;
+      } else {
+        seen.add(key);
+      }
+    }
+    return removed;
+  }
 
   Future<void> clearAll() async {
     await delete(chatSessions).go();
