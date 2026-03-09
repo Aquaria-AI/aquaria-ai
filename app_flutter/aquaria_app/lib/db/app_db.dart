@@ -324,6 +324,19 @@ class AppDb extends _$AppDb {
     return rows.isNotEmpty;
   }
 
+  Future<bool> hasDuplicateTask(String tankId, String description, String? dueDate) async {
+    final query = select(tasks)
+      ..where((r) =>
+          r.tankId.equals(tankId) &
+          r.description.equals(description) &
+          r.isDismissed.equals(false));
+    if (dueDate != null) {
+      query.where((r) => r.dueDate.equals(dueDate));
+    }
+    final rows = await query.get();
+    return rows.isNotEmpty;
+  }
+
   Future<Task?> getTaskById(int id) async {
     final rows = await (select(tasks)..where((r) => r.id.equals(id))).get();
     return rows.isEmpty ? null : rows.first;

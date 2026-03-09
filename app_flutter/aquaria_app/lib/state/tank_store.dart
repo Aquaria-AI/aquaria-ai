@@ -436,13 +436,11 @@ class TankStore {
     String source = 'ai',
     int? repeatDays,
   }) async {
-    // Prevent duplicate recurring tasks for the same tank + description
-    if (repeatDays != null && repeatDays > 0) {
-      final exists = await _db.hasActiveRecurringTask(tankId, description);
-      if (exists) {
-        debugPrint('[TankStore] addTask: skipping duplicate recurring task "$description"');
-        return;
-      }
+    // Prevent duplicate tasks for the same tank + description + due date
+    final isDuplicate = await _db.hasDuplicateTask(tankId, description, dueDate);
+    if (isDuplicate) {
+      debugPrint('[TankStore] addTask: skipping duplicate task "$description" due=$dueDate');
+      return;
     }
     await _db.insertTask(db.TasksCompanion.insert(
       tankId: tankId,

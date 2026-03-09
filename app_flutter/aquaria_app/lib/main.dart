@@ -5551,30 +5551,30 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
     }
     // For planted tanks: deduce Mg from GH and Ca, calculate Ca:Mg ratio
     final isPlanted = _tank.waterType == WaterType.planted;
-    if (isPlanted && raw.containsKey('gh') && raw.containsKey('calcium') && !raw.containsKey('magnesium')) {
+    if (isPlanted && raw.containsKey('gh') && raw.containsKey('calcium') && !raw.containsKey('magnesium')
+        && raw['gh']!.date == raw['calcium']!.date) {
       final ghVal = double.tryParse(raw['gh']!.value.replaceAll(RegExp(r'[^\d.]'), ''));
       final caVal = double.tryParse(raw['calcium']!.value.replaceAll(RegExp(r'[^\d.]'), ''));
       if (ghVal != null && caVal != null) {
         final ghPpm = ghVal * 17.85;
         final mgPpm = (ghPpm - caVal * 2.5) / 4.12;
-        final newerDate = raw['gh']!.date.isAfter(raw['calcium']!.date) ? raw['gh']!.date : raw['calcium']!.date;
+        final date = raw['gh']!.date;
         if (mgPpm <= 0) {
-          raw['magnesium'] = (value: '≈0', date: newerDate, deduced: true);
+          raw['magnesium'] = (value: '≈0', date: date, deduced: true);
         } else {
-          raw['magnesium'] = (value: '≈${mgPpm.toStringAsFixed(1)}', date: newerDate, deduced: true);
+          raw['magnesium'] = (value: '≈${mgPpm.toStringAsFixed(1)}', date: date, deduced: true);
         }
       }
     }
-    if (isPlanted && raw.containsKey('calcium') && raw.containsKey('magnesium')) {
+    if (isPlanted && raw.containsKey('calcium') && raw.containsKey('magnesium')
+        && raw['calcium']!.date == raw['magnesium']!.date) {
       final caVal = double.tryParse(raw['calcium']!.value.replaceAll(RegExp(r'[^\d.≈]'), ''));
       final mgVal = double.tryParse(raw['magnesium']!.value.replaceAll(RegExp(r'[^\d.≈]'), ''));
       if (caVal != null && mgVal != null && mgVal > 0) {
         final ratio = caVal / mgVal;
-        final newerDate = raw['calcium']!.date.isAfter(raw['magnesium']!.date) ? raw['calcium']!.date : raw['magnesium']!.date;
-        raw['ca_mg_ratio'] = (value: '${ratio.toStringAsFixed(1)}:1', date: newerDate, deduced: true);
+        raw['ca_mg_ratio'] = (value: '${ratio.toStringAsFixed(1)}:1', date: raw['calcium']!.date, deduced: true);
       } else if (mgVal == null || mgVal <= 0) {
-        final newerDate = raw['calcium']!.date;
-        raw['ca_mg_ratio'] = (value: '⚠ no Mg', date: newerDate, deduced: true);
+        raw['ca_mg_ratio'] = (value: '⚠ no Mg', date: raw['calcium']!.date, deduced: true);
       }
     }
     // Return in preferred order, then any extras
@@ -6248,9 +6248,27 @@ class _ChatSheetState extends State<_ChatSheet> {
   @override
   void dispose() {
     _summarizeAndSaveSession();
+    _flushPendingTasks();
     _inputController.dispose();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  void _flushPendingTasks() {
+    if (_pendingTasks.isEmpty) return;
+    final tank = _selectedTank ?? (widget.allTanks.length == 1 ? widget.allTanks.first : null);
+    if (tank == null) return;
+    for (final task in _pendingTasks) {
+      TankStore.instance.addTask(
+        tankId: tank.id,
+        description: (task['description'] ?? '').toString(),
+        dueDate: (task['due_date'] ?? task['due'])?.toString(),
+        priority: (task['priority'] ?? 'normal').toString(),
+        source: 'ai',
+      );
+    }
+    _pendingTasks = [];
+    widget.onLogsChanged();
   }
 
   void _summarizeAndSaveSession() {
@@ -6814,8 +6832,10 @@ class _ChatSheetState extends State<_ChatSheet> {
                   source: 'ai',
                 );
               }
-              widget.onLogsChanged();
-            } catch (_) {}
+            } catch (e) {
+              debugPrint('[Chat] addTask error: $e');
+            }
+            widget.onLogsChanged();
           }
         }
       }
