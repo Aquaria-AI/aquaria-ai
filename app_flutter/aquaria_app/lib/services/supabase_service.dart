@@ -37,6 +37,13 @@ class SupabaseService {
     return client.auth.signOut();
   }
 
+  /// Returns true if the current user's account has been closed (soft-deleted).
+  static Future<bool> isAccountClosed() async {
+    final profile = await fetchProfile();
+    if (profile == null) return false;
+    return profile['closed_at'] != null;
+  }
+
   /// Close the current user's account (soft-delete).
   /// Sets profiles.closed_at so RLS blocks all data access,
   /// then signs the user out. Data retained per privacy policy.

@@ -3298,25 +3298,45 @@ class _AppEntryState extends State<_AppEntry> {
     );
   }
 
+  Future<void> _onAuthSuccess() async {
+    // Block closed accounts from re-entering
+    if (await SupabaseService.isAccountClosed()) {
+      await SupabaseService.signOut();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('This account has been closed.')),
+      );
+      _navigatorKey.currentState?.pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const _AppEntry()),
+        (_) => false,
+      );
+      return;
+    }
+    // Check if user has accepted current legal terms
+    final accepted = await SupabaseService.hasAcceptedCurrentTerms();
+    if (!accepted) {
+      _navigatorKey.currentState?.pushAndRemoveUntil(
+        MaterialPageRoute(
+          builder: (_) => LegalAcceptanceScreen(onAccepted: () async {
+            await _enterApp();
+          }),
+        ),
+        (_) => false,
+      );
+      return;
+    }
+    await _enterApp();
+  }
+
   Future<Widget> _resolveStartScreen() async {
     // Require authentication before entering the app
     if (!SupabaseService.isLoggedIn) {
-      return AuthScreen(onAuthSuccess: () async {
-        // Check if user has accepted current legal terms
-        final accepted = await SupabaseService.hasAcceptedCurrentTerms();
-        if (!accepted) {
-          _navigatorKey.currentState?.pushAndRemoveUntil(
-            MaterialPageRoute(
-              builder: (_) => LegalAcceptanceScreen(onAccepted: () async {
-                await _enterApp();
-              }),
-            ),
-            (_) => false,
-          );
-          return;
-        }
-        await _enterApp();
-      });
+      return AuthScreen(onAuthSuccess: _onAuthSuccess);
+    }
+    // Already logged in — block closed accounts
+    if (await SupabaseService.isAccountClosed()) {
+      await SupabaseService.signOut();
+      return AuthScreen(onAuthSuccess: _onAuthSuccess);
     }
     // Already logged in — check legal acceptance
     final accepted = await SupabaseService.hasAcceptedCurrentTerms();
