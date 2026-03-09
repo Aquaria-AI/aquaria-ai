@@ -5497,8 +5497,6 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
   String? _summary;
   bool _summaryLoading = false;
   bool _summaryExpanded = false;
-  bool _notifExpanded = false;
-  static const _kNotifLimit = 3;
   String _experience = 'beginner';
 
   @override
@@ -5876,10 +5874,151 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
 
   String _fmtVal(double v) => v == v.truncateToDouble() ? v.toInt().toString() : v.toStringAsFixed(2);
 
+  Widget _buildTankNotificationBell() {
+    final activeTasks = _tasks.where((t) => !t.isDismissed).toList();
+    final count = activeTasks.length;
+    return IconButton(
+      tooltip: 'Notifications',
+      icon: Badge(
+        isLabelVisible: count > 0,
+        label: Text('$count', style: const TextStyle(fontSize: 10)),
+        backgroundColor: const Color(0xFFE65100),
+        child: const Icon(Icons.notifications_none),
+      ),
+      onPressed: () => _showTankNotificationsSheet(activeTasks),
+    );
+  }
+
+  void _showTankNotificationsSheet(List<db.Task> activeTasks) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(builder: (ctx, setS) {
+          final liveTasks = _tasks.where((t) => !t.isDismissed).toList();
+          return SafeArea(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.of(ctx).size.height * 0.5,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.notifications, size: 18, color: Color(0xFFE65100)),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Notifications (${liveTasks.length})',
+                          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                        ),
+                        const Spacer(),
+                        IconButton(
+                          icon: const Icon(Icons.close, size: 20),
+                          onPressed: () => Navigator.pop(ctx),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Divider(height: 1),
+                  if (liveTasks.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.all(32),
+                      child: Text('No notifications', style: TextStyle(color: Colors.grey)),
+                    )
+                  else
+                    Flexible(
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        itemCount: liveTasks.length,
+                        separatorBuilder: (_, __) => const Divider(height: 1, indent: 14),
+                        itemBuilder: (_, i) {
+                          final task = liveTasks[i];
+                          final desc = task.description;
+                          final label = desc.isEmpty ? '' : desc[0].toUpperCase() + desc.substring(1);
+                          final rawDue = task.dueDate;
+                          final dueLabel = (rawDue != null && rawDue.isNotEmpty) ? _fmtNotifDue(rawDue) : null;
+                          final isRecurring = task.repeatDays != null && task.repeatDays! > 0;
+                          return ListTile(
+                            dense: true,
+                            leading: Icon(
+                              isRecurring ? Icons.repeat : Icons.task_alt,
+                              size: 18,
+                              color: const Color(0xFFE65100),
+                            ),
+                            title: RichText(
+                              text: TextSpan(
+                                style: const TextStyle(fontSize: 13, color: Colors.black87, height: 1.4),
+                                children: [
+                                  TextSpan(text: label),
+                                  if (dueLabel != null)
+                                    TextSpan(
+                                      text: ' — $dueLabel',
+                                      style: const TextStyle(color: Color(0xFF8D6E63)),
+                                    ),
+                                ],
+                              ),
+                            ),
+                            trailing: IconButton(
+                              icon: const Icon(Icons.close, size: 16, color: Color(0xFF8D6E63)),
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                              onPressed: () {
+                                TankStore.instance.dismissTaskById(task.id);
+                                _load();
+                                setS(() {});
+                              },
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  const Divider(height: 1),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        icon: const Icon(Icons.repeat, size: 18),
+                        label: const Text('Recurring Tasks'),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: _cDark,
+                          side: const BorderSide(color: _cLight),
+                        ),
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          Navigator.of(context).push(MaterialPageRoute(
+                            builder: (_) => _ManageRecurringTasksScreen(tankId: _tank.id),
+                          )).then((_) => _load());
+                        },
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        });
+      },
+    );
+  }
+
+  static String _fmtNotifDue(String raw) {
+    final dt = DateTime.tryParse(raw);
+    if (dt == null) return raw;
+    const ms = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return '${ms[dt.month - 1]} ${dt.day}';
+  }
+
   @override
   Widget build(BuildContext context) {
     final tasks = _tasks;
-    final measurementAlerts = _measurementAlerts();
     return Scaffold(
       appBar: _buildAppBar(context, '', actions: [
         IconButton(
@@ -5917,6 +6056,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
                     style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: _cDark),
                   ),
                 ),
+                _buildTankNotificationBell(),
                 PopupMenuButton<String>(
                   tooltip: 'More options',
                   onSelected: (value) {
@@ -6022,116 +6162,6 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
             ),
           ),
           const SizedBox(height: 10),
-          // notifications card
-          if (measurementAlerts.isNotEmpty || tasks.isNotEmpty) ...() {
-            final allTasks = tasks;
-            if (measurementAlerts.isEmpty && allTasks.isEmpty) return <Widget>[];
-            final visibleTasks = (_notifExpanded || allTasks.length <= _kNotifLimit)
-                ? allTasks
-                : allTasks.take(_kNotifLimit).toList();
-            final hiddenCount = allTasks.length - _kNotifLimit;
-            return [Padding(
-              padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
-              child: Card(
-                elevation: 0,
-                color: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  side: const BorderSide(color: _cLight, width: 1),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(14, 12, 8, 12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Row(
-                        children: [
-                          Icon(Icons.notifications_active, size: 15, color: Color(0xFFE65100)),
-                          SizedBox(width: 4),
-                          Text('NOTIFICATIONS', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
-                              color: Color(0xFFE65100), letterSpacing: 0.8)),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      ...measurementAlerts.map((msg) => Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Padding(
-                              padding: EdgeInsets.only(top: 3),
-                              child: Icon(Icons.warning_amber_rounded, size: 14, color: Color(0xFFE65100)),
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(child: Text(msg, style: const TextStyle(fontSize: 13, height: 1.4, color: Colors.black87))),
-                          ],
-                        ),
-                      )),
-                      ...visibleTasks.map((t) {
-                        final desc = t.description;
-                        final rawDue = t.dueDate;
-                        String? dueLabel;
-                        if (rawDue != null && rawDue.isNotEmpty) {
-                          final dt = DateTime.tryParse(rawDue);
-                          if (dt != null) {
-                            const ms = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-                            dueLabel = '${ms[dt.month - 1]} ${dt.day}, ${dt.year}';
-                          } else {
-                            dueLabel = rawDue;
-                          }
-                        }
-                        final label = desc.isEmpty ? '' : desc[0].toUpperCase() + desc.substring(1);
-                        final isRecurring = t.repeatDays != null && t.repeatDays! > 0;
-                        return Padding(
-                          padding: const EdgeInsets.only(top: 6),
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.center,
-                            children: [
-                              Icon(isRecurring ? Icons.repeat : Icons.square, size: isRecurring ? 13 : 8, color: const Color(0xFFE65100)),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: RichText(
-                                  text: TextSpan(
-                                    style: const TextStyle(fontSize: 13, height: 1.4, color: Colors.black87),
-                                    children: [
-                                      TextSpan(text: label),
-                                      if (dueLabel != null)
-                                        TextSpan(text: ' — $dueLabel', style: const TextStyle(color: Color(0xFF8D6E63))),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                              GestureDetector(
-                                onTap: () async {
-                                  await TankStore.instance.dismissTaskById(t.id);
-                                  _load();
-                                },
-                                child: const Padding(
-                                  padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                  child: Icon(Icons.close, size: 14, color: Color(0xFF8D6E63)),
-                                ),
-                              ),
-                            ],
-                          ),
-                        );
-                      }),
-                      if (allTasks.length > _kNotifLimit)
-                        GestureDetector(
-                          onTap: () => setState(() => _notifExpanded = !_notifExpanded),
-                          child: Padding(
-                            padding: const EdgeInsets.only(top: 8),
-                            child: Text(
-                              _notifExpanded ? 'Less…' : 'More… ($hiddenCount)',
-                              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFFE65100)),
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-              ),
-            )];
-          }(),
           // summary card
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),

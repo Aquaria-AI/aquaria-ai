@@ -285,6 +285,39 @@ class AppDb extends _$AppDb {
     return results.isEmpty ? null : results.first;
   }
 
+  /// Check if a log with the exact created_at timestamp exists for this tank.
+  Future<bool> logExistsForTankAt(String tankId, DateTime createdAt) async {
+    final results = await (select(logs)
+          ..where((r) =>
+              r.tankId.equals(tankId) &
+              r.createdAt.equals(createdAt)))
+        .get();
+    return results.isNotEmpty;
+  }
+
+  /// Remove duplicate logs for a tank — keep only the oldest per (parsedJson, date).
+  Future<int> deduplicateLogsForTank(String tankId) async {
+    final all = await (select(logs)
+          ..where((r) => r.tankId.equals(tankId))
+          ..orderBy([(r) => OrderingTerm.asc(r.createdAt)]))
+        .get();
+    final seen = <String>{};
+    int removed = 0;
+    for (final l in all) {
+      // Key by date + parsedJson content (or rawText if no parsed)
+      final dateKey = '${l.createdAt.year}-${l.createdAt.month}-${l.createdAt.day}';
+      final contentKey = l.parsedJson ?? l.rawText;
+      final key = '$dateKey|$contentKey';
+      if (seen.contains(key)) {
+        await deleteLog(l.id);
+        removed++;
+      } else {
+        seen.add(key);
+      }
+    }
+    return removed;
+  }
+
   Future<void> updateLog(int id, String rawText, String? parsedJson) async {
     await (update(logs)..where((r) => r.id.equals(id))).write(
       LogsCompanion(

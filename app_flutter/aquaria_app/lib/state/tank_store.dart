@@ -103,14 +103,14 @@ class TankStore {
           await _db.replacePlantsForTank(tankId, rows);
         }
 
-        // Logs
+        // Logs — use exact timestamp to avoid re-inserting deleted logs
         final cloudLogMap = (data['logs'] as Map?) ?? {};
         final cloudLogs = (cloudLogMap[tankId] as List?) ?? [];
         for (final l in cloudLogs) {
           final lm = l as Map<String, dynamic>;
           final createdAt = DateTime.parse(lm['created_at'] as String);
-          final existing = await _db.logForTankOnDate(tankId, createdAt);
-          if (existing == null) {
+          final exists = await _db.logExistsForTankAt(tankId, createdAt);
+          if (!exists) {
             await _db.insertLog(db.LogsCompanion.insert(
               tankId: tankId,
               rawText: lm['raw_text'] as String,
@@ -119,6 +119,8 @@ class TankStore {
             ));
           }
         }
+        // Remove any duplicate logs for this tank
+        await _db.deduplicateLogsForTank(tankId);
       }
 
       // Dismissed tasks (legacy)
@@ -267,6 +269,13 @@ class TankStore {
     final removed = await _db.deduplicateActiveTasks();
     if (removed > 0) {
       debugPrint('[TankStore] Removed $removed duplicate task(s)');
+    }
+    // Dedup logs for all tanks
+    for (final tank in _tanks) {
+      final logRemoved = await _db.deduplicateLogsForTank(tank.id);
+      if (logRemoved > 0) {
+        debugPrint('[TankStore] Removed $logRemoved duplicate log(s) for ${tank.name}');
+      }
     }
   }
 
