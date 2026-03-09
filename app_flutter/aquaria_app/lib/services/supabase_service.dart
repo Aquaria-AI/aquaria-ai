@@ -286,6 +286,8 @@ class SupabaseService {
     String? dueDate,
     String priority = 'normal',
     String source = 'ai',
+    int? repeatDays,
+    bool isPaused = false,
   }) async {
     final uid = userId;
     if (uid == null) return;
@@ -296,6 +298,8 @@ class SupabaseService {
       'due_date': dueDate,
       'priority': priority,
       'source': source,
+      'repeat_days': repeatDays,
+      'is_paused': isPaused,
     });
   }
 

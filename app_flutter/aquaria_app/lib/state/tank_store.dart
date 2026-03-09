@@ -137,6 +137,8 @@ class TankStore {
           dueDate: Value(tm['due_date'] as String?),
           priority: Value((tm['priority'] as String?) ?? 'normal'),
           source: Value((tm['source'] as String?) ?? 'ai'),
+          repeatDays: Value(tm['repeat_days'] as int?),
+          isPaused: Value(tm['is_paused'] as bool? ?? false),
           createdAt: Value(DateTime.parse(tm['created_at'] as String)),
         ));
       }
@@ -476,6 +478,7 @@ class TankStore {
         dueDate: dueDate,
         priority: priority,
         source: source,
+        repeatDays: repeatDays,
       );
       debugPrint('[TankStore] insertTask success');
     });

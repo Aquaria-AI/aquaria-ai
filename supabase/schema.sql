@@ -71,6 +71,8 @@ create table if not exists public.tasks (
   source text not null default 'ai',
   is_dismissed boolean not null default false,
   dismissed_at timestamptz,
+  repeat_days int,
+  is_paused boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );

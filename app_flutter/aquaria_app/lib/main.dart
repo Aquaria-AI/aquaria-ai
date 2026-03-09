@@ -3316,12 +3316,12 @@ class _AppEntryState extends State<_AppEntry> {
   Future<Widget> _resolveMainScreen() async {
     final store = TankStore.instance;
     await store.load();
+    final done = await _isOnboardingDone();
+    if (!done) return const OnboardingScreen();
     if (store.tanks.isNotEmpty) {
-      await _markOnboardingDone();
       return const TankListScreen();
     }
-    final done = await _isOnboardingDone();
-    return done ? const TankListScreen() : const OnboardingScreen();
+    return const TankListScreen();
   }
 
   @override
