@@ -157,6 +157,163 @@ class _AquariaFooter extends StatelessWidget {
 
 const _cLogoTeal = Color(0xFF2297A8);
 
+Future<DateTime> _communityLastSeen() async {
+  try {
+    final dir = await getApplicationDocumentsDirectory();
+    final f = File('${dir.path}/.community_last_seen');
+    if (f.existsSync()) return DateTime.parse(f.readAsStringSync().trim());
+  } catch (_) {}
+  return DateTime(2000);
+}
+
+Future<void> _setCommunityLastSeen() async {
+  final dir = await getApplicationDocumentsDirectory();
+  await File('${dir.path}/.community_last_seen').writeAsString(DateTime.now().toUtc().toIso8601String());
+}
+
+class _CommunityBadgeIcon extends StatefulWidget {
+  const _CommunityBadgeIcon();
+  @override
+  State<_CommunityBadgeIcon> createState() => _CommunityBadgeIconState();
+}
+
+class _CommunityBadgeIconState extends State<_CommunityBadgeIcon> {
+  int _count = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _refresh();
+  }
+
+  Future<void> _refresh() async {
+    try {
+      final since = await _communityLastSeen();
+      final count = await SupabaseService.countNewPosts(since);
+      if (mounted) setState(() => _count = count);
+    } catch (_) {}
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      tooltip: 'Community',
+      icon: Badge(
+        isLabelVisible: _count > 0,
+        label: Text('$_count', style: const TextStyle(fontSize: 10)),
+        child: const Icon(Icons.groups_outlined),
+      ),
+      onPressed: () async {
+        await _setCommunityLastSeen();
+        if (!context.mounted) return;
+        await Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const _CommunityScreen()),
+        );
+        _refresh();
+      },
+    );
+  }
+}
+
+class _NotificationBellIcon extends StatefulWidget {
+  const _NotificationBellIcon();
+  @override
+  State<_NotificationBellIcon> createState() => _NotificationBellIconState();
+}
+
+class _NotificationBellIconState extends State<_NotificationBellIcon> {
+  Map<String, List<db.Task>> _tasksByTank = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _loadTasks();
+  }
+
+  Future<void> _loadTasks() async {
+    final result = <String, List<db.Task>>{};
+    for (final tank in TankStore.instance.tanks) {
+      final tasks = await TankStore.instance.tasksForTank(tank.id);
+      if (tasks.isNotEmpty) result[tank.id] = tasks;
+    }
+    if (mounted) setState(() => _tasksByTank = result);
+  }
+
+  int get _count {
+    int c = 0;
+    for (final tasks in _tasksByTank.values) c += tasks.length;
+    return c;
+  }
+
+  void _showSheet() {
+    final tanks = TankStore.instance.tanks;
+    final items = <({TankModel tank, db.Task task})>[];
+    for (final tank in tanks) {
+      for (final t in (_tasksByTank[tank.id] ?? [])) {
+        items.add((tank: tank, task: t));
+      }
+    }
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) => SafeArea(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: MediaQuery.of(ctx).size.height * 0.5),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: Row(children: [
+                  const Icon(Icons.notifications, size: 18, color: Color(0xFFE65100)),
+                  const SizedBox(width: 8),
+                  Text('Notifications (${items.length})', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+                ]),
+              ),
+              if (items.isEmpty)
+                const Padding(padding: EdgeInsets.all(24), child: Text('No notifications', style: TextStyle(color: Colors.grey)))
+              else
+                Flexible(
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    itemCount: items.length,
+                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    itemBuilder: (_, i) {
+                      final item = items[i];
+                      return ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(item.task.description, style: const TextStyle(fontSize: 13)),
+                        subtitle: Text(item.tank.name, style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                      );
+                    },
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final count = _count;
+    return IconButton(
+      tooltip: 'Notifications',
+      icon: Badge(
+        isLabelVisible: count > 0,
+        label: Text('$count', style: const TextStyle(fontSize: 10)),
+        backgroundColor: const Color(0xFFE65100),
+        child: const Icon(Icons.notifications_none),
+      ),
+      onPressed: _showSheet,
+    );
+  }
+}
+
 AppBar _buildAppBar(BuildContext context, String title, {List<Widget>? actions, bool showCommunity = true}) => AppBar(
       title: Text(title, style: const TextStyle(color: _cDark, fontWeight: FontWeight.bold, fontSize: 17)),
       centerTitle: false,
@@ -170,29 +327,18 @@ AppBar _buildAppBar(BuildContext context, String title, {List<Widget>? actions, 
       actions: [
         ...(actions ?? []),
         if (showCommunity && SupabaseService.isLoggedIn)
-          IconButton(
-            tooltip: 'Community',
-            icon: const Icon(Icons.groups_outlined),
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const _CommunityScreen()),
-            ),
-          ),
-        IconButton(
-          tooltip: 'Invite friends',
-          icon: const Icon(Icons.person_add_outlined),
-          onPressed: () async {
-            try {
-              await Share.share('Check out Aquaria — an AI-powered aquarium companion app!');
-            } catch (e) {
-              debugPrint('[Share] error: $e');
-            }
-          },
-        ),
+          const _CommunityBadgeIcon(),
         PopupMenuButton<String>(
           icon: const Icon(Icons.account_circle_outlined),
           tooltip: 'Account',
           onSelected: (value) async {
-            if (value == 'feedback') {
+            if (value == 'invite') {
+              try {
+                await Share.share('Check out Aquaria — an AI-powered aquarium companion app!');
+              } catch (e) {
+                debugPrint('[Share] error: $e');
+              }
+            } else if (value == 'feedback') {
               _showFeedbackSheet(context);
             } else if (value == 'experience') {
               _showExperiencePicker(context);
@@ -240,6 +386,7 @@ AppBar _buildAppBar(BuildContext context, String title, {List<Widget>? actions, 
             ],
             if (SupabaseService.isLoggedIn)
               const PopupMenuItem(value: 'profile', child: Text('Profile')),
+            const PopupMenuItem(value: 'invite', child: Text('Invite Friends')),
             const PopupMenuItem(value: 'onboarding', child: Text('Onboarding')),
             const PopupMenuItem(value: 'feedback', child: Text('Feedback')),
             if (SupabaseService.isLoggedIn)
@@ -330,16 +477,8 @@ void _showFeedbackSheet(BuildContext context) {
   );
 }
 
-/// Shows camera/gallery picker, then a save dialog with preview, notes, and tank selector.
-Future<void> pickAndSavePhoto(BuildContext context, {String? tankId}) async {
-  final tanks = TankStore.instance.tanks;
-  if (tanks.isEmpty) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Add a tank first')),
-    );
-    return;
-  }
-
+/// Picks source (camera/gallery), then asks Tank or Community, and routes accordingly.
+Future<void> pickPhotoFlow(BuildContext context, {String? tankId}) async {
   // 1. Source picker: camera or gallery
   final source = await showModalBottomSheet<ImageSource>(
     context: context,
@@ -376,14 +515,190 @@ Future<void> pickAndSavePhoto(BuildContext context, {String? tankId}) async {
   }
   if (picked == null || !context.mounted) return;
 
+  // 3. Destination picker: Tank or Community
+  final dest = await showModalBottomSheet<String>(
+    context: context,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+    ),
+    builder: (ctx) => SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+            child: Text('Save to', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          ),
+          ListTile(
+            leading: const Icon(Icons.water, color: Color(0xFF1FA2A8)),
+            title: const Text('My Tank'),
+            onTap: () => Navigator.of(ctx).pop('tank'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.groups_outlined, color: Color(0xFF1FA2A8)),
+            title: const Text('Community'),
+            onTap: () => Navigator.of(ctx).pop('community'),
+          ),
+        ],
+      ),
+    ),
+  );
+  if (dest == null || !context.mounted) return;
+
+  if (dest == 'community') {
+    await _sharePickedToCommunity(context, picked.path);
+  } else {
+    await pickAndSavePhoto(context, tankId: tankId, pickedPath: picked.path);
+  }
+}
+
+/// Uploads a picked photo to community with channel + caption selection.
+Future<void> _sharePickedToCommunity(BuildContext context, String filePath) async {
+  // Channel picker
+  final channel = await showModalBottomSheet<String>(
+    context: context,
+    shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+    builder: (ctx) => SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+            child: Text('Share to Channel', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          ),
+          ListTile(
+            leading: const Icon(Icons.public, color: Color(0xFF1FA2A8)),
+            title: const Text('General'),
+            onTap: () => Navigator.pop(ctx, 'general'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.water_drop, color: Colors.blue),
+            title: const Text('Freshwater'),
+            onTap: () => Navigator.pop(ctx, 'freshwater'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.waves, color: Colors.indigo),
+            title: const Text('Saltwater'),
+            onTap: () => Navigator.pop(ctx, 'saltwater'),
+          ),
+        ],
+      ),
+    ),
+  );
+  if (channel == null || !context.mounted) return;
+
+  // Caption dialog
+  final caption = await showDialog<String>(
+    context: context,
+    builder: (ctx) {
+      final ctrl = TextEditingController();
+      return AlertDialog(
+        title: const Text('Add a caption'),
+        content: TextField(
+          controller: ctrl,
+          maxLength: 150,
+          maxLines: 2,
+          decoration: const InputDecoration(
+            hintText: 'Say something about this photo...',
+            border: OutlineInputBorder(),
+            contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: _cDark),
+            onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+            child: const Text('Share'),
+          ),
+        ],
+      );
+    },
+  );
+  if (caption == null || !context.mounted) return;
+
+  // Upload
+  showDialog(
+    context: context,
+    barrierDismissible: false,
+    builder: (_) => const Center(child: Card(child: Padding(padding: EdgeInsets.all(24), child: Column(mainAxisSize: MainAxisSize.min, children: [CircularProgressIndicator(), SizedBox(height: 12), Text('Sharing...')])))),
+  );
+  try {
+    final storagePath = await SupabaseService.uploadCommunityPhoto(filePath);
+    await SupabaseService.createPost(photoUrl: storagePath, caption: caption, channel: channel);
+    if (context.mounted) {
+      Navigator.of(context).pop(); // dismiss overlay
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => _CommunityScreen(initialChannel: channel)),
+      );
+    }
+  } catch (e) {
+    if (context.mounted) {
+      Navigator.of(context).pop(); // dismiss overlay
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to share: $e')));
+    }
+  }
+}
+
+/// Shows a save dialog with preview, notes, and tank selector for a pre-picked image.
+Future<void> pickAndSavePhoto(BuildContext context, {String? tankId, String? pickedPath}) async {
+  final tanks = TankStore.instance.tanks;
+  if (tanks.isEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Add a tank first')),
+    );
+    return;
+  }
+
+  String imagePath;
+  if (pickedPath != null) {
+    imagePath = pickedPath;
+  } else {
+    // Source picker: camera or gallery
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.camera_alt),
+              title: const Text('Take Photo'),
+              onTap: () => Navigator.of(ctx).pop(ImageSource.camera),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library),
+              title: const Text('Choose from Gallery'),
+              onTap: () => Navigator.of(ctx).pop(ImageSource.gallery),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (source == null || !context.mounted) return;
+
+    final XFile? picked;
+    try {
+      picked = await ImagePicker().pickImage(source: source, imageQuality: 85);
+    } catch (e) {
+      debugPrint('[PhotoPick] error picking image: $e');
+      return;
+    }
+    if (picked == null || !context.mounted) return;
+    imagePath = picked.path;
+  }
+
   // 3. Save to a temp location first (we'll move to tank folder after tank is chosen)
   try {
     final dir = await getApplicationDocumentsDirectory();
-    final ext = picked.path.split('.').last;
+    final ext = imagePath.split('.').last;
     final tmpPath = '${dir.path}/tank_photos/_tmp_${DateTime.now().millisecondsSinceEpoch}.$ext';
     final tmpDir = Directory('${dir.path}/tank_photos');
     if (!tmpDir.existsSync()) tmpDir.createSync(recursive: true);
-    await File(picked.path).copy(tmpPath);
+    await File(imagePath).copy(tmpPath);
 
     if (!context.mounted) return;
 
@@ -483,7 +798,9 @@ class _PhotoSaveDialogState extends State<_PhotoSaveDialog> {
     return AlertDialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       title: const Text('Save Photo', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
-      content: SingleChildScrollView(
+      content: SizedBox(
+        width: 300,
+        child: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -492,7 +809,6 @@ class _PhotoSaveDialogState extends State<_PhotoSaveDialog> {
               child: Image.file(
                 File(widget.imagePath),
                 height: 160,
-                width: double.infinity,
                 fit: BoxFit.cover,
                 errorBuilder: (_, __, ___) => Container(
                   height: 160,
@@ -529,6 +845,7 @@ class _PhotoSaveDialogState extends State<_PhotoSaveDialog> {
             ],
           ],
         ),
+      ),
       ),
       actions: [
         TextButton(
@@ -3423,6 +3740,7 @@ class _TankListScreenState extends State<TankListScreen> {
   Set<String> _tanksWithoutLogs = {};
   String _tankSort = 'newest'; // 'newest' | 'oldest' | 'az' | 'za'
   int _tipCardIndex = 0; // current tip shown on the card
+  int _communityReactionCount = 0;
 
   bool _expReady = false;
   bool _refreshReady = false;
@@ -3449,6 +3767,7 @@ class _TankListScreenState extends State<TankListScreen> {
       _refreshReady = true;
       _tryShowDailyPopup();
       if (widget.showWelcome && mounted) _showWelcomeDialog();
+      _checkUserNotifications();
     });
   }
 
@@ -3456,6 +3775,38 @@ class _TankListScreenState extends State<TankListScreen> {
     if (!_expReady || !_refreshReady || !_dailyPopupPending || !mounted) return;
     _dailyPopupPending = false;
     _showDailyTipOverlay();
+  }
+
+  Future<void> _checkUserNotifications() async {
+    if (!SupabaseService.isLoggedIn || !mounted) return;
+    try {
+      final notifications = await SupabaseService.fetchUnreadNotifications();
+      for (final n in notifications) {
+        if (!mounted) return;
+        await showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => AlertDialog(
+            title: Row(
+              children: [
+                const Icon(Icons.warning_amber, color: Colors.orange, size: 22),
+                const SizedBox(width: 8),
+                Expanded(child: Text(n['title'] as String? ?? 'Notice', style: const TextStyle(fontSize: 16))),
+              ],
+            ),
+            content: Text(n['message'] as String? ?? ''),
+            actions: [
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: _cDark),
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('I understand'),
+              ),
+            ],
+          ),
+        );
+        await SupabaseService.markNotificationRead(n['id'] as int);
+      }
+    } catch (_) {}
   }
 
   /// Reads the last card mode and toggles it for next login.
@@ -3631,6 +3982,12 @@ class _TankListScreenState extends State<TankListScreen> {
       await TankStore.instance.load();
       await _loadAllTasks();
       await _loadAllInhabitantTypes();
+      if (SupabaseService.isLoggedIn) {
+        try {
+          final count = await SupabaseService.countMyReactions();
+          if (mounted) setState(() => _communityReactionCount = count);
+        } catch (_) {}
+      }
     } catch (e) {
       _error = e.toString();
     }
@@ -4065,7 +4422,7 @@ class _TankListScreenState extends State<TankListScreen> {
           IconButton(
             tooltip: 'Add photo',
             icon: const Icon(Icons.add_a_photo_outlined),
-            onPressed: () => pickAndSavePhoto(context),
+            onPressed: () => pickPhotoFlow(context),
           ),
         ]),
       body: _loading
@@ -4111,8 +4468,8 @@ class _TankListScreenState extends State<TankListScreen> {
                             child: RefreshIndicator(
                               onRefresh: _refresh,
                               child: ListView.builder(
-                                // +2 for merged tips card and "My Tanks" header
-                                itemCount: tanks.length + 2,
+                                // +3 for merged tips card, community card, and "My Tanks" header
+                                itemCount: tanks.length + 3,
                                 itemBuilder: (context, index) {
                                   if (index == 0) {
                                     return _MergedTopCard(
@@ -4128,6 +4485,42 @@ class _TankListScreenState extends State<TankListScreen> {
                                     );
                                   }
                                   if (index == 1) {
+                                    if (!SupabaseService.isLoggedIn) return const SizedBox.shrink();
+                                    return GestureDetector(
+                                      onTap: () => Navigator.of(context).push(
+                                        MaterialPageRoute(builder: (_) => const _CommunityScreen(initialChannel: 'mine')),
+                                      ).then((_) => _refresh()),
+                                      child: Card(
+                                        color: Colors.white,
+                                        margin: const EdgeInsets.fromLTRB(0, 8, 0, 0),
+                                        elevation: 0.5,
+                                        shadowColor: Colors.black12,
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(12),
+                                          side: const BorderSide(color: Color(0xFFD8D8D8)),
+                                        ),
+                                        child: Padding(
+                                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                                          child: Row(
+                                            children: [
+                                              const Icon(Icons.groups_outlined, color: Color(0xFF1FA2A8), size: 24),
+                                              const SizedBox(width: 12),
+                                              Expanded(
+                                                child: Text(
+                                                  _communityReactionCount > 0
+                                                      ? '$_communityReactionCount reaction${_communityReactionCount == 1 ? '' : 's'} on your posts'
+                                                      : 'Share photos with the community',
+                                                  style: const TextStyle(fontSize: 14, color: Colors.black87),
+                                                ),
+                                              ),
+                                              const Icon(Icons.chevron_right, color: Colors.grey, size: 20),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  }
+                                  if (index == 2) {
                                     return Padding(
                                       padding: const EdgeInsets.fromLTRB(20, 16, 8, 0),
                                       child: Row(
@@ -4179,8 +4572,8 @@ class _TankListScreenState extends State<TankListScreen> {
                                       ),
                                     );
                                   }
-                                  // Tank cards start at index 2
-                                  final tankIndex = index - 2;
+                                  // Tank cards start at index 3
+                                  final tankIndex = index - 3;
                                   final t = tanks[tankIndex];
                         final notifCount = _notificationCount(t.id);
                         return Card(
@@ -6048,7 +6441,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
         IconButton(
           tooltip: 'Add photo',
           icon: const Icon(Icons.add_a_photo_outlined),
-          onPressed: () => pickAndSavePhoto(context, tankId: _tank.id),
+          onPressed: () => pickPhotoFlow(context, tankId: _tank.id),
         ),
       ]),
       bottomNavigationBar: _AquariaFooter(
@@ -8500,20 +8893,7 @@ class _InhabitantsScreenState extends State<InhabitantsScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       extendBody: true,
-      appBar: _buildAppBar(context, '', actions: [
-          IconButton(
-            icon: const Icon(Icons.edit),
-            tooltip: 'Edit inhabitants',
-            onPressed: () async {
-              await Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) => EditInhabitantsScreen(
-                  tank: widget.tank,
-                  onSaved: _load,
-                ),
-              ));
-            },
-          ),
-        ]),
+      appBar: _buildAppBar(context, ''),
       bottomNavigationBar: _AquariaFooter(
         onAiTap: () => showModalBottomSheet(
           context: context,
@@ -8548,50 +8928,23 @@ class _InhabitantsScreenState extends State<InhabitantsScreen> {
                       children: [
                         const Text('No inhabitants logged yet.', style: TextStyle(color: Colors.grey)),
                         const SizedBox(height: 20),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: OutlinedButton.icon(
-                                icon: const Icon(Icons.add, size: 18),
-                                label: const Text('Add Inhabitants'),
-                                style: OutlinedButton.styleFrom(
-                                  foregroundColor: _cDark,
-                                  side: const BorderSide(color: _cMid),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                                  padding: const EdgeInsets.symmetric(vertical: 12),
-                                ),
-                                onPressed: () async {
-                                  await Navigator.of(context).push(MaterialPageRoute(
-                                    builder: (_) => EditInhabitantsScreen(
-                                      tank: widget.tank,
-                                      onSaved: _load,
-                                    ),
-                                  ));
-                                },
+                        OutlinedButton.icon(
+                          icon: const Icon(Icons.edit, size: 18),
+                          label: const Text('Edit Inhabitants'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: _cDark,
+                            side: const BorderSide(color: _cMid),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 24),
+                          ),
+                          onPressed: () async {
+                            await Navigator.of(context).push(MaterialPageRoute(
+                              builder: (_) => EditInhabitantsScreen(
+                                tank: widget.tank,
+                                onSaved: _load,
                               ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: OutlinedButton.icon(
-                                icon: const Icon(Icons.add, size: 18),
-                                label: const Text('Add Plants'),
-                                style: OutlinedButton.styleFrom(
-                                  foregroundColor: _cDark,
-                                  side: const BorderSide(color: _cMid),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                                  padding: const EdgeInsets.symmetric(vertical: 12),
-                                ),
-                                onPressed: () async {
-                                  await Navigator.of(context).push(MaterialPageRoute(
-                                    builder: (_) => EditInhabitantsScreen(
-                                      tank: widget.tank,
-                                      onSaved: _load,
-                                    ),
-                                  ));
-                                },
-                              ),
-                            ),
-                          ],
+                            ));
+                          },
                         ),
                       ],
                     ),
@@ -9978,7 +10331,7 @@ class _TankGalleryScreenState extends State<TankGalleryScreen> {
   }
 
   Future<void> _addPhoto() async {
-    await pickAndSavePhoto(context, tankId: widget.tank.id);
+    await pickPhotoFlow(context, tankId: widget.tank.id);
     if (mounted) await _load();
   }
 
@@ -10090,13 +10443,103 @@ class _TankGalleryScreenState extends State<TankGalleryScreen> {
   }
 }
 
-class _PhotoDetailScreen extends StatelessWidget {
+class _PhotoDetailScreen extends StatefulWidget {
   final db.TankPhoto photo;
   final VoidCallback onDelete;
   const _PhotoDetailScreen({required this.photo, required this.onDelete});
 
   @override
+  State<_PhotoDetailScreen> createState() => _PhotoDetailScreenState();
+}
+
+class _PhotoDetailScreenState extends State<_PhotoDetailScreen> {
+  bool _sharing = false;
+
+  Future<void> _shareToCommunity() async {
+    final channel = await showModalBottomSheet<String>(
+      context: context,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Text('Share to Community', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+            ),
+            ListTile(
+              leading: const Icon(Icons.public, color: Color(0xFF1FA2A8)),
+              title: const Text('General'),
+              onTap: () => Navigator.pop(ctx, 'general'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.water_drop, color: Colors.blue),
+              title: const Text('Freshwater'),
+              onTap: () => Navigator.pop(ctx, 'freshwater'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.waves, color: Colors.indigo),
+              title: const Text('Saltwater'),
+              onTap: () => Navigator.pop(ctx, 'saltwater'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (channel == null || !mounted) return;
+
+    // Optional caption
+    final caption = await showDialog<String>(
+      context: context,
+      builder: (ctx) {
+        final ctrl = TextEditingController();
+        return AlertDialog(
+          title: const Text('Add a caption'),
+          content: TextField(
+            controller: ctrl,
+            maxLength: 150,
+            maxLines: 2,
+            decoration: const InputDecoration(
+              hintText: 'Say something about this photo...',
+              border: OutlineInputBorder(),
+              contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: _cDark),
+              onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+              child: const Text('Share'),
+            ),
+          ],
+        );
+      },
+    );
+    if (caption == null || !mounted) return;
+
+    setState(() => _sharing = true);
+    try {
+      final storagePath = await SupabaseService.uploadCommunityPhoto(widget.photo.filePath);
+      await SupabaseService.createPost(photoUrl: storagePath, caption: caption, channel: channel);
+      if (mounted) {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => _CommunityScreen(initialChannel: channel)),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _sharing = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to share: $e')),
+        );
+      }
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final photo = widget.photo;
     const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
     final d = photo.createdAt.toLocal();
     final dateStr = '${months[d.month - 1]} ${d.day}, ${d.year}';
@@ -10108,6 +10551,17 @@ class _PhotoDetailScreen extends StatelessWidget {
         foregroundColor: Colors.white,
         title: Text(dateStr, style: const TextStyle(fontSize: 15)),
         actions: [
+          if (_sharing)
+            const Padding(
+              padding: EdgeInsets.all(12),
+              child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)),
+            )
+          else
+            IconButton(
+              icon: const Icon(Icons.groups_outlined),
+              tooltip: 'Share to Community',
+              onPressed: _shareToCommunity,
+            ),
           IconButton(
             icon: const Icon(Icons.delete_outline),
             tooltip: 'Delete',
@@ -10126,7 +10580,7 @@ class _PhotoDetailScreen extends StatelessWidget {
                   ],
                 ),
               ).then((confirmed) {
-                if (confirmed == true) onDelete();
+                if (confirmed == true) widget.onDelete();
               });
             },
           ),
@@ -10419,7 +10873,7 @@ class _AllChartsScreenState extends State<AllChartsScreen> {
         IconButton(
           tooltip: 'Add photo',
           icon: const Icon(Icons.add_a_photo_outlined),
-          onPressed: () => pickAndSavePhoto(context),
+          onPressed: () => pickPhotoFlow(context),
         ),
       ]),
       bottomNavigationBar: const _AquariaFooter(),
@@ -11596,12 +12050,19 @@ class _ManageRecurringTasksScreenState extends State<_ManageRecurringTasksScreen
 const _kReactionEmojis = ['👍', '❤️', '🔥', '😍', '🐠', '🌊', '💯', '👏'];
 
 class _CommunityScreen extends StatefulWidget {
-  const _CommunityScreen();
+  final String initialChannel;
+  const _CommunityScreen({this.initialChannel = 'general'});
   @override
   State<_CommunityScreen> createState() => _CommunityScreenState();
 }
 
 class _CommunityScreenState extends State<_CommunityScreen> {
+  List<String> get _channels => [
+    'general', 'freshwater', 'saltwater', 'mine',
+    if (SupabaseService.isAdmin) 'flagged',
+  ];
+  static const _channelLabels = {'general': 'General', 'freshwater': 'Freshwater', 'saltwater': 'Saltwater', 'mine': 'My Shares', 'flagged': 'Flagged'};
+  late String _channel = widget.initialChannel;
   List<Map<String, dynamic>> _posts = [];
   Map<int, List<Map<String, dynamic>>> _reactions = {};
   bool _loading = true;
@@ -11614,7 +12075,11 @@ class _CommunityScreenState extends State<_CommunityScreen> {
 
   Future<void> _load() async {
     try {
-      final posts = await SupabaseService.fetchPosts();
+      final posts = _channel == 'flagged'
+          ? await SupabaseService.fetchFlaggedPosts()
+          : _channel == 'mine'
+          ? await SupabaseService.fetchMyPosts()
+          : await SupabaseService.fetchPosts(channel: _channel);
       // Batch-sign all photo URLs in one call
       final paths = posts.map((p) => p['photo_url'] as String).toList();
       final signedUrls = await SupabaseService.getCommunityPhotoUrls(paths);
@@ -11667,12 +12132,14 @@ class _CommunityScreenState extends State<_CommunityScreen> {
         final ctrl = TextEditingController();
         return AlertDialog(
           title: const Text('Share to Community'),
-          content: Column(
+          content: SizedBox(
+            width: 300,
+            child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               ClipRRect(
                 borderRadius: BorderRadius.circular(8),
-                child: Image.file(File(picked.path), height: 180, width: double.infinity, fit: BoxFit.cover),
+                child: Image.file(File(picked.path), height: 180, fit: BoxFit.cover),
               ),
               const SizedBox(height: 12),
               TextField(
@@ -11686,6 +12153,7 @@ class _CommunityScreenState extends State<_CommunityScreen> {
                 ),
               ),
             ],
+          ),
           ),
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
@@ -11704,7 +12172,7 @@ class _CommunityScreenState extends State<_CommunityScreen> {
     _showPostingOverlay();
     try {
       final photoUrl = await SupabaseService.uploadCommunityPhoto(picked.path);
-      await SupabaseService.createPost(photoUrl: photoUrl, caption: caption);
+      await SupabaseService.createPost(photoUrl: photoUrl, caption: caption, channel: _channel);
       if (mounted) {
         Navigator.of(context).pop(); // dismiss overlay
         _load();
@@ -11783,10 +12251,10 @@ class _CommunityScreenState extends State<_CommunityScreen> {
 
   String _authorName(Map<String, dynamic> post) {
     final profile = post['profiles'] as Map<String, dynamic>?;
-    if (profile == null) return 'Unknown';
+    if (profile == null) return 'Aquarist';
     final display = profile['display_name'] as String?;
     final username = profile['username'] as String?;
-    if (display != null && display.isNotEmpty) return display;
+    if (display != null && display.isNotEmpty && !display.contains('@')) return display;
     if (username != null && username.isNotEmpty) return '@$username';
     return 'Aquarist';
   }
@@ -11850,7 +12318,9 @@ class _CommunityScreenState extends State<_CommunityScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: _buildAppBar(context, '', showCommunity: false),
+      appBar: _buildAppBar(context, '', showCommunity: false, actions: [
+        const _NotificationBellIcon(),
+      ]),
       floatingActionButton: FloatingActionButton(
         backgroundColor: const Color(0xFF1FA2A8),
         onPressed: _createPost,
@@ -11860,9 +12330,46 @@ class _CommunityScreenState extends State<_CommunityScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Padding(
-            padding: EdgeInsets.fromLTRB(16, 12, 16, 8),
+            padding: EdgeInsets.fromLTRB(16, 12, 16, 4),
             child: Text('Community', style: TextStyle(color: _cDark, fontWeight: FontWeight.bold, fontSize: 20)),
           ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Row(
+              children: _channels.map((ch) {
+                final selected = ch == _channel;
+                return Expanded(
+                  child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 3),
+                  child: ChoiceChip(
+                    label: SizedBox(
+                      width: double.infinity,
+                      child: Text(_channelLabels[ch]!, textAlign: TextAlign.center),
+                    ),
+                    selected: selected,
+                    showCheckmark: false,
+                    selectedColor: const Color(0xFF1FA2A8),
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    labelPadding: EdgeInsets.zero,
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    labelStyle: TextStyle(
+                      color: selected ? Colors.white : Colors.black87,
+                      fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
+                      fontSize: 13,
+                    ),
+                    onSelected: (_) {
+                      if (ch != _channel) {
+                        setState(() { _channel = ch; _loading = true; });
+                        _load();
+                      }
+                    },
+                  ),
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+          const SizedBox(height: 8),
           Expanded(
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
@@ -11889,6 +12396,7 @@ class _CommunityScreenState extends State<_CommunityScreen> {
                       final post = _posts[i];
                       final postId = post['id'] as int;
                       final isAuthor = post['user_id'] == SupabaseService.userId;
+                      final isHidden = post['is_hidden'] == true;
                       return Card(
                         clipBehavior: Clip.antiAlias,
                         elevation: 1,
@@ -11896,6 +12404,91 @@ class _CommunityScreenState extends State<_CommunityScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
+                            // Admin moderation banner
+                            if (SupabaseService.isAdmin) ...[
+                              if (post['admin_action'] == 'deleted')
+                                Container(
+                                  width: double.infinity,
+                                  color: Colors.grey.shade200,
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                                  child: Row(
+                                    children: [
+                                      const Icon(Icons.delete_forever, size: 16, color: Colors.red),
+                                      const SizedBox(width: 8),
+                                      Expanded(child: Text(
+                                        'Deleted by admin${post['admin_action_at'] != null ? ' — ${_timeAgo(post['admin_action_at'] as String)}' : ''}',
+                                        style: const TextStyle(fontSize: 12, color: Colors.red, fontWeight: FontWeight.w600),
+                                      )),
+                                    ],
+                                  ),
+                                )
+                              else if (post['admin_action'] == 'restored')
+                                Container(
+                                  width: double.infinity,
+                                  color: Colors.green.shade50,
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                                  child: Row(
+                                    children: [
+                                      const Icon(Icons.check_circle_outline, size: 16, color: Colors.green),
+                                      const SizedBox(width: 8),
+                                      Expanded(child: Text(
+                                        'Restored by admin${post['admin_action_at'] != null ? ' — ${_timeAgo(post['admin_action_at'] as String)}' : ''}',
+                                        style: const TextStyle(fontSize: 12, color: Colors.green, fontWeight: FontWeight.w600),
+                                      )),
+                                    ],
+                                  ),
+                                )
+                              else if (isHidden)
+                                Container(
+                                  width: double.infinity,
+                                  color: Colors.red.shade50,
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                  child: Row(
+                                    children: [
+                                      const Icon(Icons.warning_amber, size: 16, color: Colors.red),
+                                      const SizedBox(width: 8),
+                                      const Expanded(child: Text('Flagged — hidden from users', style: TextStyle(fontSize: 12, color: Colors.red, fontWeight: FontWeight.w600))),
+                                      TextButton(
+                                        onPressed: () async {
+                                          await SupabaseService.unhidePost(postId);
+                                          _load();
+                                        },
+                                        child: const Text('Restore', style: TextStyle(fontSize: 12)),
+                                      ),
+                                      TextButton(
+                                        style: TextButton.styleFrom(foregroundColor: Colors.red),
+                                        onPressed: () async {
+                                          final ok = await showDialog<bool>(
+                                            context: context,
+                                            builder: (ctx) => AlertDialog(
+                                              title: const Text('Confirm removal'),
+                                              content: const Text('This will hide the post permanently and notify the user of a violation.'),
+                                              actions: [
+                                                TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+                                                TextButton(
+                                                  onPressed: () => Navigator.pop(ctx, true),
+                                                  style: TextButton.styleFrom(foregroundColor: Colors.red),
+                                                  child: const Text('Remove'),
+                                                ),
+                                              ],
+                                            ),
+                                          );
+                                          if (ok == true) {
+                                            await SupabaseService.adminDeletePost(postId);
+                                            if (mounted) {
+                                              ScaffoldMessenger.of(context).showSnackBar(
+                                                const SnackBar(content: Text('Post removed and user notified.')),
+                                              );
+                                            }
+                                            _load();
+                                          }
+                                        },
+                                        child: const Text('Remove', style: TextStyle(fontSize: 12)),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                            ],
                             // Photo
                             Image.network(
                               post['_signed_url'] as String,
@@ -11953,6 +12546,40 @@ class _CommunityScreenState extends State<_CommunityScreen> {
                                             if (ok == true) {
                                               await SupabaseService.deletePost(postId);
                                               _load();
+                                            }
+                                          },
+                                        ),
+                                      if (!isAuthor)
+                                        IconButton(
+                                          icon: const Icon(Icons.flag_outlined, size: 18),
+                                          color: Colors.grey,
+                                          padding: EdgeInsets.zero,
+                                          constraints: const BoxConstraints(),
+                                          tooltip: 'Report',
+                                          onPressed: () async {
+                                            final ok = await showDialog<bool>(
+                                              context: context,
+                                              builder: (ctx) => AlertDialog(
+                                                title: const Text('Report this post?'),
+                                                content: const Text('Flag this post as inappropriate. Posts flagged by multiple users will be hidden and reviewed.'),
+                                                actions: [
+                                                  TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+                                                  TextButton(
+                                                    onPressed: () => Navigator.pop(ctx, true),
+                                                    style: TextButton.styleFrom(foregroundColor: Colors.red),
+                                                    child: const Text('Report'),
+                                                  ),
+                                                ],
+                                              ),
+                                            );
+                                            if (ok == true) {
+                                              final flagged = await SupabaseService.flagPost(postId);
+                                              if (mounted) {
+                                                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                                                  content: Text(flagged ? 'Post reported. Thank you.' : 'You have already reported this post.'),
+                                                ));
+                                                _load();
+                                              }
                                             }
                                           },
                                         ),

@@ -476,10 +476,11 @@ class SupabaseService {
     return map;
   }
 
-  /// Create a community post with a photo URL and caption.
+  /// Create a community post with a photo URL, caption, and channel.
   static Future<void> createPost({
     required String photoUrl,
     required String caption,
+    required String channel,
   }) async {
     final uid = userId;
     if (uid == null) return;
@@ -487,14 +488,137 @@ class SupabaseService {
       'user_id': uid,
       'photo_url': photoUrl,
       'caption': caption,
+      'channel': channel,
     });
   }
 
-  /// Fetch all posts in the general channel, newest first.
-  static Future<List<Map<String, dynamic>>> fetchPosts() async {
+  /// Check if the current user is the admin.
+  static bool get isAdmin => userEmail == 'admin@aquaria-ai.com';
+
+  /// Fetch posts for a given channel, newest first. Hidden posts excluded unless admin.
+  static Future<List<Map<String, dynamic>>> fetchPosts({String channel = 'general'}) async {
+    var query = client
+        .from('community_posts')
+        .select('*, profiles!inner(display_name, username)')
+        .eq('channel', channel);
+    if (!isAdmin) query = query.eq('is_hidden', false);
+    final data = await query.order('created_at', ascending: false);
+    return List<Map<String, dynamic>>.from(data);
+  }
+
+  /// Count posts newer than [since] across all channels.
+  static Future<int> countNewPosts(DateTime since) async {
+    final data = await client
+        .from('community_posts')
+        .select('id')
+        .eq('is_hidden', false)
+        .gt('created_at', since.toUtc().toIso8601String());
+    return (data as List).length;
+  }
+
+  /// Flag a post as inappropriate. Returns true if flagged, false if already flagged.
+  static Future<bool> flagPost(int postId) async {
+    final uid = userId;
+    if (uid == null) return false;
+    try {
+      await client.from('post_flags').insert({
+        'post_id': postId,
+        'user_id': uid,
+      });
+      return true;
+    } catch (_) {
+      return false; // already flagged (unique constraint)
+    }
+  }
+
+  /// Fetch posts that have been flagged or admin-actioned (admin only).
+  static Future<List<Map<String, dynamic>>> fetchFlaggedPosts() async {
     final data = await client
         .from('community_posts')
         .select('*, profiles!inner(display_name, username)')
+        .or('is_hidden.eq.true,admin_action.neq.null')
+        .order('created_at', ascending: false);
+    return List<Map<String, dynamic>>.from(data);
+  }
+
+  /// Unhide a post (admin restores it).
+  static Future<void> unhidePost(int postId) async {
+    await client.from('community_posts').update({
+      'is_hidden': false,
+      'admin_action': 'restored',
+      'admin_action_at': DateTime.now().toUtc().toIso8601String(),
+    }).eq('id', postId);
+    // Clear flags so it doesn't get re-hidden
+    await client.from('post_flags').delete().eq('post_id', postId);
+  }
+
+  /// Mark a flagged post as deleted by admin (soft-delete) and notify the offending user.
+  static Future<void> adminDeletePost(int postId) async {
+    // Get the post author
+    final post = await client
+        .from('community_posts')
+        .select('user_id')
+        .eq('id', postId)
+        .maybeSingle();
+    final offendingUserId = post?['user_id'] as String?;
+
+    // Hard delete the post
+    await client.from('community_posts').delete().eq('id', postId);
+
+    // Notify the offending user
+    if (offendingUserId != null) {
+      await client.from('user_notifications').insert({
+        'user_id': offendingUserId,
+        'title': 'Post removed',
+        'message': 'One of your community posts was removed for violating our community guidelines. Repeated violations may result in restricted access.',
+      });
+    }
+  }
+
+  /// Fetch unread notifications for the current user.
+  static Future<List<Map<String, dynamic>>> fetchUnreadNotifications() async {
+    final uid = userId;
+    if (uid == null) return [];
+    final data = await client
+        .from('user_notifications')
+        .select()
+        .eq('user_id', uid)
+        .eq('is_read', false)
+        .order('created_at', ascending: false);
+    return List<Map<String, dynamic>>.from(data);
+  }
+
+  /// Mark a notification as read.
+  static Future<void> markNotificationRead(int notificationId) async {
+    await client.from('user_notifications').update({'is_read': true}).eq('id', notificationId);
+  }
+
+  /// Count total reactions on the current user's posts.
+  static Future<int> countMyReactions() async {
+    final uid = userId;
+    if (uid == null) return 0;
+    // Get all the user's post IDs
+    final posts = await client
+        .from('community_posts')
+        .select('id')
+        .eq('user_id', uid);
+    final postIds = (posts as List).map((p) => p['id'] as int).toList();
+    if (postIds.isEmpty) return 0;
+    final reactions = await client
+        .from('post_reactions')
+        .select('id')
+        .inFilter('post_id', postIds);
+    return (reactions as List).length;
+  }
+
+  /// Fetch all posts by the current user across all channels.
+  static Future<List<Map<String, dynamic>>> fetchMyPosts() async {
+    final uid = userId;
+    if (uid == null) return [];
+    final data = await client
+        .from('community_posts')
+        .select('*, profiles!inner(display_name, username)')
+        .eq('user_id', uid)
         .order('created_at', ascending: false);
     return List<Map<String, dynamic>>.from(data);
   }

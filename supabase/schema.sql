@@ -153,7 +153,7 @@ create or replace function public.handle_new_user()
 returns trigger as $$
 begin
   insert into public.profiles (id, display_name)
-  values (new.id, coalesce(new.raw_user_meta_data->>'full_name', new.email));
+  values (new.id, new.raw_user_meta_data->>'full_name');
   return new;
 end;
 $$ language plpgsql security definer;
@@ -250,6 +250,79 @@ create policy "Users can insert own dismissed tasks"
 create policy "Users can delete own dismissed tasks"
   on public.dismissed_tasks for delete using (auth.uid() = user_id and public.account_is_open());
 
+-- User notifications (moderation alerts, etc.)
+create table if not exists public.user_notifications (
+  id bigint generated always as identity primary key,
+  user_id uuid references auth.users(id) on delete cascade not null,
+  title text not null,
+  message text not null,
+  is_read boolean not null default false,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_user_notifications_user_id on public.user_notifications(user_id);
+
+alter table public.user_notifications enable row level security;
+
+create policy "Users can view own notifications"
+  on public.user_notifications for select using (auth.uid() = user_id);
+create policy "Users can update own notifications"
+  on public.user_notifications for update using (auth.uid() = user_id);
+-- Admin can insert notifications for any user
+create policy "Admin can insert notifications"
+  on public.user_notifications for insert with check (
+    auth.uid() = (select id from auth.users where email = 'admin@aquaria-ai.com' limit 1)
+  );
+
+-- ============================================================
+-- MODERATION DASHBOARD VIEW (admin only)
+-- ============================================================
+-- Aggregates per-user moderation stats from community_posts,
+-- post_flags, and user_notifications. Readable only by admin.
+
+create or replace view public.moderation_users as
+select
+  u.id as user_id,
+  u.email,
+  p.display_name,
+  p.username,
+  p.created_at as account_created,
+  coalesce(posts.total_posts, 0) as total_posts,
+  coalesce(flagged.posts_flagged, 0) as posts_flagged,
+  coalesce(hidden.posts_hidden, 0) as posts_hidden,
+  coalesce(deleted.posts_deleted_by_admin, 0) as posts_deleted_by_admin,
+  coalesce(flags_cast.flags_submitted, 0) as flags_submitted
+from auth.users u
+join public.profiles p on p.id = u.id
+left join (
+  select user_id, count(*) as total_posts
+  from public.community_posts
+  group by user_id
+) posts on posts.user_id = u.id
+left join (
+  select cp.user_id, count(distinct cp.id) as posts_flagged
+  from public.community_posts cp
+  join public.post_flags pf on pf.post_id = cp.id
+  group by cp.user_id
+) flagged on flagged.user_id = u.id
+left join (
+  select user_id, count(*) as posts_hidden
+  from public.community_posts
+  where is_hidden = true
+  group by user_id
+) hidden on hidden.user_id = u.id
+left join (
+  select user_id, count(*) as posts_deleted_by_admin
+  from public.user_notifications
+  where title = 'Post removed'
+  group by user_id
+) deleted on deleted.user_id = u.id
+left join (
+  select user_id, count(*) as flags_submitted
+  from public.post_flags
+  group by user_id
+) flags_cast on flags_cast.user_id = u.id;
+
 -- Legal acceptances — records user acknowledgement of T&C and Privacy Policy
 create table if not exists public.legal_acceptances (
   id bigint generated always as identity primary key,
@@ -278,12 +351,76 @@ create policy "Users can insert own acceptances"
 create table if not exists public.community_posts (
   id bigint generated always as identity primary key,
   user_id uuid references auth.users(id) on delete cascade not null,
+  channel text not null default 'general',
   photo_url text not null,
   caption text not null default '',
+  is_hidden boolean not null default false,
+  admin_action text,               -- null = no action, 'deleted' = removed by admin, 'restored' = cleared by admin
+  admin_action_at timestamptz,
   created_at timestamptz not null default now(),
   -- Direct FK to profiles so PostgREST can resolve the join
   constraint community_posts_profile_fk foreign key (user_id) references public.profiles(id)
 );
+
+-- Flags: one flag per user per post
+create table if not exists public.post_flags (
+  id bigint generated always as identity primary key,
+  post_id bigint references public.community_posts(id) on delete cascade not null,
+  user_id uuid references auth.users(id) on delete cascade not null,
+  reason text not null default 'inappropriate',
+  created_at timestamptz not null default now(),
+  unique(post_id, user_id)
+);
+
+create index if not exists idx_post_flags_post_id on public.post_flags(post_id);
+
+alter table public.post_flags enable row level security;
+
+-- All authenticated users can flag posts
+create policy "Users can flag posts"
+  on public.post_flags for insert with check (auth.uid() = user_id);
+-- Users can see their own flags (to know they already flagged)
+create policy "Users can view own flags"
+  on public.post_flags for select using (auth.uid() = user_id);
+-- Admin can see all flags
+create policy "Admin can view all flags"
+  on public.post_flags for select using (
+    auth.uid() = (select id from auth.users where email = 'admin@aquaria-ai.com' limit 1)
+  );
+
+-- Auto-hide posts when flag count reaches 2 and notify admin
+create or replace function public.check_flag_count()
+returns trigger as $$
+declare
+  admin_uid uuid;
+  post_author uuid;
+  author_email text;
+begin
+  if (select count(*) from public.post_flags where post_id = new.post_id) >= 2 then
+    -- Hide the post
+    update public.community_posts set is_hidden = true where id = new.post_id;
+
+    -- Notify admin
+    select id into admin_uid from auth.users where email = 'admin@aquaria-ai.com' limit 1;
+    select user_id into post_author from public.community_posts where id = new.post_id;
+    select email into author_email from auth.users where id = post_author;
+
+    if admin_uid is not null then
+      insert into public.user_notifications (user_id, title, message)
+      values (
+        admin_uid,
+        'Flagged post auto-hidden',
+        'Post #' || new.post_id || ' by ' || coalesce(author_email, 'unknown') || ' has been flagged by multiple users and auto-hidden. Review it in the Flagged tab.'
+      );
+    end if;
+  end if;
+  return new;
+end;
+$$ language plpgsql security definer;
+
+create or replace trigger trg_post_flag_check
+  after insert on public.post_flags
+  for each row execute function public.check_flag_count();
 
 -- Reactions: positive emoji reactions on posts (one per user per emoji per post)
 create table if not exists public.post_reactions (
