@@ -271,6 +271,55 @@ create policy "Users can insert own acceptances"
   on public.legal_acceptances for insert with check (auth.uid() = user_id);
 
 -- ============================================================
+-- COMMUNITY (General Channel)
+-- ============================================================
+
+-- Posts: photo + caption shared to the general channel
+create table if not exists public.community_posts (
+  id bigint generated always as identity primary key,
+  user_id uuid references auth.users(id) on delete cascade not null,
+  photo_url text not null,
+  caption text not null default '',
+  created_at timestamptz not null default now()
+);
+
+-- Reactions: positive emoji reactions on posts (one per user per emoji per post)
+create table if not exists public.post_reactions (
+  id bigint generated always as identity primary key,
+  post_id bigint references public.community_posts(id) on delete cascade not null,
+  user_id uuid references auth.users(id) on delete cascade not null,
+  emoji text not null,
+  created_at timestamptz not null default now(),
+  unique(post_id, user_id, emoji)
+);
+
+create index if not exists idx_community_posts_created on public.community_posts(created_at desc);
+create index if not exists idx_post_reactions_post_id on public.post_reactions(post_id);
+
+alter table public.community_posts enable row level security;
+alter table public.post_reactions enable row level security;
+
+-- All authenticated users can view all posts (public channel)
+create policy "Anyone can view posts"
+  on public.community_posts for select using (auth.uid() is not null);
+-- Users can create their own posts
+create policy "Users can create own posts"
+  on public.community_posts for insert with check (auth.uid() = user_id);
+-- Users can delete their own posts
+create policy "Users can delete own posts"
+  on public.community_posts for delete using (auth.uid() = user_id);
+
+-- All authenticated users can view all reactions
+create policy "Anyone can view reactions"
+  on public.post_reactions for select using (auth.uid() is not null);
+-- Users can add their own reactions
+create policy "Users can add own reactions"
+  on public.post_reactions for insert with check (auth.uid() = user_id);
+-- Users can remove their own reactions
+create policy "Users can remove own reactions"
+  on public.post_reactions for delete using (auth.uid() = user_id);
+
+-- ============================================================
 -- CLOSE USER ACCOUNT (soft-delete)
 -- ============================================================
 -- Marks the account as closed by setting profiles.closed_at.

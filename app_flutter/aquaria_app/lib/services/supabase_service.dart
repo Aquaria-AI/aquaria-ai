@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:crypto/crypto.dart';
@@ -440,6 +441,107 @@ class SupabaseService {
         .select('task_key')
         .eq('user_id', uid);
     return data.map<String>((r) => r['task_key'] as String).toSet();
+  }
+
+  // ── Community ──────────────────────────────────────────────────────────
+
+  /// Upload a photo to Supabase Storage and return the storage path.
+  /// The bucket is private — use [getCommunityPhotoUrl] to get a signed URL.
+  static Future<String> uploadCommunityPhoto(String filePath) async {
+    final uid = userId;
+    if (uid == null) throw Exception('Not logged in');
+    final ext = filePath.split('.').last;
+    final storagePath = '$uid/${DateTime.now().millisecondsSinceEpoch}.$ext';
+    final bytes = await File(filePath).readAsBytes();
+    await client.storage.from('community-photos').uploadBinary(
+      storagePath,
+      bytes,
+      fileOptions: const FileOptions(upsert: true),
+    );
+    return storagePath;
+  }
+
+  /// Get signed URLs for community photos in one batch call (valid for 1 hour).
+  static Future<Map<String, String>> getCommunityPhotoUrls(List<String> storagePaths) async {
+    if (storagePaths.isEmpty) return {};
+    final results = await client.storage
+        .from('community-photos')
+        .createSignedUrls(storagePaths, 3600);
+    final map = <String, String>{};
+    for (final r in results) {
+      if (r.signedUrl.isNotEmpty) {
+        map[r.path ?? ''] = r.signedUrl;
+      }
+    }
+    return map;
+  }
+
+  /// Create a community post with a photo URL and caption.
+  static Future<void> createPost({
+    required String photoUrl,
+    required String caption,
+  }) async {
+    final uid = userId;
+    if (uid == null) return;
+    await client.from('community_posts').insert({
+      'user_id': uid,
+      'photo_url': photoUrl,
+      'caption': caption,
+    });
+  }
+
+  /// Fetch all posts in the general channel, newest first.
+  static Future<List<Map<String, dynamic>>> fetchPosts() async {
+    final data = await client
+        .from('community_posts')
+        .select('*, profiles!inner(display_name, username)')
+        .order('created_at', ascending: false);
+    return List<Map<String, dynamic>>.from(data);
+  }
+
+  /// Fetch reactions for a list of post IDs.
+  static Future<Map<int, List<Map<String, dynamic>>>> fetchReactions(List<int> postIds) async {
+    if (postIds.isEmpty) return {};
+    final data = await client
+        .from('post_reactions')
+        .select()
+        .inFilter('post_id', postIds);
+    final map = <int, List<Map<String, dynamic>>>{};
+    for (final r in data) {
+      final pid = r['post_id'] as int;
+      map.putIfAbsent(pid, () => []).add(r);
+    }
+    return map;
+  }
+
+  /// Toggle a reaction on a post. Returns true if added, false if removed.
+  static Future<bool> toggleReaction(int postId, String emoji) async {
+    final uid = userId;
+    if (uid == null) throw Exception('Not logged in');
+    // Check if reaction already exists
+    final existing = await client
+        .from('post_reactions')
+        .select('id')
+        .eq('post_id', postId)
+        .eq('user_id', uid)
+        .eq('emoji', emoji)
+        .maybeSingle();
+    if (existing != null) {
+      await client.from('post_reactions').delete().eq('id', existing['id']);
+      return false;
+    } else {
+      await client.from('post_reactions').insert({
+        'post_id': postId,
+        'user_id': uid,
+        'emoji': emoji,
+      });
+      return true;
+    }
+  }
+
+  /// Delete a community post (only the author can delete via RLS).
+  static Future<void> deletePost(int postId) async {
+    await client.from('community_posts').delete().eq('id', postId);
   }
 
   // ── Full Sync (pull from cloud) ──────────────────────────────────────────

@@ -188,6 +188,10 @@ AppBar _buildAppBar(BuildContext context, String title, {List<Widget>? actions})
               _showFeedbackSheet(context);
             } else if (value == 'experience') {
               _showExperiencePicker(context);
+            } else if (value == 'community') {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const _CommunityScreen()),
+              );
             } else if (value == 'profile') {
               Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const _ProfileScreen()),
@@ -230,6 +234,8 @@ AppBar _buildAppBar(BuildContext context, String title, {List<Widget>? actions})
               ),
               const PopupMenuDivider(),
             ],
+            if (SupabaseService.isLoggedIn)
+              const PopupMenuItem(value: 'community', child: Text('Community')),
             if (SupabaseService.isLoggedIn)
               const PopupMenuItem(value: 'profile', child: Text('Profile')),
             const PopupMenuItem(value: 'onboarding', child: Text('Onboarding')),
@@ -11594,6 +11600,382 @@ class _ManageRecurringTasksScreenState extends State<_ManageRecurringTasksScreen
 // ═══════════════════════════════════════════════════════════════════════════
 // PROFILE SCREEN
 // ═══════════════════════════════════════════════════════════════════════════
+// COMMUNITY SCREEN
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Positive-only emoji palette for reactions.
+const _kReactionEmojis = ['👍', '❤️', '🔥', '😍', '🐠', '🌊', '💯', '👏'];
+
+class _CommunityScreen extends StatefulWidget {
+  const _CommunityScreen();
+  @override
+  State<_CommunityScreen> createState() => _CommunityScreenState();
+}
+
+class _CommunityScreenState extends State<_CommunityScreen> {
+  List<Map<String, dynamic>> _posts = [];
+  Map<int, List<Map<String, dynamic>>> _reactions = {};
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final posts = await SupabaseService.fetchPosts();
+      // Batch-sign all photo URLs in one call
+      final paths = posts.map((p) => p['photo_url'] as String).toList();
+      final signedUrls = await SupabaseService.getCommunityPhotoUrls(paths);
+      for (final post in posts) {
+        post['_signed_url'] = signedUrls[post['photo_url']] ?? '';
+      }
+      final postIds = posts.map((p) => p['id'] as int).toList();
+      final reactions = await SupabaseService.fetchReactions(postIds);
+      if (mounted) setState(() { _posts = posts; _reactions = reactions; _loading = false; });
+    } catch (e) {
+      if (mounted) {
+        setState(() => _loading = false);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error loading posts: $e')));
+      }
+    }
+  }
+
+  Future<void> _createPost() async {
+    // Pick image source
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.camera_alt),
+              title: const Text('Take Photo'),
+              onTap: () => Navigator.of(ctx).pop(ImageSource.camera),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library),
+              title: const Text('Choose from Gallery'),
+              onTap: () => Navigator.of(ctx).pop(ImageSource.gallery),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (source == null || !mounted) return;
+
+    final picked = await ImagePicker().pickImage(source: source, imageQuality: 80);
+    if (picked == null || !mounted) return;
+
+    // Show caption dialog
+    final caption = await showDialog<String>(
+      context: context,
+      builder: (ctx) {
+        final ctrl = TextEditingController();
+        return AlertDialog(
+          title: const Text('Share to Community'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Image.file(File(picked.path), height: 180, width: double.infinity, fit: BoxFit.cover),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: ctrl,
+                maxLength: 150,
+                maxLines: 2,
+                decoration: const InputDecoration(
+                  hintText: 'Add a caption...',
+                  border: OutlineInputBorder(),
+                  contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: _cDark),
+              onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+              child: const Text('Share'),
+            ),
+          ],
+        );
+      },
+    );
+    if (caption == null || !mounted) return;
+
+    // Upload and create post
+    _showPostingOverlay();
+    try {
+      final photoUrl = await SupabaseService.uploadCommunityPhoto(picked.path);
+      await SupabaseService.createPost(photoUrl: photoUrl, caption: caption);
+      if (mounted) {
+        Navigator.of(context).pop(); // dismiss overlay
+        _load();
+      }
+    } catch (e) {
+      if (mounted) {
+        Navigator.of(context).pop(); // dismiss overlay
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to share: $e')));
+      }
+    }
+  }
+
+  void _showPostingOverlay() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(
+        child: Card(
+          child: Padding(
+            padding: EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircularProgressIndicator(),
+                SizedBox(height: 12),
+                Text('Sharing...'),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _toggleReaction(int postId, String emoji) async {
+    try {
+      await SupabaseService.toggleReaction(postId, emoji);
+      // Refresh reactions for this post
+      final updated = await SupabaseService.fetchReactions([postId]);
+      if (mounted) setState(() => _reactions[postId] = updated[postId] ?? []);
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+    }
+  }
+
+  void _showEmojiPicker(int postId) {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            alignment: WrapAlignment.center,
+            children: _kReactionEmojis.map((emoji) => GestureDetector(
+              onTap: () {
+                Navigator.pop(ctx);
+                _toggleReaction(postId, emoji);
+              },
+              child: Text(emoji, style: const TextStyle(fontSize: 32)),
+            )).toList(),
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _authorName(Map<String, dynamic> post) {
+    final profile = post['profiles'] as Map<String, dynamic>?;
+    if (profile == null) return 'Unknown';
+    final display = profile['display_name'] as String?;
+    final username = profile['username'] as String?;
+    if (display != null && display.isNotEmpty) return display;
+    if (username != null && username.isNotEmpty) return '@$username';
+    return 'Aquarist';
+  }
+
+  String _timeAgo(String iso) {
+    final dt = DateTime.tryParse(iso);
+    if (dt == null) return '';
+    final diff = DateTime.now().toUtc().difference(dt);
+    if (diff.inMinutes < 1) return 'just now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return '${diff.inHours}h ago';
+    if (diff.inDays < 7) return '${diff.inDays}d ago';
+    return '${dt.month}/${dt.day}/${dt.year}';
+  }
+
+  Widget _buildReactionBar(int postId) {
+    final reactions = _reactions[postId] ?? [];
+    final uid = SupabaseService.userId;
+    // Group by emoji
+    final counts = <String, int>{};
+    final userReacted = <String, bool>{};
+    for (final r in reactions) {
+      final emoji = r['emoji'] as String;
+      counts[emoji] = (counts[emoji] ?? 0) + 1;
+      if (r['user_id'] == uid) userReacted[emoji] = true;
+    }
+    return Wrap(
+      spacing: 6,
+      runSpacing: 4,
+      children: [
+        ...counts.entries.map((e) => GestureDetector(
+          onTap: () => _toggleReaction(postId, e.key),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: userReacted[e.key] == true ? const Color(0xFFE0F2F1) : Colors.grey.shade100,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: userReacted[e.key] == true ? const Color(0xFF1FA2A8) : Colors.grey.shade300,
+              ),
+            ),
+            child: Text('${e.key} ${e.value}', style: const TextStyle(fontSize: 13)),
+          ),
+        )),
+        GestureDetector(
+          onTap: () => _showEmojiPicker(postId),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: Colors.grey.shade100,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.grey.shade300),
+            ),
+            child: const Icon(Icons.add_reaction_outlined, size: 16, color: Colors.black54),
+          ),
+        ),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: _buildAppBar(context, 'Community'),
+      floatingActionButton: FloatingActionButton(
+        backgroundColor: const Color(0xFF1FA2A8),
+        onPressed: _createPost,
+        child: const Icon(Icons.add_a_photo, color: Colors.white),
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : _posts.isEmpty
+              ? Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.photo_library_outlined, size: 64, color: Colors.grey.shade300),
+                      const SizedBox(height: 12),
+                      const Text('No posts yet', style: TextStyle(color: Colors.black54, fontSize: 16)),
+                      const SizedBox(height: 4),
+                      const Text('Be the first to share!', style: TextStyle(color: Colors.black38, fontSize: 13)),
+                    ],
+                  ),
+                )
+              : RefreshIndicator(
+                  onRefresh: _load,
+                  child: ListView.separated(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 80),
+                    itemCount: _posts.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 16),
+                    itemBuilder: (_, i) {
+                      final post = _posts[i];
+                      final postId = post['id'] as int;
+                      final isAuthor = post['user_id'] == SupabaseService.userId;
+                      return Card(
+                        clipBehavior: Clip.antiAlias,
+                        elevation: 1,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // Photo
+                            Image.network(
+                              post['_signed_url'] as String,
+                              width: double.infinity,
+                              height: 260,
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, __, ___) => Container(
+                                height: 260,
+                                color: Colors.grey.shade200,
+                                child: const Center(child: Icon(Icons.broken_image, size: 48, color: Colors.grey)),
+                              ),
+                            ),
+                            Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  // Author + time + delete
+                                  Row(
+                                    children: [
+                                      const Icon(Icons.account_circle, size: 20, color: Color(0xFF1FA2A8)),
+                                      const SizedBox(width: 6),
+                                      Expanded(
+                                        child: Text(
+                                          _authorName(post),
+                                          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                      Text(
+                                        _timeAgo(post['created_at'] as String),
+                                        style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+                                      ),
+                                      if (isAuthor)
+                                        IconButton(
+                                          icon: const Icon(Icons.delete_outline, size: 18),
+                                          color: Colors.grey,
+                                          padding: EdgeInsets.zero,
+                                          constraints: const BoxConstraints(),
+                                          onPressed: () async {
+                                            final ok = await showDialog<bool>(
+                                              context: context,
+                                              builder: (ctx) => AlertDialog(
+                                                title: const Text('Delete post?'),
+                                                actions: [
+                                                  TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+                                                  TextButton(
+                                                    onPressed: () => Navigator.pop(ctx, true),
+                                                    style: TextButton.styleFrom(foregroundColor: Colors.red),
+                                                    child: const Text('Delete'),
+                                                  ),
+                                                ],
+                                              ),
+                                            );
+                                            if (ok == true) {
+                                              await SupabaseService.deletePost(postId);
+                                              _load();
+                                            }
+                                          },
+                                        ),
+                                    ],
+                                  ),
+                                  // Caption
+                                  if ((post['caption'] as String?)?.isNotEmpty == true) ...[
+                                    const SizedBox(height: 8),
+                                    Text(post['caption'] as String, style: const TextStyle(fontSize: 14)),
+                                  ],
+                                  // Reactions
+                                  const SizedBox(height: 10),
+                                  _buildReactionBar(postId),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 
 class _ProfileScreen extends StatefulWidget {
   const _ProfileScreen();
@@ -11829,7 +12211,7 @@ class _ProfileScreenState extends State<_ProfileScreen> {
                   const Text('Danger Zone', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.red)),
                   const SizedBox(height: 8),
                   const Text(
-                    'Close your account and sign out. Your data will be retained for up to 12 months, then permanently deleted.',
+                    'Close your account and sign out. Your account will be marked for permanent deletion.',
                     style: TextStyle(fontSize: 13, color: Colors.black54),
                   ),
                   const SizedBox(height: 12),
