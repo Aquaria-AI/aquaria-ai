@@ -126,48 +126,25 @@ class _AquariaFooter extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final hasButton = onAiTap != null;
-    // Read the bottom safe area (Android nav bar / iOS home indicator).
-    final bottomInset = MediaQuery.of(context).padding.bottom + extraBottomPadding;
-    // Extend the widget upward by half the button so the button centre sits
-    // exactly on the top border of the green area — fully within our bounds.
-    final topOverhang = hasButton ? _buttonSize / 2 : 0.0;
-    // Green bar covers the footer + safe area so nothing peeks through.
-    final greenHeight = _kFooterHeight + bottomInset;
+    if (onAiTap == null) return const SizedBox.shrink();
     return SizedBox(
-      height: greenHeight + topOverhang,
-      child: Stack(
-        children: [
-          // Green bar — lower portion including safe area
-          Positioned(
-            left: 0, right: 0, bottom: 0,
-            height: greenHeight,
-            child: const ColoredBox(color: Color(0xFF26A7BA)),
-          ),
-          // Button — centred at top edge of green bar, above safe area
-          if (hasButton)
-            Positioned(
-              top: 0,
-              left: 0, right: 0,
-              child: Center(
-                child: SizedBox(
-                  width: _buttonSize,
-                  height: _buttonSize,
-                  child: Material(
-                    color: const Color(0xFFC8A97E),
-                    shape: const CircleBorder(),
-                    elevation: 3,
-                    shadowColor: Colors.black38,
-                    child: InkWell(
-                      customBorder: const CircleBorder(),
-                      onTap: onAiTap,
-                      child: const Icon(Icons.auto_awesome, color: Colors.white, size: 28),
-                    ),
-                  ),
-                ),
-              ),
+      height: _buttonSize / 2 + 10,
+      child: Center(
+        child: SizedBox(
+          width: _buttonSize,
+          height: _buttonSize,
+          child: Material(
+            color: const Color(0xFFC8A97E),
+            shape: const CircleBorder(),
+            elevation: 3,
+            shadowColor: Colors.black38,
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: onAiTap,
+              child: const Icon(Icons.auto_awesome, color: Colors.white, size: 28),
             ),
-        ],
+          ),
+        ),
       ),
     );
   }
