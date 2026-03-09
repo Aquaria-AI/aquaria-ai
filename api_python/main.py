@@ -21,6 +21,31 @@ app.add_middleware(
 )
 
 
+_MODEL_HAIKU = "claude-haiku-4-5"
+_MODEL_SONNET = "claude-sonnet-4-20250514"
+
+
+def _pick_model(experience: str = "", water_type: str = "", all_water_types: list = None) -> str:
+    """Route to Sonnet for advanced users or complex tank types, Haiku otherwise."""
+    exp = (experience or "").lower()
+    wt = (water_type or "").lower()
+    _complex = {"planted", "saltwater", "reef"}
+    has_complex_tank = wt in _complex or any(
+        (t or "").lower() in _complex for t in (all_water_types or [])
+    )
+    if exp == "advanced":
+        model = _MODEL_SONNET
+    elif exp == "intermediate" and has_complex_tank:
+        model = _MODEL_SONNET
+    elif not exp and wt in _complex:
+        # Summary endpoint: no experience level, route by water type alone
+        model = _MODEL_SONNET
+    else:
+        model = _MODEL_HAIKU
+    print(f"[ModelRouter] exp={exp or 'none'} wt={wt or 'none'} complex_any={has_complex_tank} → {model}")
+    return model
+
+
 def _chat(client: anthropic.Anthropic, **kwargs):
     """Call client.messages.create with retry on 529 overloaded errors."""
     for attempt in range(4):
@@ -206,6 +231,8 @@ class AdviseRequest(BaseModel):
 
 class SummaryRequest(BaseModel):
     logs: List[Dict[str, Any]]
+    water_type: Optional[str] = None  # 'freshwater', 'saltwater', 'reef', etc.
+    gallons: Optional[int] = None
 
 
 class ChatRequest(BaseModel):
@@ -770,10 +797,16 @@ def summarize_tank_logs(req: SummaryRequest):
 
     try:
         client = anthropic.Anthropic(api_key=api_key)
+        system_prompt = _SUMMARY_SYSTEM_PROMPT
+        if req.water_type:
+            system_prompt += f"\n\nThis is a {req.water_type} tank"
+            if req.gallons:
+                system_prompt += f" ({req.gallons} gallons)"
+            system_prompt += ". Use the corresponding reference ranges above to evaluate parameters."
         response = _chat(client,
-            model="claude-haiku-4-5",
+            model=_pick_model(water_type=req.water_type or ""),
             max_tokens=256,
-            system=_SUMMARY_SYSTEM_PROMPT,
+            system=system_prompt,
             messages=[{"role": "user", "content": entries}],
         )
         return {"summary": response.content[0].text.strip()}
@@ -832,6 +865,10 @@ If a message has absolutely nothing to do with aquariums (a personal insult, an 
 Your other jobs (after the log confirmation, if applicable):
 1. If the log entry was ambiguous or missing a key detail (other than date, which is handled above), ask ONE concise clarifying question after confirming.
    Examples: "phosphates are high" → confirm logged, then ask what the value was.
+   Do NOT ask for clarification on standard aquarium parameter abbreviations — these are unambiguous:
+   K = potassium, Ca = calcium, Mg = magnesium, GH = general hardness, KH = carbonate hardness,
+   NH3 = ammonia, NO2 = nitrite, NO3 = nitrate, PO4 = phosphate, SG = salinity/specific gravity.
+   If the user says "K 150", log it as potassium 150. Do not ask "did you mean potassium?"
 2. When the log entry is clear and complete, the confirmation alone is enough — add follow-up only if genuinely useful.
 3. When the user asks a question, answer it directly. If it follows a log entry, confirm the log first, then answer.
 4. When the user sets a reminder or task, confirm with a phrase like "I've set a reminder for [description] on [date]." or "Reminder scheduled for [date]." Always include "reminder" in your confirmation.
@@ -1177,6 +1214,13 @@ def chat_tank(req: ChatRequest):
     def _tank_name(t):
         return t.get("name", str(t)) if isinstance(t, dict) else str(t)
 
+    def _tank_short(t):
+        if isinstance(t, dict):
+            name = t.get("name", "Unknown")
+            gal = t.get("gallons", "?")
+            return f'{name} ({gal} gal)'
+        return str(t)
+
     print(f"[Chat] tank={'set' if tank else 'none'} available_tanks={[_tank_name(t) for t in available_tanks]} no_tank_context={no_tank_context}")
 
     if no_tank_context and len(available_tanks) > 1:
@@ -1190,6 +1234,11 @@ def chat_tank(req: ChatRequest):
             f"use the tank details above (size, type, creation date) to resolve which tank they mean. "
             f"Once the tank is identified, confirm it in your reply (e.g. 'Got it — logging that for [Tank Name].'). "
             f"If the user's message is a general question or doesn't involve logging, no clarification is needed.\n"
+            f"When asking which tank, ALWAYS include the tank name AND size (e.g. 'Reef Tank (75 gal)') to help the user identify them.\n"
+            f"HARD RULE: The ONLY valid tanks are listed above. You CANNOT log data to any tank not in that list. "
+            f"If the user names a tank that is NOT listed above, it does not exist or has been archived. "
+            f"Do NOT say you are logging to it. Instead say something like: "
+            f"\"I don't see a tank called [name] in your active tanks. Your current tanks are: {', '.join(_tank_short(t) for t in available_tanks)}. Which one did you mean?\"\n"
             f"Note: you can still create NEW tank profiles if the user asks — do not refuse.\n"
         )
     elif no_tank_context and len(available_tanks) == 1:
@@ -1379,8 +1428,10 @@ def chat_tank(req: ChatRequest):
                 print(f"[NoteExtract] error: {e}")
                 return {"response": "", "tasks": []}
 
+        chat_water_type = (tank.get("water_type") or tank.get("waterType") or "") if tank else ""
+        all_wt = [t.get("water_type", "") for t in (req.available_tanks_detail or [])]
         response = _chat(client,
-            model="claude-haiku-4-5",
+            model=_pick_model(experience=req.experience_level or "", water_type=chat_water_type, all_water_types=all_wt),
             max_tokens=256,
             system=_CHAT_SYSTEM_PROMPT + f"\n\n{tank_context}" + (f"\n\n{req.system_context}" if req.system_context else ""),
             messages=messages,

@@ -175,11 +175,15 @@ class _AquariaFooter extends StatelessWidget {
 const _cLogoTeal = Color(0xFF2297A8);
 
 AppBar _buildAppBar(BuildContext context, String title, {List<Widget>? actions}) => AppBar(
-      title: Text(title, style: const TextStyle(color: _cDark, fontWeight: FontWeight.bold)),
+      title: Text(title, style: const TextStyle(color: _cDark, fontWeight: FontWeight.bold, fontSize: 17)),
+      centerTitle: false,
       iconTheme: const IconThemeData(color: _cDark),
       actionsIconTheme: const IconThemeData(color: _cDark),
       backgroundColor: Colors.white,
       elevation: 0,
+      scrolledUnderElevation: 0,
+      surfaceTintColor: Colors.white,
+      toolbarHeight: kToolbarHeight,
       actions: [
         ...(actions ?? []),
         IconButton(
@@ -985,7 +989,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       await _saveExperienceLevel(_experience);
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => TankListScreen(showWelcome: _pendingCsvContent != null)),
+        MaterialPageRoute(builder: (_) => TankListScreen(showWelcome: true)),
       );
     } catch (e) {
       if (!mounted) return;
@@ -3385,7 +3389,6 @@ class _TankListScreenState extends State<TankListScreen> {
   Set<String> _tanksWithoutLogs = {};
   String _tankSort = 'newest'; // 'newest' | 'oldest' | 'az' | 'za'
   int _tipCardIndex = 0; // current tip shown on the card
-  bool _showNudgeOnCard = false; // true = nudge, false = tip on the merged card
 
   bool _expReady = false;
   bool _refreshReady = false;
@@ -3399,8 +3402,6 @@ class _TankListScreenState extends State<TankListScreen> {
       setState(() => _experience = v);
       final tipIdx = await _currentTipIndex(v);
       if (mounted) setState(() => _tipCardIndex = tipIdx);
-      final showNudge = await _loadAndToggleCardMode();
-      if (mounted) setState(() => _showNudgeOnCard = showNudge);
       if (await _shouldShowDailyTip()) {
         final newIdx = await _nextTipIndex(v);
         await _markDailyTipShown();
@@ -3425,22 +3426,10 @@ class _TankListScreenState extends State<TankListScreen> {
 
   /// Reads the last card mode and toggles it for next login.
   /// Returns true if this login should show the nudge.
-  Future<bool> _loadAndToggleCardMode() async {
-    final dir = await getApplicationDocumentsDirectory();
-    final f = File('${dir.path}/.home_card_mode');
-    String last = 'tip'; // default: last was tip → show nudge first
-    try {
-      if (await f.exists()) last = await f.readAsString();
-    } catch (_) {}
-    final showNudge = last.trim() == 'tip';
-    await f.writeAsString(showNudge ? 'nudge' : 'tip');
-    return showNudge;
-  }
-
   void _showDailyTipOverlay() {
     // Check if this login shows a nudge instead of a tip
     final nudge = _buildHomeNudge();
-    if (_showNudgeOnCard && nudge != null) {
+    if (nudge != null) {
       showDialog<void>(
         context: context,
         barrierColor: Colors.black54,
@@ -3527,12 +3516,12 @@ class _TankListScreenState extends State<TankListScreen> {
       barrierDismissible: true,
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Import complete!', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 18)),
+        title: const Text('You\'re all set!', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 18)),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             const Text(
-              'Your data has been imported successfully. What would you like to do next?',
+              'Your tank is ready. What would you like to do next?',
               style: TextStyle(fontSize: 14, color: Colors.black87, height: 1.4),
             ),
             const SizedBox(height: 20),
@@ -3904,7 +3893,7 @@ class _TankListScreenState extends State<TankListScreen> {
                                   tipIndex: _tipCardIndex,
                                   onIndexChanged: (i) => setState(() => _tipCardIndex = i),
                                   userWaterTypes: tanks.map((t) => t.waterType).toSet(),
-                                  showNudge: _showNudgeOnCard,
+
                                   tanks: tanks,
                                   tanksWithoutInhabitants: _tanksWithoutInhabitants,
                                   tanksWithoutLogs: _tanksWithoutLogs,
@@ -3936,7 +3925,7 @@ class _TankListScreenState extends State<TankListScreen> {
                                       tipIndex: _tipCardIndex,
                                       onIndexChanged: (i) => setState(() => _tipCardIndex = i),
                                       userWaterTypes: tanks.map((t) => t.waterType).toSet(),
-                                      showNudge: _showNudgeOnCard,
+    
                                       tanks: tanks,
                                       tanksWithoutInhabitants: _tanksWithoutInhabitants,
                                       tanksWithoutLogs: _tanksWithoutLogs,
@@ -4197,7 +4186,7 @@ class _TankListScreenState extends State<TankListScreen> {
             allTanks: TankStore.instance.tanks,
             onLogsChanged: _refresh,
           ),
-        ),
+        ).then((_) => _refresh()),
       ),
     );
   }
@@ -4631,7 +4620,6 @@ class _MergedTopCard extends StatelessWidget {
   final int tipIndex;
   final ValueChanged<int> onIndexChanged;
   final Set<WaterType> userWaterTypes;
-  final bool showNudge;
   final List<TankModel> tanks;
   final Set<String> tanksWithoutInhabitants;
   final Set<String> tanksWithoutLogs;
@@ -4642,7 +4630,6 @@ class _MergedTopCard extends StatelessWidget {
     required this.tipIndex,
     required this.onIndexChanged,
     this.userWaterTypes = const {},
-    required this.showNudge,
     required this.tanks,
     this.tanksWithoutInhabitants = const {},
     this.tanksWithoutLogs = const {},
@@ -4692,9 +4679,8 @@ class _MergedTopCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final nudge = _buildNudge();
-    // If nudge turn and nudge exists, show nudge; otherwise show tip
-    // If no nudge exists, always show tip
-    if (showNudge && nudge != null) {
+    // Always show nudge if one exists; fall through to tip otherwise
+    if (nudge != null) {
       return _TipCard(
         experience: experience,
         tipIndex: tipIndex,
@@ -5512,7 +5498,11 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
           .post(
             Uri.parse('$_baseUrl/summary/tank-logs'),
             headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({'logs': logsData}),
+            body: jsonEncode({
+              'logs': logsData,
+              'water_type': _tank.waterType.label,
+              'gallons': _tank.gallons,
+            }),
           )
           .timeout(const Duration(seconds: 15));
       if (resp.statusCode == 200 && mounted) {
@@ -5706,7 +5696,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
             allTanks: TankStore.instance.tanks,
             onLogsChanged: _load,
           ),
-        ),
+        ).then((_) => _load()),
       ),
       body: RefreshIndicator(
         onRefresh: _load,
@@ -5793,12 +5783,28 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
             child: Row(
               children: [
-                _NavIconButton(child: Image.asset('assets/images/fish.jpg', width: 28, height: 28), tooltip: 'Inhabitants', color: const Color(0xFF2E86AB), onTap: () async {
-                  await Navigator.of(context).push(MaterialPageRoute(builder: (_) => InhabitantsScreen(tank: _tank)));
-                }),
+                Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    _NavIconButton(child: Image.asset('assets/images/fish.jpg', width: 28, height: 28), tooltip: 'Inhabitants', color: const Color(0xFF2E86AB), onTap: () async {
+                      await Navigator.of(context).push(MaterialPageRoute(builder: (_) => InhabitantsScreen(tank: _tank)));
+                      await _load();
+                    }),
+                    if (_compatibilityWarnings(
+                      _inhabitants.map((i) => (name: i.name, type: i.type ?? 'fish', count: i.count)).toList(),
+                      _tank.waterType,
+                    ).isNotEmpty)
+                      const Positioned(
+                        top: -2,
+                        right: -2,
+                        child: Text('⚠️', style: TextStyle(fontSize: 12)),
+                      ),
+                  ],
+                ),
                 const SizedBox(width: 8),
-                _NavIconButton(icon: Icons.menu_book_outlined, tooltip: 'Daily Logs', color: const Color(0xFF5B8C5A), onTap: () {
-                  Navigator.of(context).push(MaterialPageRoute(builder: (_) => DailyLogsScreen(tank: _tank, logs: _logs)));
+                _NavIconButton(icon: Icons.menu_book_outlined, tooltip: 'Daily Logs', color: const Color(0xFF5B8C5A), onTap: () async {
+                  await Navigator.of(context).push(MaterialPageRoute(builder: (_) => DailyLogsScreen(tank: _tank, logs: _logs)));
+                  await _load();
                 }),
                 const SizedBox(width: 8),
                 _NavIconButton(icon: Icons.show_chart, tooltip: 'Charts', color: const Color(0xFFE07A2F), onTap: () {
@@ -6566,13 +6572,14 @@ class _ChatSheetState extends State<_ChatSheet> {
     // Only parse for log data if the message looks like it contains aquarium info
     // (measurements, observations, actions) — skip pure conversational messages.
     final _logWordsRe = RegExp(
-      r'\b(ph|ammonia|nitrite|nitrate|kh|gh|temp|temperature|salinity|calcium|'
-      r'magnesium|phosphate|alkalinity|alk|ppm|dkh|sg|'
+      r'\b(ph|ammonia|nh3|nitrite|no2|nitrate|no3|kh|gh|temp|temperature|salinity|calcium|ca|'
+      r'magnesium|mg|phosphate|po4|alkalinity|alk|potassium|iron|fe|tds|ppm|dkh|sg|'
       r'water\s*change|dose[d]?|dosing|fed|feed|clean|trim|prune|'
       r'test|tested|measure|reading|parameters|levels|results|'
       r'added|removed|replaced|installed|treated|'
       r'cloudy|clear|brown|yellow|green|murky|hazy|milky|foamy|smelly|odor|algae|bloom|sick|dead|died|spawn|'
-      r'filter|heater|light|pump|skimmer)\b',
+      r'filter|heater|light|pump|skimmer)\b'
+      r'|\b[kK]\s*[:=]?\s*\d',  // K followed by a number = potassium measurement
       caseSensitive: false,
     );
     if (_logWordsRe.hasMatch(text)) {
@@ -7790,7 +7797,7 @@ class _TankDetailScreenState extends State<TankDetailScreen> {
             allTanks: TankStore.instance.tanks,
             onLogsChanged: _load,
           ),
-        ),
+        ).then((_) => _load()),
       ),
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -8042,7 +8049,7 @@ class _TapWaterProfileScreenState extends State<TapWaterProfileScreen> {
     final data = _data;
     return Scaffold(
       backgroundColor: Colors.white,
-      appBar: _buildAppBar(context, 'Tap Water Profile', actions: [
+      appBar: _buildAppBar(context, '', actions: [
         IconButton(
           icon: const Icon(Icons.edit_outlined),
           tooltip: 'Edit',
@@ -8054,6 +8061,11 @@ class _TapWaterProfileScreenState extends State<TapWaterProfileScreen> {
           : ListView(
               padding: const EdgeInsets.all(16),
               children: [
+                const Text(
+                  'Tap Water Profile',
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: _cDark),
+                ),
+                const SizedBox(height: 8),
                 const Text(
                   'Your tap water chemistry — Ariel uses this when advising on water adjustments.',
                   style: TextStyle(fontSize: 13, color: Colors.black54),
@@ -8150,7 +8162,7 @@ class _InhabitantsScreenState extends State<InhabitantsScreen> {
             allTanks: TankStore.instance.tanks,
             onLogsChanged: _load,
           ),
-        ),
+        ).then((_) => _load()),
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
@@ -8794,7 +8806,7 @@ class _CsvImportScreenState extends State<_CsvImportScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: _buildAppBar(context, 'Import CSV'),
+      appBar: _buildAppBar(context, ''),
       body: _rows == null ? _buildPickerView() : _buildMappingView(),
     );
   }
@@ -8806,6 +8818,11 @@ class _CsvImportScreenState extends State<_CsvImportScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            const Text(
+              'Import CSV',
+              style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: _cDark),
+            ),
+            const SizedBox(height: 16),
             const Icon(Icons.upload_file, size: 56, color: _cMid),
             const SizedBox(height: 16),
             const Text(
@@ -8856,6 +8873,11 @@ class _CsvImportScreenState extends State<_CsvImportScreen> {
           child: ListView(
             padding: const EdgeInsets.all(16),
             children: [
+              const Text(
+                'Import CSV',
+                style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: _cDark),
+              ),
+              const SizedBox(height: 12),
               Text(
                 '${_rows!.length} rows found. Map your columns to parameters:',
                 style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
@@ -9408,7 +9430,7 @@ class _DailyLogsScreenState extends State<DailyLogsScreen> {
             allTanks: TankStore.instance.tanks,
             onLogsChanged: _reload,
           ),
-        ),
+        ).then((_) => _reload()),
       ),
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -9750,6 +9772,7 @@ const _paramColors = <String, Color>{
   'magnesium': Color(0xFF00897B),
   'temp':      Color(0xFFFF7043),
   'salinity':  Color(0xFF1565C0),
+  'iron':      Color(0xFFFF8F00),
 };
 
 // ── All Charts Screen ────────────────────────────────────────────────────────
@@ -9956,7 +9979,7 @@ class _ChartsScreenState extends State<ChartsScreen> {
               allTanks: TankStore.instance.tanks,
               onLogsChanged: _load,
             ),
-          ),
+          ).then((_) => _load()),
         ),
       ),
       body: Column(
@@ -10005,11 +10028,12 @@ class _ChartCard extends StatelessWidget {
   static Map<String, (double, double)> _ranges(WaterType wt) {
     if (wt == WaterType.saltwater || wt == WaterType.reef) {
       return {
-        'nitrate':   (5, 25),
+        'ammonia':   (0, 0),
+        'nitrite':   (0, 0),
+        'nitrate':   (0, 20),
         'ph':        (8.1, 8.3),
-        'gh':        (6, 12),
         'kh':        (8, 12),
-        'calcium':   (250, 350),
+        'calcium':   (380, 450),
         'magnesium': (1250, 1350),
         'phosphate': (0.03, 0.5),
         'potassium': (380, 420),
@@ -10019,22 +10043,25 @@ class _ChartCard extends StatelessWidget {
     }
     if (wt == WaterType.planted) {
       return {
-        'nitrate':   (5, 25),
+        'ammonia':   (0, 0),
+        'nitrite':   (0, 0),
+        'nitrate':   (0, 20),
         'ph':        (6.5, 7.5),
         'kh':        (4, 8),
         'gh':        (4, 12),
-        'calcium':   (30, 40),
         'phosphate': (0, 0.5),
         'potassium': (5, 20),
+        'iron':      (0.05, 0.1),
         'temp':      (74, 80),
       };
     }
     return {
-      'nitrate':   (5, 25),
+      'ammonia':   (0, 0),
+      'nitrite':   (0, 0),
+      'nitrate':   (0, 20),
       'ph':        (6.5, 7.5),
       'kh':        (4, 8),
       'gh':        (4, 12),
-      'calcium':   (30, 40),
       'phosphate': (0, 0.5),
       'potassium': (5, 20),
       'temp':      (74, 80),
@@ -10080,44 +10107,52 @@ class _ChartCard extends StatelessWidget {
     final yMin = (minY - pad).clamp(0, double.infinity).toDouble();
     final yMax = maxY + pad;
     const rangeColors = <String, Color>{
-      'nitrate':   Color(0x22800080), // purple
-      'kh':        Color(0x225C6BC0), // KH line color (indigo)
-      'gh':        Color(0x2200BCD4), // GH line color (cyan)
+      'nitrate':   Color(0x22800080),
+      'kh':        Color(0x225C6BC0),
+      'gh':        Color(0x2200BCD4),
       'nitrite':   Color(0x224CAF50),
       'ammonia':   Color(0x224CAF50),
-      'ph':        Color(0x2200ACC1), // pH line color (teal)
-      'calcium':   Color(0x22D4A84B), // calcium line color (golden)
+      'ph':        Color(0x2200ACC1),
+      'calcium':   Color(0x22D4A84B),
       'magnesium': Color(0x224CAF50),
-      'phosphate': Color(0x22039BE5), // phosphate line color (sky blue)
-      'potassium': Color(0x2243A047), // potassium line color (green)
-      'temp':      Color(0x224CAF50),
-      'salinity':  Color(0x221565C0), // salinity line color (dark blue)
+      'phosphate': Color(0x22039BE5),
+      'potassium': Color(0x2243A047),
+      'iron':      Color(0x22FF8F00),
+      'temp':      Color(0x22EF5350),
+      'salinity':  Color(0x221565C0),
     };
-    // Solid colors for legend swatches (more opaque than the band)
     const legendColors = <String, Color>{
-      'nitrate':  Color(0x66800080),
-      'kh':       Color(0x665C6BC0),
-      'gh':       Color(0x6600BCD4),
+      'nitrate':   Color(0x66800080),
+      'kh':        Color(0x665C6BC0),
+      'gh':        Color(0x6600BCD4),
       'potassium': Color(0x6643A047),
-      'calcium':  Color(0x66D4A84B),
-      'ph':       Color(0x6600ACC1),
+      'calcium':   Color(0x66D4A84B),
+      'magnesium': Color(0x664CAF50),
+      'ph':        Color(0x6600ACC1),
       'phosphate': Color(0x66039BE5),
+      'iron':      Color(0x66FF8F00),
+      'temp':      Color(0x66EF5350),
       'salinity':  Color(0x661565C0),
     };
     const legendBorders = <String, Color>{
-      'nitrate':  Color(0xFF800080),
-      'kh':       Color(0xFF5C6BC0),
-      'ph':       Color(0xFF00ACC1),
-      'gh':       Color(0xFF00BCD4),
+      'nitrate':   Color(0xFF800080),
+      'kh':        Color(0xFF5C6BC0),
+      'ph':        Color(0xFF00ACC1),
+      'gh':        Color(0xFF00BCD4),
       'potassium': Color(0xFF43A047),
-      'calcium':  Color(0xFFD4A84B),
+      'calcium':   Color(0xFFD4A84B),
+      'magnesium': Color(0xFF4CAF50),
       'phosphate': Color(0xFF039BE5),
+      'iron':      Color(0xFFFF8F00),
+      'temp':      Color(0xFFEF5350),
       'salinity':  Color(0xFF1565C0),
     };
     const legendUnits = <String, String>{
       'salinity': 'SG',
       'gh': 'dGH',
       'kh': 'dKH',
+      'iron': 'ppm',
+      'temp': '°F',
     };
     final rangeAnnotations = <HorizontalRangeAnnotation>[];
     final zeroParams = <String>[];
