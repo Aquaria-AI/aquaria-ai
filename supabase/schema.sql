@@ -237,6 +237,26 @@ create policy "Users can insert own dismissed tasks"
 create policy "Users can delete own dismissed tasks"
   on public.dismissed_tasks for delete using (auth.uid() = user_id);
 
+-- Legal acceptances — records user acknowledgement of T&C and Privacy Policy
+create table if not exists public.legal_acceptances (
+  id bigint generated always as identity primary key,
+  user_id uuid references auth.users(id) on delete cascade not null,
+  email text,
+  username text,
+  terms_version text not null,
+  privacy_version text not null,
+  accepted_at timestamptz default now() not null,
+  app_version text,
+  device_info text
+);
+
+alter table public.legal_acceptances enable row level security;
+
+create policy "Users can view own acceptances"
+  on public.legal_acceptances for select using (auth.uid() = user_id);
+create policy "Users can insert own acceptances"
+  on public.legal_acceptances for insert with check (auth.uid() = user_id);
+
 -- ============================================================
 -- CLONE SAMPLE TANK FOR NEW USERS
 -- ============================================================

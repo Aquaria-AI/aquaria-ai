@@ -20,6 +20,7 @@ import 'package:share_plus/share_plus.dart';
 import 'db/app_db.dart' as db;
 import 'models/tank.dart';
 import 'screens/auth_screen.dart';
+import 'screens/legal_acceptance_screen.dart';
 import 'services/notification_service.dart';
 import 'services/supabase_service.dart';
 import 'state/tank_store.dart';
@@ -3303,20 +3304,43 @@ class _AppEntryState extends State<_AppEntry> {
     });
   }
 
+  Future<void> _enterApp() async {
+    await TankStore.instance.clearLocal();
+    await SupabaseService.cloneSampleTank();
+    await TankStore.instance.pullFromCloud();
+    await TankStore.instance.load();
+    final screen = await _resolveMainScreen();
+    _navigatorKey.currentState?.pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => screen),
+      (_) => false,
+    );
+  }
+
   Future<Widget> _resolveStartScreen() async {
     // Require authentication before entering the app
     if (!SupabaseService.isLoggedIn) {
       return AuthScreen(onAuthSuccess: () async {
-        // Clear leftover local data, seed sample tank for new users, pull cloud data, then navigate
-        await TankStore.instance.clearLocal();
-        await SupabaseService.cloneSampleTank();
-        await TankStore.instance.pullFromCloud();
-        await TankStore.instance.load();
-        final screen = await _resolveMainScreen();
-        _navigatorKey.currentState?.pushAndRemoveUntil(
-          MaterialPageRoute(builder: (_) => screen),
-          (_) => false,
-        );
+        // Check if user has accepted current legal terms
+        final accepted = await SupabaseService.hasAcceptedCurrentTerms();
+        if (!accepted) {
+          _navigatorKey.currentState?.pushAndRemoveUntil(
+            MaterialPageRoute(
+              builder: (_) => LegalAcceptanceScreen(onAccepted: () async {
+                await _enterApp();
+              }),
+            ),
+            (_) => false,
+          );
+          return;
+        }
+        await _enterApp();
+      });
+    }
+    // Already logged in — check legal acceptance
+    final accepted = await SupabaseService.hasAcceptedCurrentTerms();
+    if (!accepted) {
+      return LegalAcceptanceScreen(onAccepted: () async {
+        await _enterApp();
       });
     }
     return _resolveMainScreen();
@@ -6213,6 +6237,11 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
                         ),
                     ] else
                       _AiSummaryEmptyHint(inhabitants: _inhabitants, logs: _logs),
+                    const SizedBox(height: 6),
+                    const Text(
+                      'AI-generated content may be inaccurate. Always consult a professional.',
+                      style: TextStyle(fontSize: 10, color: Colors.black38),
+                    ),
                   ],
                 ),
               ),
@@ -7371,6 +7400,14 @@ class _ChatSheetState extends State<_ChatSheet> {
                   ],
                 ),
               ),
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 4),
+                  child: Text(
+                    'AI-generated content may be inaccurate. Always consult a professional.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 10, color: Colors.black38),
+                  ),
+                ),
                 ColoredBox(
                   color: const Color(0xFF26A7BA),
                   child: SizedBox(height: navBarHeight, width: double.infinity),

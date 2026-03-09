@@ -53,6 +53,7 @@ dependencies:
   image_picker: ^1.1.2
   share_plus: ^10.1.4
   flutter_markdown: ^0.7.7+1
+  url_launcher: ^6.2.5
 
 dev_dependencies:
   flutter_test:

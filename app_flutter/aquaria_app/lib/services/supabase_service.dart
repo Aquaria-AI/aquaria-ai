@@ -369,6 +369,41 @@ class SupabaseService {
     .eq('is_dismissed', false);
   }
 
+  // ── Legal Acceptances ────────────────────────────────────────────────
+
+  static const currentTermsVersion = '2026-03-09';
+  static const currentPrivacyVersion = '2026-03-09';
+
+  static Future<bool> hasAcceptedCurrentTerms() async {
+    final uid = userId;
+    if (uid == null) return false;
+    final data = await client
+        .from('legal_acceptances')
+        .select('id')
+        .eq('user_id', uid)
+        .eq('terms_version', currentTermsVersion)
+        .eq('privacy_version', currentPrivacyVersion)
+        .limit(1);
+    return (data as List).isNotEmpty;
+  }
+
+  static Future<void> recordAcceptance({
+    String? appVersion,
+    String? deviceInfo,
+  }) async {
+    final uid = userId;
+    if (uid == null) return;
+    await client.from('legal_acceptances').insert({
+      'user_id': uid,
+      'email': userEmail,
+      'username': null, // populated later if user sets one
+      'terms_version': currentTermsVersion,
+      'privacy_version': currentPrivacyVersion,
+      'app_version': appVersion,
+      'device_info': deviceInfo,
+    });
+  }
+
   // ── Dismissed Tasks (legacy) ───────────────────────────────────────────
 
   static Future<void> dismissTask(String taskKey) async {
