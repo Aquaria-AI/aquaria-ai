@@ -98,7 +98,7 @@ const _paramShortNames = <String, String>{
   'gh': 'GH', 'kh': 'KH', 'temp': 'Temp', 'salinity': 'Salinity',
   'phosphate': 'Phosphate', 'calcium': 'Calcium', 'magnesium': 'Magnesium',
   'potassium': 'Potassium', 'tds': 'TDS', 'alkalinity': 'Alkalinity',
-  'copper': 'Copper', 'iron': 'Iron',
+  'copper': 'Copper', 'iron': 'Iron', 'ca_mg_ratio': 'Ca:Mg',
 };
 
 /// Get the formal display name for a parameter key.
@@ -5527,11 +5527,11 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
   }
 
   /// Most recent value + date for each known parameter across all logs.
-  /// Returns {canonical → (value, logDate)} in preferred display order.
-  Map<String, ({String value, DateTime date})> _latestMeasurements() {
+  /// Returns {canonical → (value, logDate, deduced)} in preferred display order.
+  Map<String, ({String value, DateTime date, bool deduced})> _latestMeasurements() {
     const order = ['ammonia', 'nitrite', 'nitrate', 'ph', 'kh', 'gh',
-                   'phosphate', 'potassium', 'calcium', 'magnesium', 'temp', 'salinity'];
-    final raw = <String, ({String value, DateTime date})>{};
+                   'phosphate', 'potassium', 'calcium', 'magnesium', 'ca_mg_ratio', 'temp', 'salinity'];
+    final raw = <String, ({String value, DateTime date, bool deduced})>{};
     // _logs is newest-first; reversed = oldest-first so later writes win (newest)
     for (final log in _logs.reversed) {
       if (log.parsedJson == null) continue;
@@ -5545,12 +5545,40 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
             log.createdAt.toLocal().month, log.createdAt.toLocal().day);
         for (final e in m.entries) {
           final canonical = _paramAliases[e.key.toLowerCase()];
-          if (canonical != null) raw[canonical] = (value: e.value.toString(), date: logDate);
+          if (canonical != null) raw[canonical] = (value: e.value.toString(), date: logDate, deduced: false);
         }
       } catch (_) {}
     }
+    // For planted tanks: deduce Mg from GH and Ca, calculate Ca:Mg ratio
+    final isPlanted = _tank.waterType == WaterType.planted;
+    if (isPlanted && raw.containsKey('gh') && raw.containsKey('calcium') && !raw.containsKey('magnesium')) {
+      final ghVal = double.tryParse(raw['gh']!.value.replaceAll(RegExp(r'[^\d.]'), ''));
+      final caVal = double.tryParse(raw['calcium']!.value.replaceAll(RegExp(r'[^\d.]'), ''));
+      if (ghVal != null && caVal != null) {
+        final ghPpm = ghVal * 17.85;
+        final mgPpm = (ghPpm - caVal * 2.5) / 4.12;
+        final newerDate = raw['gh']!.date.isAfter(raw['calcium']!.date) ? raw['gh']!.date : raw['calcium']!.date;
+        if (mgPpm <= 0) {
+          raw['magnesium'] = (value: '≈0', date: newerDate, deduced: true);
+        } else {
+          raw['magnesium'] = (value: '≈${mgPpm.toStringAsFixed(1)}', date: newerDate, deduced: true);
+        }
+      }
+    }
+    if (isPlanted && raw.containsKey('calcium') && raw.containsKey('magnesium')) {
+      final caVal = double.tryParse(raw['calcium']!.value.replaceAll(RegExp(r'[^\d.≈]'), ''));
+      final mgVal = double.tryParse(raw['magnesium']!.value.replaceAll(RegExp(r'[^\d.≈]'), ''));
+      if (caVal != null && mgVal != null && mgVal > 0) {
+        final ratio = caVal / mgVal;
+        final newerDate = raw['calcium']!.date.isAfter(raw['magnesium']!.date) ? raw['calcium']!.date : raw['magnesium']!.date;
+        raw['ca_mg_ratio'] = (value: '${ratio.toStringAsFixed(1)}:1', date: newerDate, deduced: true);
+      } else if (mgVal == null || mgVal <= 0) {
+        final newerDate = raw['calcium']!.date;
+        raw['ca_mg_ratio'] = (value: '⚠ no Mg', date: newerDate, deduced: true);
+      }
+    }
     // Return in preferred order, then any extras
-    final result = <String, ({String value, DateTime date})>{};
+    final result = <String, ({String value, DateTime date, bool deduced})>{};
     for (final k in order) {
       if (raw.containsKey(k)) result[k] = raw[k]!;
     }
@@ -6017,9 +6045,12 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
                           style: TextStyle(fontSize: 13, color: Colors.black54),
                         )
                       else ...() {
-                        // Group params by date (preserving preferred order)
-                        final byDate = <DateTime, List<MapEntry<String, ({String value, DateTime date})>>>{};
-                        for (final e in params.entries) {
+                        // Separate measured vs deduced params
+                        final measured = Map.fromEntries(params.entries.where((e) => !e.value.deduced));
+                        final deduced = Map.fromEntries(params.entries.where((e) => e.value.deduced));
+                        // Group measured params by date (preserving preferred order)
+                        final byDate = <DateTime, List<MapEntry<String, ({String value, DateTime date, bool deduced})>>>{};
+                        for (final e in measured.entries) {
                           byDate.putIfAbsent(e.value.date, () => []).add(e);
                         }
                         // Sort date groups newest first
@@ -6058,6 +6089,50 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
                                       TextSpan(
                                         text: e.value.value,
                                         style: TextStyle(fontSize: 12, color: textColor,
+                                            fontWeight: FontWeight.w700),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            }).toList(),
+                          ));
+                        }
+                        // Deduced values section
+                        if (deduced.isNotEmpty) {
+                          sections.add(const Padding(
+                            padding: EdgeInsets.only(top: 12, bottom: 4),
+                            child: Text(
+                              'CALCULATED',
+                              style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
+                                  color: Color(0xFF9E9E9E), letterSpacing: 0.8, fontStyle: FontStyle.italic),
+                            ),
+                          ));
+                          sections.add(Wrap(
+                            spacing: 6,
+                            runSpacing: 8,
+                            children: deduced.entries.map((e) {
+                              final bgColor = (_paramColors[e.key] ?? _cMint).withOpacity(0.15);
+                              final borderColor = _paramColors[e.key] ?? _cMint;
+                              final label = _paramShortLabel(e.key);
+                              return Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: bgColor,
+                                  borderRadius: BorderRadius.circular(20),
+                                  border: Border.all(color: borderColor.withOpacity(0.5), width: 1),
+                                ),
+                                child: RichText(
+                                  text: TextSpan(
+                                    children: [
+                                      TextSpan(
+                                        text: '$label ',
+                                        style: TextStyle(fontSize: 11, color: borderColor,
+                                            fontWeight: FontWeight.w600),
+                                      ),
+                                      TextSpan(
+                                        text: e.value.value,
+                                        style: TextStyle(fontSize: 12, color: borderColor,
                                             fontWeight: FontWeight.w700),
                                       ),
                                     ],
@@ -9773,6 +9848,7 @@ const _paramColors = <String, Color>{
   'temp':      Color(0xFFFF7043),
   'salinity':  Color(0xFF1565C0),
   'iron':      Color(0xFFFF8F00),
+  'ca_mg_ratio': Color(0xFF78909C),
 };
 
 // ── All Charts Screen ────────────────────────────────────────────────────────
