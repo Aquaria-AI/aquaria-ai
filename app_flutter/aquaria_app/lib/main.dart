@@ -6855,6 +6855,7 @@ class _ChatSheetState extends State<_ChatSheet> {
       r'curly|curling|spots|spotted|melting|wilting|drooping|stunted|twisted|holes|pinholes|pale|'
       r'yellowing|browning|rotting|shedding|losing\s+leaves|plant|plants|'
       r'lethargic|gasping|hiding|aggressive|bloated|swollen|scratching|flashing|fin\s*rot|ich|ick|fungus|'
+      r'ill|injured|infected|disease|parasite|worm|wormy|listless|clamped|erratic|darting|'
       r'filter|heater|light|pump|skimmer)\b'
       r'|\b[kK]\s*[:=]?\s*\d',  // K followed by a number = potassium measurement
       caseSensitive: false,
