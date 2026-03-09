@@ -34,10 +34,43 @@ body {
 h1, h2, h3, h4 { line-height: 1.2; }
 h2 { font-size: 2.2rem; font-weight: 700; text-align: center; margin-bottom: 48px; }
 
+/* ── Announcement Bar ────────────────────────────────────── */
+.announcement-bar {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 101;
+  background: linear-gradient(135deg, var(--dark), #0a4550);
+  color: var(--white);
+  text-align: center;
+  padding: 10px 24px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.store-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(255, 255, 255, 0.15);
+  padding: 4px 12px;
+  border-radius: 16px;
+  font-weight: 600;
+}
+
+.store-separator {
+  font-weight: 300;
+  opacity: 0.7;
+}
+
 /* ── Nav ──────────────────────────────────────────────────── */
 .nav {
   position: fixed;
-  top: 0; left: 0; right: 0;
+  top: 52px; left: 0; right: 0;
   z-index: 100;
   background: rgba(255, 255, 255, 0.92);
   backdrop-filter: blur(12px);
@@ -72,8 +105,8 @@ h2 { font-size: 2.2rem; font-weight: 700; text-align: center; margin-bottom: 48p
 /* ── Hero ─────────────────────────────────────────────────── */
 .hero {
   position: relative;
-  padding: 140px 0 80px;
-  background: linear-gradient(165deg, var(--mint) 0%, var(--bg) 50%, var(--white) 100%);
+  padding: 180px 0 80px;
+  background: var(--white);
   overflow: hidden;
 }
 
@@ -386,23 +419,26 @@ h2 { font-size: 2.2rem; font-weight: 700; text-align: center; margin-bottom: 48p
 
 /* ── Footer ───────────────────────────────────────────────── */
 .footer {
-  background: var(--footer);
-  padding: 32px 0;
+  background: var(--white);
+  padding: 0;
 }
 
-.footer-inner {
+.footer-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  background: var(--white);
+  padding: 24px 40px;
+  width: 100%;
 }
 
 .footer-logo {
   height: 32px;
-  filter: brightness(0) invert(1);
+  height: 32px;
 }
 
 .footer p {
-  color: rgba(255, 255, 255, 0.8);
+  color: var(--gray);
   font-size: 0.88rem;
 }
 
@@ -439,7 +475,7 @@ h2 { font-size: 2.2rem; font-weight: 700; text-align: center; margin-bottom: 48p
 
   h2 { font-size: 1.7rem; }
 
-  .footer-inner { flex-direction: column; gap: 12px; text-align: center; }
+  .footer-bar { flex-direction: column; gap: 12px; text-align: center; }
 }
 
 @media (max-width: 600px) {
