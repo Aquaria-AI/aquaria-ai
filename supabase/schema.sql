@@ -223,3 +223,72 @@ create policy "Users can insert own dismissed tasks"
   on public.dismissed_tasks for insert with check (auth.uid() = user_id);
 create policy "Users can delete own dismissed tasks"
   on public.dismissed_tasks for delete using (auth.uid() = user_id);
+
+-- ============================================================
+-- CLONE SAMPLE TANK FOR NEW USERS
+-- ============================================================
+-- Copies the "Sample Tank" from the sample-tank@aquaria-ai.com user
+-- into the new user's account. Called once after signup.
+-- Uses security definer to bypass RLS (reads from another user's data).
+
+create or replace function public.clone_sample_tank(target_user_id uuid)
+returns void as $$
+declare
+  sample_uid uuid;
+  src_tank record;
+  new_tank_id text;
+  inh record;
+  plt record;
+  lg record;
+begin
+  -- Find the sample-tank user
+  select id into sample_uid
+    from auth.users
+    where email = 'sample-tank@aquaria-ai.com'
+    limit 1;
+  if sample_uid is null then return; end if;
+
+  -- Don't clone if the target user already has tanks
+  if exists (select 1 from public.tanks where user_id = target_user_id limit 1) then
+    return;
+  end if;
+
+  -- Find the "Sample Tank"
+  select * into src_tank
+    from public.tanks
+    where user_id = sample_uid and name = 'Sample Tank' and is_archived = false
+    limit 1;
+  if src_tank is null then return; end if;
+
+  -- Generate a new tank ID
+  new_tank_id := gen_random_uuid()::text;
+
+  -- Clone the tank
+  insert into public.tanks (id, user_id, name, gallons, water_type, is_archived, tap_water_json, created_at)
+  values (new_tank_id, target_user_id, src_tank.name, src_tank.gallons, src_tank.water_type, false, src_tank.tap_water_json, now());
+
+  -- Clone inhabitants
+  for inh in
+    select name, count, type from public.inhabitants where tank_id = src_tank.id
+  loop
+    insert into public.inhabitants (tank_id, user_id, name, count, type)
+    values (new_tank_id, target_user_id, inh.name, inh.count, inh.type);
+  end loop;
+
+  -- Clone plants
+  for plt in
+    select name from public.plants where tank_id = src_tank.id
+  loop
+    insert into public.plants (tank_id, user_id, name)
+    values (new_tank_id, target_user_id, plt.name);
+  end loop;
+
+  -- Clone logs (keep original created_at for realistic history)
+  for lg in
+    select raw_text, parsed_json, created_at from public.logs where tank_id = src_tank.id
+  loop
+    insert into public.logs (tank_id, user_id, raw_text, parsed_json, created_at)
+    values (new_tank_id, target_user_id, lg.raw_text, lg.parsed_json, lg.created_at);
+  end loop;
+end;
+$$ language plpgsql security definer;

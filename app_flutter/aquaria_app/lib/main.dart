@@ -3298,8 +3298,9 @@ class _AppEntryState extends State<_AppEntry> {
     // Require authentication before entering the app
     if (!SupabaseService.isLoggedIn) {
       return AuthScreen(onAuthSuccess: () async {
-        // Clear leftover local data, pull this user's cloud data, then navigate
+        // Clear leftover local data, seed sample tank for new users, pull cloud data, then navigate
         await TankStore.instance.clearLocal();
+        await SupabaseService.cloneSampleTank();
         await TankStore.instance.pullFromCloud();
         await TankStore.instance.load();
         final screen = await _resolveMainScreen();
@@ -6406,7 +6407,12 @@ class _ChatSheetState extends State<_ChatSheet> {
       setState(() {
         _inhabitants = inhabitants;
         _plants = plants;
-        _recentLogs = logs.take(10).map((l) => l.rawText).toList();
+        final twoWeeksAgo = DateTime.now().subtract(const Duration(days: 14));
+        _recentLogs = logs
+            .where((l) => l.createdAt.isAfter(twoWeeksAgo))
+            .take(10)
+            .map((l) => l.rawText)
+            .toList();
         _allLogs = logs;
         _tapWaterJson = tapWaterJson;
         _hasCsvImports = logs.any((l) => l.rawText == 'CSV import');
@@ -6846,6 +6852,9 @@ class _ChatSheetState extends State<_ChatSheet> {
       r'test|tested|measure|reading|parameters|levels|results|'
       r'added|removed|replaced|installed|treated|'
       r'cloudy|clear|brown|yellow|green|murky|hazy|milky|foamy|smelly|odor|algae|bloom|sick|dead|died|spawn|'
+      r'curly|curling|spots|spotted|melting|wilting|drooping|stunted|twisted|holes|pinholes|pale|'
+      r'yellowing|browning|rotting|shedding|losing\s+leaves|plant|plants|'
+      r'lethargic|gasping|hiding|aggressive|bloated|swollen|scratching|flashing|fin\s*rot|ich|ick|fungus|'
       r'filter|heater|light|pump|skimmer)\b'
       r'|\b[kK]\s*[:=]?\s*\d',  // K followed by a number = potassium measurement
       caseSensitive: false,

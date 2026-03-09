@@ -1346,8 +1346,23 @@ def chat_tank(req: ChatRequest):
             tank_context += f"Tap water profile: {', '.join(tw_parts)}.\n"
 
     if req.recent_logs:
-        recent = "\n".join(f"- {l}" for l in req.recent_logs[:5])
-        tank_context += f"Recent log entries:\n{recent}\n"
+        recent = "\n".join(f"- {l}" for l in req.recent_logs[:10])
+        tank_context += f"Recent log entries (last 2 weeks):\n{recent}\n"
+
+    # Mandate that Ariel always considers the full tank context
+    tank_context += (
+        "\nMANDATORY CONTEXT AWARENESS — apply to EVERY response:\n"
+        "Before answering ANY question or giving ANY advice, you MUST consider ALL of the following:\n"
+        "1. WATER TYPE: freshwater vs saltwater vs reef vs planted — advice differs dramatically between these.\n"
+        "2. INHABITANTS: Which specific fish, invertebrates, corals are in the tank. Tailor advice to their needs and sensitivities.\n"
+        "3. PLANTS: Whether the tank has live plants and which species. Planted tanks have different parameter priorities.\n"
+        "4. RECENT MEASUREMENTS & OBSERVATIONS: Any log entries from the last 2 weeks. Reference specific values when relevant.\n"
+        "5. USER EXPERIENCE LEVEL: Beginner, intermediate, or advanced — adjust depth and tone accordingly.\n"
+        "If any of these factors would change your advice, you MUST factor them in. "
+        "For example, do not give generic freshwater advice to a reef tank, "
+        "do not ignore that the tank has shrimp when suggesting treatments, "
+        "and do not overlook recent parameter readings that are relevant to the user's question.\n"
+    )
 
     # Health profile — computed stats from the user's log history
     if req.health_profile:

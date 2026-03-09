@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:crypto/crypto.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:sign_in_with_apple/sign_in_with_apple.dart';
@@ -84,6 +85,18 @@ class SupabaseService {
       idToken: idToken,
       nonce: rawNonce,
     );
+  }
+
+  /// Clone the sample tank into the new user's account (called once after signup).
+  static Future<void> cloneSampleTank() async {
+    final uid = userId;
+    if (uid == null) return;
+    try {
+      await client.rpc('clone_sample_tank', params: {'target_user_id': uid});
+      debugPrint('[Supabase] cloneSampleTank succeeded');
+    } catch (e) {
+      debugPrint('[Supabase] cloneSampleTank failed: $e');
+    }
   }
 
   // ── Tanks CRUD ───────────────────────────────────────────────────────────
