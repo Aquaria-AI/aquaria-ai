@@ -10,6 +10,7 @@ create table if not exists public.profiles (
   id uuid references auth.users(id) on delete cascade primary key,
   display_name text,
   username text unique,
+  closed_at timestamptz,             -- non-null = account closed (soft-delete)
   created_at timestamptz default now() not null,
   updated_at timestamptz default now() not null
 );
@@ -173,69 +174,81 @@ alter table public.logs enable row level security;
 alter table public.tasks enable row level security;
 alter table public.dismissed_tasks enable row level security;
 
--- Profiles: users can only read/update their own profile
+-- Helper: returns true if the calling user's account is open (not closed).
+create or replace function public.account_is_open()
+returns boolean as $$
+begin
+  return not exists (
+    select 1 from public.profiles
+    where id = auth.uid() and closed_at is not null
+  );
+end;
+$$ language plpgsql security definer stable;
+
+-- Profiles: users can read own profile (even if closed, so app can detect it),
+-- but can only update if account is open.
 create policy "Users can view own profile"
   on public.profiles for select using (auth.uid() = id);
 create policy "Users can update own profile"
-  on public.profiles for update using (auth.uid() = id);
+  on public.profiles for update using (auth.uid() = id and closed_at is null);
 
--- Tanks: users can CRUD their own tanks
+-- Tanks: users can CRUD their own tanks (blocked if account closed)
 create policy "Users can view own tanks"
-  on public.tanks for select using (auth.uid() = user_id);
+  on public.tanks for select using (auth.uid() = user_id and public.account_is_open());
 create policy "Users can insert own tanks"
-  on public.tanks for insert with check (auth.uid() = user_id);
+  on public.tanks for insert with check (auth.uid() = user_id and public.account_is_open());
 create policy "Users can update own tanks"
-  on public.tanks for update using (auth.uid() = user_id);
+  on public.tanks for update using (auth.uid() = user_id and public.account_is_open());
 create policy "Users can delete own tanks"
-  on public.tanks for delete using (auth.uid() = user_id);
+  on public.tanks for delete using (auth.uid() = user_id and public.account_is_open());
 
 -- Inhabitants
 create policy "Users can view own inhabitants"
-  on public.inhabitants for select using (auth.uid() = user_id);
+  on public.inhabitants for select using (auth.uid() = user_id and public.account_is_open());
 create policy "Users can insert own inhabitants"
-  on public.inhabitants for insert with check (auth.uid() = user_id);
+  on public.inhabitants for insert with check (auth.uid() = user_id and public.account_is_open());
 create policy "Users can update own inhabitants"
-  on public.inhabitants for update using (auth.uid() = user_id);
+  on public.inhabitants for update using (auth.uid() = user_id and public.account_is_open());
 create policy "Users can delete own inhabitants"
-  on public.inhabitants for delete using (auth.uid() = user_id);
+  on public.inhabitants for delete using (auth.uid() = user_id and public.account_is_open());
 
 -- Plants
 create policy "Users can view own plants"
-  on public.plants for select using (auth.uid() = user_id);
+  on public.plants for select using (auth.uid() = user_id and public.account_is_open());
 create policy "Users can insert own plants"
-  on public.plants for insert with check (auth.uid() = user_id);
+  on public.plants for insert with check (auth.uid() = user_id and public.account_is_open());
 create policy "Users can update own plants"
-  on public.plants for update using (auth.uid() = user_id);
+  on public.plants for update using (auth.uid() = user_id and public.account_is_open());
 create policy "Users can delete own plants"
-  on public.plants for delete using (auth.uid() = user_id);
+  on public.plants for delete using (auth.uid() = user_id and public.account_is_open());
 
 -- Logs
 create policy "Users can view own logs"
-  on public.logs for select using (auth.uid() = user_id);
+  on public.logs for select using (auth.uid() = user_id and public.account_is_open());
 create policy "Users can insert own logs"
-  on public.logs for insert with check (auth.uid() = user_id);
+  on public.logs for insert with check (auth.uid() = user_id and public.account_is_open());
 create policy "Users can update own logs"
-  on public.logs for update using (auth.uid() = user_id);
+  on public.logs for update using (auth.uid() = user_id and public.account_is_open());
 create policy "Users can delete own logs"
-  on public.logs for delete using (auth.uid() = user_id);
+  on public.logs for delete using (auth.uid() = user_id and public.account_is_open());
 
 -- Tasks
 create policy "Users can view own tasks"
-  on public.tasks for select using (auth.uid() = user_id);
+  on public.tasks for select using (auth.uid() = user_id and public.account_is_open());
 create policy "Users can insert own tasks"
-  on public.tasks for insert with check (auth.uid() = user_id);
+  on public.tasks for insert with check (auth.uid() = user_id and public.account_is_open());
 create policy "Users can update own tasks"
-  on public.tasks for update using (auth.uid() = user_id);
+  on public.tasks for update using (auth.uid() = user_id and public.account_is_open());
 create policy "Users can delete own tasks"
-  on public.tasks for delete using (auth.uid() = user_id);
+  on public.tasks for delete using (auth.uid() = user_id and public.account_is_open());
 
 -- Dismissed tasks
 create policy "Users can view own dismissed tasks"
-  on public.dismissed_tasks for select using (auth.uid() = user_id);
+  on public.dismissed_tasks for select using (auth.uid() = user_id and public.account_is_open());
 create policy "Users can insert own dismissed tasks"
-  on public.dismissed_tasks for insert with check (auth.uid() = user_id);
+  on public.dismissed_tasks for insert with check (auth.uid() = user_id and public.account_is_open());
 create policy "Users can delete own dismissed tasks"
-  on public.dismissed_tasks for delete using (auth.uid() = user_id);
+  on public.dismissed_tasks for delete using (auth.uid() = user_id and public.account_is_open());
 
 -- Legal acceptances — records user acknowledgement of T&C and Privacy Policy
 create table if not exists public.legal_acceptances (
@@ -256,6 +269,31 @@ create policy "Users can view own acceptances"
   on public.legal_acceptances for select using (auth.uid() = user_id);
 create policy "Users can insert own acceptances"
   on public.legal_acceptances for insert with check (auth.uid() = user_id);
+
+-- ============================================================
+-- CLOSE USER ACCOUNT (soft-delete)
+-- ============================================================
+-- Marks the account as closed by setting profiles.closed_at.
+-- Data is retained per privacy policy (up to 12 months) but is
+-- inaccessible to the app because RLS policies exclude closed accounts.
+-- Called from the app via: client.rpc('close_user_account')
+
+create or replace function public.close_user_account()
+returns void as $$
+declare
+  uid uuid := auth.uid();
+begin
+  if uid is null then
+    raise exception 'Not authenticated';
+  end if;
+
+  -- Mark the profile as closed
+  update public.profiles
+    set closed_at = now(),
+        updated_at = now()
+    where id = uid;
+end;
+$$ language plpgsql security definer;
 
 -- ============================================================
 -- CLONE SAMPLE TANK FOR NEW USERS

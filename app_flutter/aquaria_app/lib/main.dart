@@ -122,26 +122,31 @@ class _AquariaFooter extends StatelessWidget {
   final double extraBottomPadding;
   const _AquariaFooter({this.onAiTap, this.extraBottomPadding = 0});
 
-  static const _buttonSize = 56.0;
+  static const _buttonSize = 68.0;
 
   @override
   Widget build(BuildContext context) {
     if (onAiTap == null) return const SizedBox.shrink();
-    return SizedBox(
-      height: _buttonSize / 2 + 10,
-      child: Center(
-        child: SizedBox(
-          width: _buttonSize,
-          height: _buttonSize,
-          child: Material(
-            color: const Color(0xFFC8A97E),
-            shape: const CircleBorder(),
-            elevation: 3,
-            shadowColor: Colors.black38,
-            child: InkWell(
-              customBorder: const CircleBorder(),
-              onTap: onAiTap,
-              child: const Icon(Icons.auto_awesome, color: Colors.white, size: 28),
+    final bottomInset = MediaQuery.of(context).padding.bottom;
+    return ColoredBox(
+      color: Colors.transparent,
+      child: SizedBox(
+        height: _buttonSize + bottomInset + 12,
+        child: Align(
+          alignment: Alignment.topCenter,
+          child: SizedBox(
+            width: _buttonSize,
+            height: _buttonSize,
+            child: Material(
+              color: const Color(0xFF1FA2A8),
+              shape: const CircleBorder(),
+              elevation: 3,
+              shadowColor: Colors.black38,
+              child: InkWell(
+                customBorder: const CircleBorder(),
+                onTap: onAiTap,
+                child: const Icon(Icons.auto_awesome, color: Colors.white, size: 32),
+              ),
             ),
           ),
         ),
@@ -4038,6 +4043,7 @@ class _TankListScreenState extends State<TankListScreen> {
     }();
 
     return Scaffold(
+      extendBody: true,
       backgroundColor: const Color(0xFFF0F0F0),
       appBar: _buildAppBar(context, '', actions: [
           _buildNotificationBell(tanks),
@@ -5342,6 +5348,7 @@ class _AddTankScreenState extends State<AddTankScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      extendBody: true,
       appBar: _buildAppBar(context, 'Add Tank'),
       bottomNavigationBar: _AquariaFooter(),
       body: SingleChildScrollView(
@@ -6021,6 +6028,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
   Widget build(BuildContext context) {
     final tasks = _tasks;
     return Scaffold(
+      extendBody: true,
       appBar: _buildAppBar(context, '', actions: [
         IconButton(
           tooltip: 'Add photo',
@@ -8110,6 +8118,7 @@ class _TankDetailScreenState extends State<TankDetailScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      extendBody: true,
       appBar: _buildAppBar(context, '', actions: [
           IconButton(
             tooltip: 'Photos',
@@ -8475,6 +8484,7 @@ class _InhabitantsScreenState extends State<InhabitantsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      extendBody: true,
       appBar: _buildAppBar(context, '', actions: [
           IconButton(
             icon: const Icon(Icons.edit),
@@ -9800,6 +9810,7 @@ class _DailyLogsScreenState extends State<DailyLogsScreen> {
     }
 
     return Scaffold(
+      extendBody: true,
       appBar: _buildAppBar(context, ''),
       bottomNavigationBar: _AquariaFooter(
         onAiTap: () => showModalBottomSheet(
@@ -10387,6 +10398,7 @@ class _AllChartsScreenState extends State<AllChartsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      extendBody: true,
       appBar: _buildAppBar(context, '', actions: [
         _buildNotificationBell(),
         IconButton(
@@ -11575,6 +11587,7 @@ class _ProfileScreenState extends State<_ProfileScreen> {
   final _usernameCtrl = TextEditingController();
   bool _loading = true;
   bool _saving = false;
+  bool _deleting = false;
   String? _usernameError;
   String? _originalUsername;
   DateTime? _createdAt;
@@ -11659,6 +11672,58 @@ class _ProfileScreenState extends State<_ProfileScreen> {
     }
   }
 
+  Future<void> _confirmCloseAccount() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Close Account'),
+        content: const Text(
+          'This will close your account and sign you out. Your data will be retained for up to 12 months per our privacy policy, then permanently deleted.\n\nYou will not be able to access your tanks, logs, or any other data after closing.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Close Account'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    // Second confirmation
+    final reallyConfirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Are you sure?'),
+        content: const Text('Type CLOSE to confirm.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          _CloseConfirmButton(onConfirmed: () => Navigator.pop(ctx, true)),
+        ],
+      ),
+    );
+    if (reallyConfirmed != true || !mounted) return;
+
+    setState(() => _deleting = true);
+    try {
+      await SupabaseService.closeAccount();
+      await TankStore.instance.clearLocal();
+      if (mounted) {
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => const _AppEntry()),
+          (_) => false,
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _deleting = false);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to close account: $e')));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -11738,9 +11803,77 @@ class _ProfileScreenState extends State<_ProfileScreen> {
                           : const Text('Save'),
                     ),
                   ),
+                  const SizedBox(height: 48),
+                  const Divider(),
+                  const SizedBox(height: 12),
+                  const Text('Danger Zone', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.red)),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Close your account and sign out. Your data will be retained for up to 12 months, then permanently deleted.',
+                    style: TextStyle(fontSize: 13, color: Colors.black54),
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.red,
+                        side: const BorderSide(color: Colors.red),
+                      ),
+                      onPressed: _deleting ? null : _confirmCloseAccount,
+                      child: _deleting
+                          ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.red))
+                          : const Text('Close Account'),
+                    ),
+                  ),
+                  const SizedBox(height: 32),
                 ],
               ),
             ),
+    );
+  }
+}
+
+/// TextField-based confirm button that only enables when user types "CLOSE".
+class _CloseConfirmButton extends StatefulWidget {
+  final VoidCallback onConfirmed;
+  const _CloseConfirmButton({required this.onConfirmed});
+
+  @override
+  State<_CloseConfirmButton> createState() => _CloseConfirmButtonState();
+}
+
+class _CloseConfirmButtonState extends State<_CloseConfirmButton> {
+  final _ctrl = TextEditingController();
+  bool _match = false;
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: 160,
+          child: TextField(
+            controller: _ctrl,
+            autofocus: true,
+            decoration: const InputDecoration(hintText: 'Type CLOSE', isDense: true),
+            onChanged: (v) => setState(() => _match = v.trim().toUpperCase() == 'CLOSE'),
+          ),
+        ),
+        const SizedBox(height: 8),
+        TextButton(
+          onPressed: _match ? widget.onConfirmed : null,
+          style: TextButton.styleFrom(foregroundColor: Colors.red),
+          child: const Text('Close Account'),
+        ),
+      ],
     );
   }
 }
@@ -11798,6 +11931,7 @@ class _ArchivedTanksScreenState extends State<ArchivedTanksScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      extendBody: true,
       appBar: _buildAppBar(context, 'Archived Tanks'),
       bottomNavigationBar: _AquariaFooter(),
       body: _loading

@@ -67,6 +67,22 @@ h2 { font-size: 2.2rem; font-weight: 700; text-align: center; margin-bottom: 48p
   opacity: 0.7;
 }
 
+.beta-link {
+  color: var(--light);
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 0.88rem;
+  padding: 4px 14px;
+  border: 1.5px solid rgba(127, 226, 213, 0.4);
+  border-radius: 16px;
+  transition: all 0.2s;
+}
+
+.beta-link:hover {
+  background: rgba(127, 226, 213, 0.15);
+  border-color: var(--light);
+}
+
 /* ── Nav ──────────────────────────────────────────────────── */
 .nav {
   position: fixed;
@@ -111,7 +127,7 @@ h2 { font-size: 2.2rem; font-weight: 700; text-align: center; margin-bottom: 48p
 /* ── Hero ─────────────────────────────────────────────────── */
 .hero {
   position: relative;
-  padding: 180px 0 80px;
+  padding: 180px 0 40px;
   background: var(--white);
   overflow: hidden;
 }
@@ -181,7 +197,7 @@ h2 { font-size: 2.2rem; font-weight: 700; text-align: center; margin-bottom: 48p
 .hero-wave svg { width: 100%; height: 80px; }
 
 /* ── Value Props ──────────────────────────────────────────── */
-.value { padding: 80px 0 64px; }
+.value { padding: 40px 0 64px; }
 
 .value-grid {
   display: grid;
@@ -421,6 +437,102 @@ h2 { font-size: 2.2rem; font-weight: 700; text-align: center; margin-bottom: 48p
   background: var(--mint);
   color: var(--dark);
   border: 1px solid rgba(31, 162, 168, 0.2);
+}
+
+/* ── Contact Modal ────────────────────────────────────────── */
+.modal-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+  align-items: center;
+  justify-content: center;
+}
+
+.modal-overlay.open { display: flex; }
+
+.modal {
+  background: var(--white);
+  border-radius: 20px;
+  padding: 40px;
+  max-width: 440px;
+  width: 90%;
+  position: relative;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
+}
+
+.modal-close {
+  position: absolute;
+  top: 16px;
+  right: 20px;
+  background: none;
+  border: none;
+  font-size: 1.6rem;
+  color: var(--gray);
+  cursor: pointer;
+  line-height: 1;
+}
+
+.modal h3 {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--dark);
+  margin-bottom: 6px;
+}
+
+.modal-sub {
+  font-size: 0.9rem;
+  color: var(--gray);
+  margin-bottom: 24px;
+}
+
+#contact-form input,
+#contact-form textarea,
+#beta-form input {
+  width: 100%;
+  padding: 14px 20px;
+  border: 1.5px solid rgba(14, 90, 102, 0.15);
+  border-radius: 24px;
+  font-family: inherit;
+  font-size: 1rem;
+  color: var(--dark);
+  background: var(--bg);
+  outline: none;
+  transition: border-color 0.2s;
+  margin-bottom: 14px;
+}
+
+#contact-form input:focus,
+#contact-form textarea:focus,
+#beta-form input:focus {
+  border-color: var(--mid);
+}
+
+#contact-form textarea { resize: vertical; border-radius: 16px; }
+
+.modal-submit {
+  width: 100%;
+  padding: 12px;
+  border: none;
+  border-radius: 12px;
+  background: linear-gradient(135deg, var(--mid), var(--dark));
+  color: var(--white);
+  font-family: inherit;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.modal-submit:hover { opacity: 0.9; }
+
+.contact-success p {
+  text-align: center;
+  color: var(--dark);
+  font-weight: 500;
+  padding: 20px 0;
 }
 
 /* ── Footer ───────────────────────────────────────────────── */

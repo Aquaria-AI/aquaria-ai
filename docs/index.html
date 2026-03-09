@@ -24,6 +24,8 @@
       <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M3.18 23.64L14.54 12 3.18.36c-.2.12-.18.46-.18.5v22.28c0 .04-.02.38.18.5zm1.44.86l12.63-7.2-2.77-2.78L4.62 24.5zm14.32-8.34L22 14.54c.4-.23.64-.65.64-1.08s-.24-.86-.64-1.08l-3.3-1.88-3.05 3.05 3.29 3.61zM4.62-.5l9.86 9.98 2.77-2.78L4.62-.5z"/></svg>
       Google Play
     </span>
+    <span class="store-separator">|</span>
+    <a href="#" class="beta-link" onclick="document.getElementById('beta-modal').classList.add('open');return false;">Join Android Beta</a>
   </div>
 
   <!-- NAV -->
@@ -32,7 +34,7 @@
       <img src="assets/logo-side.png" alt="Aquaria AI" class="nav-logo">
       <div class="nav-links">
         <a href="#features" class="nav-link">Features</a>
-        <a href="mailto:info@aquaria-ai.com" class="nav-link">Contact</a>
+        <a href="#" class="nav-link" onclick="document.getElementById('contact-modal').classList.add('open');return false;">Contact</a>
       </div>
     </div>
   </nav>
@@ -228,6 +230,64 @@
       <p>&copy; 2026 Aquaria AI. Helping fishkeepers thrive.</p>
     </div>
   </footer>
+
+  <!-- CONTACT MODAL -->
+  <div id="contact-modal" class="modal-overlay" onclick="if(event.target===this)this.classList.remove('open')">
+    <div class="modal">
+      <button class="modal-close" onclick="this.closest('.modal-overlay').classList.remove('open')">&times;</button>
+      <h3>Get in touch</h3>
+      <p class="modal-sub">Have a question or feedback? We'd love to hear from you.</p>
+      <form id="contact-form" onsubmit="return submitContact(event)">
+        <input type="email" id="contact-email" placeholder="Your email address" required>
+        <textarea id="contact-message" placeholder="Your message" rows="4" required></textarea>
+        <button type="submit" class="modal-submit">Send Message</button>
+      </form>
+      <div id="contact-success" class="contact-success" style="display:none;">
+        <p>Thanks! We'll get back to you soon.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- BETA SIGNUP MODAL -->
+  <div id="beta-modal" class="modal-overlay" onclick="if(event.target===this)this.classList.remove('open')">
+    <div class="modal">
+      <button class="modal-close" onclick="this.closest('.modal-overlay').classList.remove('open')">&times;</button>
+      <h3>Aquaria AI — Android Beta</h3>
+      <p class="modal-sub">Be among the first to try Aquaria AI on Android. Enter your email and we'll send you an invite when spots open up.</p>
+      <form id="beta-form" onsubmit="return submitBeta(event)">
+        <input type="email" id="beta-email" placeholder="Your email address" required>
+        <button type="submit" class="modal-submit">Sign Up for Beta</button>
+      </form>
+      <div id="beta-success" class="contact-success" style="display:none;">
+        <p>You're on the list! We'll be in touch soon.</p>
+      </div>
+    </div>
+  </div>
+
+  <script>
+  function submitContact(e) {
+    e.preventDefault();
+    var email = document.getElementById('contact-email').value;
+    var message = document.getElementById('contact-message').value;
+    var subject = encodeURIComponent('Aquaria AI Contact from ' + email);
+    var body = encodeURIComponent('From: ' + email + '\n\n' + message);
+    window.location.href = 'mailto:info@aquaria-ai.com?subject=' + subject + '&body=' + body;
+    document.getElementById('contact-form').style.display = 'none';
+    document.getElementById('contact-success').style.display = 'block';
+    return false;
+  }
+
+  function submitBeta(e) {
+    e.preventDefault();
+    var email = document.getElementById('beta-email').value;
+    var subject = encodeURIComponent('Android Beta Signup');
+    var body = encodeURIComponent('Please add me to the Aquaria Android beta list.\n\nEmail: ' + email);
+    window.location.href = 'mailto:info@aquaria-ai.com?subject=' + subject + '&body=' + body;
+    document.getElementById('beta-form').style.display = 'none';
+    document.getElementById('beta-success').style.display = 'block';
+    return false;
+  }
+  </script>
 
 </body>
 </html>

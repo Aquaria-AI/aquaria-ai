@@ -37,6 +37,16 @@ class SupabaseService {
     return client.auth.signOut();
   }
 
+  /// Close the current user's account (soft-delete).
+  /// Sets profiles.closed_at so RLS blocks all data access,
+  /// then signs the user out. Data retained per privacy policy.
+  static Future<void> closeAccount() async {
+    final uid = userId;
+    if (uid == null) throw Exception('Not logged in');
+    await client.rpc('close_user_account');
+    await client.auth.signOut();
+  }
+
   static Future<AuthResponse> signInWithGoogle() async {
     const webClientId = '710206253790-t370vahqu6hrnh21ume0474ajqp1l7jt.apps.googleusercontent.com';
     const iosClientId = '710206253790-4qollfoaeal3bau5rhas3emqn9uhqpd2.apps.googleusercontent.com';
