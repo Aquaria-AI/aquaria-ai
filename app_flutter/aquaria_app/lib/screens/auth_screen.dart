@@ -86,6 +86,11 @@ class _AuthScreenState extends State<AuthScreen> {
         await SupabaseService.signInWithEmail(email, pass);
       }
       if (SupabaseService.isLoggedIn) {
+        if (await SupabaseService.isAccountClosed()) {
+          await SupabaseService.signOut();
+          setState(() { _error = 'This account has been closed.'; _loading = false; });
+          return;
+        }
         widget.onAuthSuccess();
       } else {
         setState(() {
@@ -108,7 +113,14 @@ class _AuthScreenState extends State<AuthScreen> {
     setState(() { _loading = true; _error = null; });
     try {
       await SupabaseService.signInWithGoogle();
-      if (SupabaseService.isLoggedIn) widget.onAuthSuccess();
+      if (SupabaseService.isLoggedIn) {
+        if (await SupabaseService.isAccountClosed()) {
+          await SupabaseService.signOut();
+          setState(() { _error = 'This account has been closed.'; _loading = false; });
+          return;
+        }
+        widget.onAuthSuccess();
+      }
     } catch (e) {
       final msg = _friendlyAuthError(e);
       setState(() {
@@ -122,7 +134,14 @@ class _AuthScreenState extends State<AuthScreen> {
     setState(() { _loading = true; _error = null; });
     try {
       await SupabaseService.signInWithApple();
-      if (SupabaseService.isLoggedIn) widget.onAuthSuccess();
+      if (SupabaseService.isLoggedIn) {
+        if (await SupabaseService.isAccountClosed()) {
+          await SupabaseService.signOut();
+          setState(() { _error = 'This account has been closed.'; _loading = false; });
+          return;
+        }
+        widget.onAuthSuccess();
+      }
     } catch (e) {
       final msg = _friendlyAuthError(e);
       setState(() {

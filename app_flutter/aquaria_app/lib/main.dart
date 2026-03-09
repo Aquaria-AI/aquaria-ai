@@ -157,7 +157,7 @@ class _AquariaFooter extends StatelessWidget {
 
 const _cLogoTeal = Color(0xFF2297A8);
 
-AppBar _buildAppBar(BuildContext context, String title, {List<Widget>? actions}) => AppBar(
+AppBar _buildAppBar(BuildContext context, String title, {List<Widget>? actions, bool showCommunity = true}) => AppBar(
       title: Text(title, style: const TextStyle(color: _cDark, fontWeight: FontWeight.bold, fontSize: 17)),
       centerTitle: false,
       iconTheme: const IconThemeData(color: _cDark),
@@ -169,6 +169,14 @@ AppBar _buildAppBar(BuildContext context, String title, {List<Widget>? actions})
       toolbarHeight: kToolbarHeight,
       actions: [
         ...(actions ?? []),
+        if (showCommunity && SupabaseService.isLoggedIn)
+          IconButton(
+            tooltip: 'Community',
+            icon: const Icon(Icons.groups_outlined),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const _CommunityScreen()),
+            ),
+          ),
         IconButton(
           tooltip: 'Invite friends',
           icon: const Icon(Icons.person_add_outlined),
@@ -188,10 +196,6 @@ AppBar _buildAppBar(BuildContext context, String title, {List<Widget>? actions})
               _showFeedbackSheet(context);
             } else if (value == 'experience') {
               _showExperiencePicker(context);
-            } else if (value == 'community') {
-              Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const _CommunityScreen()),
-              );
             } else if (value == 'profile') {
               Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const _ProfileScreen()),
@@ -234,8 +238,6 @@ AppBar _buildAppBar(BuildContext context, String title, {List<Widget>? actions})
               ),
               const PopupMenuDivider(),
             ],
-            if (SupabaseService.isLoggedIn)
-              const PopupMenuItem(value: 'community', child: Text('Community')),
             if (SupabaseService.isLoggedIn)
               const PopupMenuItem(value: 'profile', child: Text('Profile')),
             const PopupMenuItem(value: 'onboarding', child: Text('Onboarding')),
@@ -3305,19 +3307,6 @@ class _AppEntryState extends State<_AppEntry> {
   }
 
   Future<void> _onAuthSuccess() async {
-    // Block closed accounts from re-entering
-    if (await SupabaseService.isAccountClosed()) {
-      await SupabaseService.signOut();
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('This account has been closed.')),
-      );
-      _navigatorKey.currentState?.pushAndRemoveUntil(
-        MaterialPageRoute(builder: (_) => const _AppEntry()),
-        (_) => false,
-      );
-      return;
-    }
     // Check if user has accepted current legal terms
     final accepted = await SupabaseService.hasAcceptedCurrentTerms();
     if (!accepted) {
@@ -11723,7 +11712,14 @@ class _CommunityScreenState extends State<_CommunityScreen> {
     } catch (e) {
       if (mounted) {
         Navigator.of(context).pop(); // dismiss overlay
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to share: $e')));
+        showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Upload failed'),
+            content: Text('$e'),
+            actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK'))],
+          ),
+        );
       }
     }
   }
@@ -11854,33 +11850,41 @@ class _CommunityScreenState extends State<_CommunityScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: _buildAppBar(context, 'Community'),
+      appBar: _buildAppBar(context, '', showCommunity: false),
       floatingActionButton: FloatingActionButton(
         backgroundColor: const Color(0xFF1FA2A8),
         onPressed: _createPost,
         child: const Icon(Icons.add_a_photo, color: Colors.white),
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : _posts.isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.photo_library_outlined, size: 64, color: Colors.grey.shade300),
-                      const SizedBox(height: 12),
-                      const Text('No posts yet', style: TextStyle(color: Colors.black54, fontSize: 16)),
-                      const SizedBox(height: 4),
-                      const Text('Be the first to share!', style: TextStyle(color: Colors.black38, fontSize: 13)),
-                    ],
-                  ),
-                )
-              : RefreshIndicator(
-                  onRefresh: _load,
-                  child: ListView.separated(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 80),
-                    itemCount: _posts.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 16),
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 12, 16, 8),
+            child: Text('Community', style: TextStyle(color: _cDark, fontWeight: FontWeight.bold, fontSize: 20)),
+          ),
+          Expanded(
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : _posts.isEmpty
+                    ? Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.photo_library_outlined, size: 64, color: Colors.grey.shade300),
+                            const SizedBox(height: 12),
+                            const Text('No posts yet', style: TextStyle(color: Colors.black54, fontSize: 16)),
+                            const SizedBox(height: 4),
+                            const Text('Be the first to share!', style: TextStyle(color: Colors.black38, fontSize: 13)),
+                          ],
+                        ),
+                      )
+                    : RefreshIndicator(
+                        onRefresh: _load,
+                        child: ListView.separated(
+                          padding: const EdgeInsets.fromLTRB(16, 4, 16, 80),
+                          itemCount: _posts.length,
+                          separatorBuilder: (_, __) => const SizedBox(height: 16),
                     itemBuilder: (_, i) {
                       final post = _posts[i];
                       final postId = post['id'] as int;
@@ -11971,6 +11975,9 @@ class _CommunityScreenState extends State<_CommunityScreen> {
                     },
                   ),
                 ),
+          ),
+        ],
+      ),
     );
   }
 }

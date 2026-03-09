@@ -280,7 +280,9 @@ create table if not exists public.community_posts (
   user_id uuid references auth.users(id) on delete cascade not null,
   photo_url text not null,
   caption text not null default '',
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  -- Direct FK to profiles so PostgREST can resolve the join
+  constraint community_posts_profile_fk foreign key (user_id) references public.profiles(id)
 );
 
 -- Reactions: positive emoji reactions on posts (one per user per emoji per post)
