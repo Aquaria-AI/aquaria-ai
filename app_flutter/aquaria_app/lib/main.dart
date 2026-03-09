@@ -205,6 +205,10 @@ AppBar _buildAppBar(BuildContext context, String title, {List<Widget>? actions})
               _showFeedbackSheet(context);
             } else if (value == 'experience') {
               _showExperiencePicker(context);
+            } else if (value == 'profile') {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const _ProfileScreen()),
+              );
             } else if (value == 'onboarding') {
               Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const OnboardingScreen()),
@@ -243,6 +247,8 @@ AppBar _buildAppBar(BuildContext context, String title, {List<Widget>? actions})
               ),
               const PopupMenuDivider(),
             ],
+            if (SupabaseService.isLoggedIn)
+              const PopupMenuItem(value: 'profile', child: Text('Profile')),
             const PopupMenuItem(value: 'onboarding', child: Text('Onboarding')),
             const PopupMenuItem(value: 'feedback', child: Text('Feedback')),
             if (SupabaseService.isLoggedIn)
@@ -4213,12 +4219,6 @@ class _TankListScreenState extends State<TankListScreen> {
                                             case 'note':
                                               await _showAddNoteDialog(t);
                                               break;
-                                            case 'manage_recurring':
-                                              await Navigator.of(context).push(MaterialPageRoute(
-                                                builder: (_) => _ManageRecurringTasksScreen(tankId: t.id),
-                                              ));
-                                              await _refresh();
-                                              break;
                                             case 'archive':
                                               await _archiveTank(t.id);
                                               break;
@@ -4232,10 +4232,6 @@ class _TankListScreenState extends State<TankListScreen> {
                                           PopupMenuItem<String>(
                                             value: 'note',
                                             child: Text('Add Note'),
-                                          ),
-                                          PopupMenuItem<String>(
-                                            value: 'manage_recurring',
-                                            child: Text('Recurring Tasks'),
                                           ),
                                           PopupMenuItem<String>(
                                             value: 'archive',
@@ -10111,6 +10107,7 @@ class AllChartsScreen extends StatefulWidget {
 class _AllChartsScreenState extends State<AllChartsScreen> {
   // tankId → logs
   final Map<String, List<db.Log>> _logsByTank = {};
+  Map<String, List<db.Task>> _tasksByTank = {};
   bool _loading = true;
 
   @override
@@ -10120,11 +10117,143 @@ class _AllChartsScreenState extends State<AllChartsScreen> {
   }
 
   Future<void> _load() async {
+    final taskMap = <String, List<db.Task>>{};
     for (final tank in widget.tanks) {
       final logs = await TankStore.instance.logsFor(tank.id);
       _logsByTank[tank.id] = logs;
+      final tasks = await TankStore.instance.tasksForTank(tank.id);
+      if (tasks.isNotEmpty) taskMap[tank.id] = tasks;
     }
-    if (mounted) setState(() => _loading = false);
+    if (mounted) setState(() { _loading = false; _tasksByTank = taskMap; });
+  }
+
+  int get _totalNotifCount {
+    int count = 0;
+    for (final tasks in _tasksByTank.values) count += tasks.length;
+    return count;
+  }
+
+  Widget _buildNotificationBell() {
+    final count = _totalNotifCount;
+    return IconButton(
+      tooltip: 'Notifications',
+      icon: Badge(
+        isLabelVisible: count > 0,
+        label: Text('$count', style: const TextStyle(fontSize: 10)),
+        backgroundColor: const Color(0xFFE65100),
+        child: const Icon(Icons.notifications_none),
+      ),
+      onPressed: () => _showNotificationsSheet(),
+    );
+  }
+
+  void _showNotificationsSheet() {
+    final items = <({TankModel tank, db.Task task})>[];
+    for (final tank in widget.tanks) {
+      for (final t in (_tasksByTank[tank.id] ?? [])) {
+        items.add((tank: tank, task: t));
+      }
+    }
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(builder: (ctx, setS) {
+          final liveItems = <({TankModel tank, db.Task task})>[];
+          for (final tank in widget.tanks) {
+            for (final t in (_tasksByTank[tank.id] ?? [])) {
+              liveItems.add((tank: tank, task: t));
+            }
+          }
+          return SafeArea(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: MediaQuery.of(ctx).size.height * 0.5),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                    child: Row(children: [
+                      const Icon(Icons.notifications, size: 18, color: Color(0xFFE65100)),
+                      const SizedBox(width: 8),
+                      Text('Notifications (${liveItems.length})', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+                      const Spacer(),
+                      IconButton(icon: const Icon(Icons.close, size: 20), onPressed: () => Navigator.pop(ctx)),
+                    ]),
+                  ),
+                  const Divider(height: 1),
+                  if (liveItems.isEmpty)
+                    const Padding(padding: EdgeInsets.all(32), child: Text('No notifications', style: TextStyle(color: Colors.grey)))
+                  else
+                    Flexible(
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        itemCount: liveItems.length,
+                        separatorBuilder: (_, __) => const Divider(height: 1, indent: 14),
+                        itemBuilder: (_, i) {
+                          final item = liveItems[i];
+                          final desc = item.task.description;
+                          final label = desc.isEmpty ? '' : desc[0].toUpperCase() + desc.substring(1);
+                          final rawDue = item.task.dueDate;
+                          final dueLabel = (rawDue != null && rawDue.isNotEmpty) ? _fmtNotifDue(rawDue) : null;
+                          final isRecurring = item.task.repeatDays != null && item.task.repeatDays! > 0;
+                          return ListTile(
+                            dense: true,
+                            leading: Icon(isRecurring ? Icons.repeat : Icons.task_alt, size: 18, color: const Color(0xFFE65100)),
+                            title: RichText(
+                              text: TextSpan(
+                                style: const TextStyle(fontSize: 13, color: Colors.black87, height: 1.4),
+                                children: [
+                                  TextSpan(text: '${item.tank.name}  ', style: const TextStyle(fontWeight: FontWeight.w600)),
+                                  TextSpan(text: label),
+                                  if (dueLabel != null) TextSpan(text: ' — $dueLabel', style: const TextStyle(color: Color(0xFF8D6E63))),
+                                ],
+                              ),
+                            ),
+                            trailing: IconButton(
+                              icon: const Icon(Icons.close, size: 16, color: Color(0xFF8D6E63)),
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                              onPressed: () { TankStore.instance.dismissTaskById(item.task.id); _load(); setS(() {}); },
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  const Divider(height: 1),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        icon: const Icon(Icons.repeat, size: 18),
+                        label: const Text('Recurring Tasks'),
+                        style: OutlinedButton.styleFrom(foregroundColor: _cDark, side: const BorderSide(color: _cLight)),
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          Navigator.of(context).push(MaterialPageRoute(builder: (_) => const _ManageRecurringTasksScreen())).then((_) => _load());
+                        },
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        });
+      },
+    );
+  }
+
+  static String _fmtNotifDue(String raw) {
+    final dt = DateTime.tryParse(raw);
+    if (dt == null) return raw;
+    const ms = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return '${ms[dt.month - 1]} ${dt.day}';
   }
 
   Map<String, Map<DateTime, double>> _extractSeries(List<db.Log> logs) {
@@ -10172,7 +10301,14 @@ class _AllChartsScreenState extends State<AllChartsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: _buildAppBar(context, 'All Charts'),
+      appBar: _buildAppBar(context, '', actions: [
+        _buildNotificationBell(),
+        IconButton(
+          tooltip: 'Add photo',
+          icon: const Icon(Icons.add_a_photo_outlined),
+          onPressed: () => pickAndSavePhoto(context),
+        ),
+      ]),
       bottomNavigationBar: const _AquariaFooter(),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
@@ -10184,6 +10320,10 @@ class _AllChartsScreenState extends State<AllChartsScreen> {
               child: ListView(
                 padding: const EdgeInsets.only(bottom: 24),
                 children: [
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(16, 12, 16, 4),
+                    child: Text('All Charts', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: _cDark)),
+                  ),
                   for (final tank in widget.tanks) ...() {
                     final charts = _chartsForTank(tank);
                     if (charts.isEmpty) return <Widget>[];
@@ -11329,6 +11469,192 @@ class _ManageRecurringTasksScreenState extends State<_ManageRecurringTasksScreen
           const PopupMenuItem(value: 'delete', child: Text('Delete')),
         ],
       ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PROFILE SCREEN
+// ═══════════════════════════════════════════════════════════════════════════
+
+class _ProfileScreen extends StatefulWidget {
+  const _ProfileScreen();
+
+  @override
+  State<_ProfileScreen> createState() => _ProfileScreenState();
+}
+
+class _ProfileScreenState extends State<_ProfileScreen> {
+  final _displayNameCtrl = TextEditingController();
+  final _usernameCtrl = TextEditingController();
+  bool _loading = true;
+  bool _saving = false;
+  String? _usernameError;
+  String? _originalUsername;
+  DateTime? _createdAt;
+
+  static final _usernameRe = RegExp(r'^[a-z0-9_]{3,20}$');
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _displayNameCtrl.dispose();
+    _usernameCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    final profile = await SupabaseService.fetchProfile();
+    if (!mounted) return;
+    setState(() {
+      _displayNameCtrl.text = (profile?['display_name'] as String?) ?? '';
+      _usernameCtrl.text = (profile?['username'] as String?) ?? '';
+      _originalUsername = profile?['username'] as String?;
+      final raw = profile?['created_at'] as String?;
+      _createdAt = raw != null ? DateTime.tryParse(raw) : null;
+      _loading = false;
+    });
+  }
+
+  String? _validateUsername(String value) {
+    if (value.isEmpty) return null; // optional
+    if (value.length < 3) return 'At least 3 characters';
+    if (value.length > 20) return '20 characters max';
+    if (!_usernameRe.hasMatch(value)) return 'Lowercase letters, numbers, and underscores only';
+    return null;
+  }
+
+  Future<void> _save() async {
+    final username = _usernameCtrl.text.trim().toLowerCase();
+    final displayName = _displayNameCtrl.text.trim();
+
+    // Validate username
+    final valError = _validateUsername(username);
+    if (valError != null) {
+      setState(() => _usernameError = valError);
+      return;
+    }
+
+    setState(() { _saving = true; _usernameError = null; });
+
+    // Check availability if username changed
+    if (username.isNotEmpty && username != _originalUsername) {
+      final available = await SupabaseService.isUsernameAvailable(username);
+      if (!available) {
+        if (mounted) setState(() { _saving = false; _usernameError = 'Username already taken'; });
+        return;
+      }
+    }
+
+    try {
+      await SupabaseService.updateProfile(
+        displayName: displayName.isNotEmpty ? displayName : null,
+        username: username.isNotEmpty ? username : null,
+      );
+      if (mounted) {
+        setState(() { _saving = false; _originalUsername = username.isNotEmpty ? username : null; });
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Profile saved')));
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _saving = false);
+        final msg = e.toString();
+        if (msg.contains('duplicate') || msg.contains('unique')) {
+          setState(() => _usernameError = 'Username already taken');
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $msg')));
+        }
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: _buildAppBar(context, ''),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Profile', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: _cDark)),
+                  const SizedBox(height: 20),
+                  // Email (read-only)
+                  Text('Email', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.grey[600])),
+                  const SizedBox(height: 4),
+                  Text(SupabaseService.userEmail ?? '', style: const TextStyle(fontSize: 15)),
+                  const SizedBox(height: 20),
+                  // Display name
+                  Text('Display Name', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.grey[600])),
+                  const SizedBox(height: 4),
+                  TextField(
+                    controller: _displayNameCtrl,
+                    textCapitalization: TextCapitalization.words,
+                    decoration: const InputDecoration(
+                      hintText: 'Your name',
+                      border: OutlineInputBorder(),
+                      contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  // Username
+                  Text('Username', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.grey[600])),
+                  const SizedBox(height: 4),
+                  TextField(
+                    controller: _usernameCtrl,
+                    decoration: InputDecoration(
+                      hintText: 'unique_username',
+                      prefixText: '@',
+                      border: const OutlineInputBorder(),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      errorText: _usernameError,
+                    ),
+                    inputFormatters: [
+                      FilteringTextInputFormatter.allow(RegExp(r'[a-zA-Z0-9_]')),
+                      LengthLimitingTextInputFormatter(20),
+                    ],
+                    onChanged: (_) { if (_usernameError != null) setState(() => _usernameError = null); },
+                  ),
+                  const SizedBox(height: 4),
+                  Text('3–20 characters. Letters, numbers, underscores.',
+                      style: TextStyle(fontSize: 11, color: Colors.grey[500])),
+                  const SizedBox(height: 24),
+                  // Member since
+                  if (_createdAt != null) ...[
+                    Text('Member Since', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.grey[600])),
+                    const SizedBox(height: 4),
+                    Text(
+                      '${const ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][_createdAt!.month - 1]} ${_createdAt!.day}, ${_createdAt!.year}',
+                      style: const TextStyle(fontSize: 15),
+                    ),
+                    const SizedBox(height: 24),
+                  ],
+                  // Tanks count
+                  Text('Tanks', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.grey[600])),
+                  const SizedBox(height: 4),
+                  Text('${TankStore.instance.tanks.length}', style: const TextStyle(fontSize: 15)),
+                  const SizedBox(height: 32),
+                  // Save button
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton(
+                      style: FilledButton.styleFrom(backgroundColor: _cDark),
+                      onPressed: _saving ? null : _save,
+                      child: _saving
+                          ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                          : const Text('Save'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
     );
   }
 }

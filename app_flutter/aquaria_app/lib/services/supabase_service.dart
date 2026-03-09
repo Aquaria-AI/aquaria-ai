@@ -99,6 +99,35 @@ class SupabaseService {
     }
   }
 
+  // ── Profile ─────────────────────────────────────────────────────────────
+
+  static Future<Map<String, dynamic>?> fetchProfile() async {
+    final uid = userId;
+    if (uid == null) return null;
+    final data = await client.from('profiles').select().eq('id', uid).maybeSingle();
+    return data;
+  }
+
+  static Future<void> updateProfile({String? displayName, String? username}) async {
+    final uid = userId;
+    if (uid == null) return;
+    final updates = <String, dynamic>{};
+    if (displayName != null) updates['display_name'] = displayName;
+    if (username != null) updates['username'] = username.toLowerCase();
+    if (updates.isEmpty) return;
+    await client.from('profiles').update(updates).eq('id', uid);
+  }
+
+  static Future<bool> isUsernameAvailable(String username) async {
+    try {
+      final result = await client.rpc('is_username_available', params: {'desired_username': username.toLowerCase()});
+      return result == true;
+    } catch (e) {
+      debugPrint('[Supabase] isUsernameAvailable error: $e');
+      return false;
+    }
+  }
+
   // ── Tanks CRUD ───────────────────────────────────────────────────────────
 
   static Future<void> insertTank({

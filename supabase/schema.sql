@@ -9,9 +9,20 @@
 create table if not exists public.profiles (
   id uuid references auth.users(id) on delete cascade primary key,
   display_name text,
+  username text unique,
   created_at timestamptz default now() not null,
   updated_at timestamptz default now() not null
 );
+
+-- Check username availability (bypasses RLS for cross-user lookup)
+create or replace function public.is_username_available(desired_username text)
+returns boolean as $$
+begin
+  return not exists (
+    select 1 from public.profiles where username = lower(desired_username)
+  );
+end;
+$$ language plpgsql security definer;
 
 -- Tanks
 create table if not exists public.tanks (
