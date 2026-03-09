@@ -521,9 +521,10 @@ Only log content that is directly related to the aquarium hobby: water parameter
 
 CATEGORY RULES — read carefully:
 
-"actions" — ONLY things the user physically did to the tank. Must involve the user performing an activity.
-Drop words like "added", "dosed" and only include the measurement and substance. For example, "added 5ml of Prime" should be "5ml Prime". "added some Prime" should be logged as  (because it lacks a quantity). "20% water change" is an action, but "did a water change" is not (because it lacks a quantity). "fed fish" is an action, but "fed the fish" is not (because it lacks a quantity). "trimmed plants" is an action, but "trimmed some plants" is not (because it lacks a quantity). "cleaned filter" is an action, but "cleaned the filter" is not (because it lacks a quantity). "topped off with RO water" is an action, but "topped off the tank with RO water" is not (because it lacks a quantity).
-  YES: "added 5ml of Prime", "20% water change", "fed fish", "dosed 10ml Potassium", "trimmed plants", "cleaned filter", "topped off with RO water"
+"actions" — Things the user physically did to the tank. Must involve the user performing an activity.
+  When a quantity is provided, include it concisely: "added 5ml of Prime" → "5ml Prime", "20% water change" → "20% water change".
+  When NO quantity is given, still log the action in short form: "did a water change" → "Water change", "cleaned the filter" → "Cleaned filter", "moved plants" → "Moved plants", "fed fish" → "Fed fish", "trimmed plants" → "Trimmed plants".
+  YES: "5ml Prime", "20% water change", "Water change", "Cleaned filter", "Fed fish", "Trimmed plants", "Moved plants", "Topped off with RO water"
   NO: general condition statements, descriptions of what the tank looks/smells like, things the user noticed
 
 "notes" — Anything the user noticed: visual, olfactory, behavioral, or general condition. Includes deaths, smells, appearances, and qualitative trends described. When a qualitative statement is made with a number, record the qualitative part as an observation and the number as a measurement (see below).
