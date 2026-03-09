@@ -257,6 +257,22 @@ class AppDb extends _$AppDb {
 
   Future<void> insertLog(LogsCompanion entry) => into(logs).insert(entry);
 
+  /// Check if a log with the same parsedJson already exists for this tank
+  /// within the last 2 minutes (prevents duplicate parse results).
+  Future<bool> hasDuplicateLog(String tankId, String? parsedJson) async {
+    if (parsedJson == null || parsedJson.isEmpty) return false;
+    final cutoff = DateTime.now().subtract(const Duration(minutes: 2));
+    final recent = await (select(logs)
+          ..where((r) =>
+              r.tankId.equals(tankId) &
+              r.createdAt.isBiggerOrEqualValue(cutoff)))
+        .get();
+    for (final l in recent) {
+      if (l.parsedJson == parsedJson) return true;
+    }
+    return false;
+  }
+
   Future<Log?> logForTankOnDate(String tankId, DateTime date) async {
     final startOfDay = DateTime(date.year, date.month, date.day);
     final endOfDay = startOfDay.add(const Duration(days: 1));

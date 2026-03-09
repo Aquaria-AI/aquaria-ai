@@ -619,6 +619,8 @@ class TankStore {
     String? parsedJson,
     DateTime? date,
   }) async {
+    // Skip duplicate log entries (same parsed content within 2 minutes)
+    if (await _db.hasDuplicateLog(tankId, parsedJson)) return;
     final ts = date ?? DateTime.now();
     await _db.insertLog(
       db.LogsCompanion.insert(
