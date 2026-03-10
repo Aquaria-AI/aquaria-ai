@@ -5277,6 +5277,7 @@ class _AddTaskSheetState extends State<_AddTaskSheet> {
   }
 
   void _save() {
+    FocusScope.of(context).unfocus();
     final desc = _descCtrl.text.trim();
     if (desc.isEmpty) return;
     String? dueStr;
@@ -5296,20 +5297,23 @@ class _AddTaskSheetState extends State<_AddTaskSheet> {
     final dueFmt = _dueDate != null
         ? '${_dueDate!.month}/${_dueDate!.day}/${_dueDate!.year}'
         : null;
-    return Container(
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(context).viewInsets.bottom + 32),
-      child: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(children: [
-              Expanded(
-                child: Text('Add Task — ${widget.tankName}',
+    final topPad = MediaQuery.of(context).padding.top;
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height - topPad - 16),
+      child: Container(
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(context).viewInsets.bottom + 32),
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(children: [
+                Expanded(
+                  child: Text('Add Task — ${widget.tankName}',
                     style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
               ),
               TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
@@ -5378,6 +5382,7 @@ class _AddTaskSheetState extends State<_AddTaskSheet> {
           ],
         ),
       ),
+      ),
     );
   }
 }
@@ -5402,45 +5407,50 @@ class _AddNoteSheetState extends State<_AddNoteSheet> {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(context).viewInsets.bottom + 32),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(children: [
-            Expanded(
-              child: Text('Add Note — ${widget.tankName}',
-                  style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
+    final topPad = MediaQuery.of(context).padding.top;
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height - topPad - 16),
+      child: Container(
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(context).viewInsets.bottom + 32),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(children: [
+              Expanded(
+                child: Text('Add Note — ${widget.tankName}',
+                    style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
+              ),
+              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+              const SizedBox(width: 8),
+              FilledButton(
+                onPressed: () {
+                  FocusScope.of(context).unfocus();
+                  final text = _ctrl.text.trim();
+                  if (text.isNotEmpty) Navigator.pop(context, text);
+                },
+                style: FilledButton.styleFrom(backgroundColor: _cMid),
+                child: const Text('Save'),
+              ),
+            ]),
+            const Divider(height: 24),
+            TextField(
+              controller: _ctrl,
+              maxLines: 5,
+              minLines: 3,
+              autofocus: true,
+              textCapitalization: TextCapitalization.sentences,
+              decoration: const InputDecoration(
+                hintText: 'What did you observe?',
+                border: OutlineInputBorder(),
+              ),
             ),
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-            const SizedBox(width: 8),
-            FilledButton(
-              onPressed: () {
-                final text = _ctrl.text.trim();
-                if (text.isNotEmpty) Navigator.pop(context, text);
-              },
-              style: FilledButton.styleFrom(backgroundColor: _cMid),
-              child: const Text('Save'),
-            ),
-          ]),
-          const Divider(height: 24),
-          TextField(
-            controller: _ctrl,
-            maxLines: 5,
-            minLines: 3,
-            autofocus: true,
-            textCapitalization: TextCapitalization.sentences,
-            decoration: const InputDecoration(
-              hintText: 'What did you observe?',
-              border: OutlineInputBorder(),
-            ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -8758,6 +8768,7 @@ class _AddMeasurementSheetState extends State<_AddMeasurementSheet> {
   }
 
   void _save() {
+    FocusScope.of(context).unfocus();
     final measurements = <String, dynamic>{};
     for (final (key, ctrl) in _measurements) {
       final k = key.trim();
@@ -8777,31 +8788,34 @@ class _AddMeasurementSheetState extends State<_AddMeasurementSheet> {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(context).viewInsets.bottom + 32),
-      child: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(children: [
-              Expanded(
-                child: Text('Add Measurement — ${widget.tankName}',
-                    style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
-              ),
-              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-              const SizedBox(width: 8),
-              FilledButton(
-                onPressed: _saving ? null : _save,
-                style: FilledButton.styleFrom(backgroundColor: _cMid),
-                child: const Text('Save'),
-              ),
-            ]),
-            const Divider(height: 24),
+    final topPad = MediaQuery.of(context).padding.top;
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height - topPad - 16),
+      child: Container(
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(context).viewInsets.bottom + 32),
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(children: [
+                Expanded(
+                  child: Text('Add Measurement — ${widget.tankName}',
+                      style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
+                ),
+                TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+                const SizedBox(width: 8),
+                FilledButton(
+                  onPressed: _saving ? null : _save,
+                  style: FilledButton.styleFrom(backgroundColor: _cMid),
+                  child: const Text('Save'),
+                ),
+              ]),
+              const Divider(height: 24),
 
             _sectionHeader('Measurements', Icons.straighten),
             const SizedBox(height: 8),
@@ -8861,6 +8875,7 @@ class _AddMeasurementSheetState extends State<_AddMeasurementSheet> {
           ],
         ),
       ),
+      ),
     );
   }
 }
@@ -8908,22 +8923,33 @@ class _LogEditSheetState extends State<_LogEditSheet> {
   }
 
   Future<void> _save() async {
+    FocusScope.of(context).unfocus();
+    await Future.delayed(const Duration(milliseconds: 50));
     setState(() => _saving = true);
-    final measurements = <String, dynamic>{};
-    for (final (key, ctrl) in _measurements) {
-      final k = key.trim();
-      final v = ctrl.text.trim();
-      if (k.isEmpty || v.isEmpty) continue;
-      measurements[k] = double.tryParse(v) ?? v;
+    try {
+      final measurements = <String, dynamic>{};
+      for (final (key, ctrl) in _measurements) {
+        final k = key.trim();
+        final v = ctrl.text.trim();
+        if (k.isEmpty || v.isEmpty) continue;
+        measurements[k] = double.tryParse(v) ?? v;
+      }
+      final acts = _actions.map((c) => c.text.trim()).where((s) => s.isNotEmpty).toList();
+      final nts = _notes.map((c) => c.text.trim()).where((s) => s.isNotEmpty).toList();
+      final newParsed = Map<String, dynamic>.from(widget.parsed)
+        ..['measurements'] = measurements
+        ..['actions'] = acts
+        ..['notes'] = nts;
+      await widget.onSave(widget.rawText, jsonEncode(newParsed));
+      if (mounted) Navigator.pop(context, true);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _saving = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Save failed: $e'), backgroundColor: Colors.red),
+        );
+      }
     }
-    final acts = _actions.map((c) => c.text.trim()).where((s) => s.isNotEmpty).toList();
-    final nts = _notes.map((c) => c.text.trim()).where((s) => s.isNotEmpty).toList();
-    final newParsed = Map<String, dynamic>.from(widget.parsed)
-      ..['measurements'] = measurements
-      ..['actions'] = acts
-      ..['notes'] = nts;
-    await widget.onSave(widget.rawText, jsonEncode(newParsed));
-    if (mounted) Navigator.pop(context);
   }
 
   Widget _sectionHeader(String title, IconData icon) => Row(children: [
@@ -8935,19 +8961,22 @@ class _LogEditSheetState extends State<_LogEditSheet> {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(context).viewInsets.bottom + 32),
-      child: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(children: [
-              const Text('Edit Log Entry', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
+    final topPad = MediaQuery.of(context).padding.top;
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height - topPad - 16),
+      child: Container(
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(context).viewInsets.bottom + 32),
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(children: [
+                const Text('Edit Log Entry', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
               const Spacer(),
               TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
               const SizedBox(width: 8),
@@ -9083,6 +9112,7 @@ class _LogEditSheetState extends State<_LogEditSheet> {
             ),
           ],
         ),
+      ),
       ),
     );
   }
@@ -9357,7 +9387,8 @@ class _MergedDayCard extends StatelessWidget {
     final actionsSeen = <String>{};
     final notesSeen = <String>{};
 
-    for (final log in logs) {
+    // Iterate oldest-first so newer values overwrite older duplicates
+    for (final log in logs.reversed) {
       if (log.parsedJson == null) continue;
       try {
         final p = jsonDecode(log.parsedJson!) as Map;
@@ -9386,9 +9417,7 @@ class _MergedDayCard extends StatelessWidget {
 
   /// Save edits back: update the first log with merged content, delete the rest.
   Future<void> _saveEdits(String rawText, String parsedJson) async {
-    // Update first log with the merged edited data
     await TankStore.instance.updateLog(logs.first.id, rawText, parsedJson);
-    // Delete remaining logs since their content is now merged into the first
     for (var i = 1; i < logs.length; i++) {
       await TankStore.instance.deleteLog(logs[i].id);
     }
@@ -9577,7 +9606,7 @@ class _MergedDayCard extends StatelessWidget {
                 if (value == 'edit') {
                   final mergedParsed = _buildMerged();
                   final mergedRaw = logs.map((l) => l.rawText).join('\n');
-                  await showModalBottomSheet(
+                  final saved = await showModalBottomSheet<bool>(
                     context: context,
                     isScrollControlled: true,
                     backgroundColor: Colors.transparent,
@@ -9587,6 +9616,9 @@ class _MergedDayCard extends StatelessWidget {
                       onSave: _saveEdits,
                     ),
                   );
+                  if (saved == true && context.mounted) {
+                    _showTopSnack(context, 'Log updated');
+                  }
                 }
                 if (value == 'delete') {
                   for (final log in logs) {
