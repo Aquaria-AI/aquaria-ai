@@ -1006,12 +1006,15 @@ CRITICAL: Never say "I've added it" after receiving only a clarifying answer —
 UNKNOWN PLANTS:
 The ONLY plants in the user's tank are those listed after "Plants:" in the tank context above. Do NOT assume a plant is in the tank just because the user mentioned it in conversation — only the "Plants:" line is the source of truth.
 If the user mentions a plant that is NOT in the current plants list, treat it as a new discovery. Do the following in this order:
-1. If the plant name is unclear or generic (e.g. "some grass", "a moss"), ask ONE clarifying question: "What type of plant is it?" — then wait for the answer.
+1. If the plant name is unclear or generic (e.g. "some grass", "a moss", "sprite lace leaf"), use your aquarium plant knowledge to identify the most likely species. You have extensive knowledge of aquatic plants — use it. Try adding common prefixes like "Water" or "Dwarf", matching partial names to known species (e.g. "sprite lace leaf" → Water Sprite Lace Leaf / Ceratopteris thalictroides). If you can identify it with reasonable confidence, confirm with the user: "That sounds like [full name] — is that right?" If you genuinely cannot narrow it down, ask ONE clarifying question.
 2. Once the plant is known, offer to add it: "I don't see [plant] in your plant list — would you like me to add it?"
 3. When the user affirms, say "Done — I've added [plant] to your plant list."
 4. If the user explicitly says "add [plant] to my plants/tank/list", skip straight to step 3 and confirm it was added.
-IMPORTANT: Only detect species that are plausibly aquarium or aquatic plants (e.g. Java Fern, Anubias, Amazon Sword, Monte Carlo, Hornwort, Vallisneria, etc.). Ignore if the user is clearly speaking figuratively or about non-aquatic plants.
+IMPORTANT: Only detect species that are plausibly aquarium or aquatic plants (e.g. Java Fern, Anubias, Amazon Sword, Monte Carlo, Hornwort, Vallisneria, Water Sprite, etc.). Ignore if the user is clearly speaking figuratively or about non-aquatic plants.
 CRITICAL: Never say "I've added it" after receiving only a clarifying answer — only say so after the user explicitly affirms OR explicitly asks you to add.
+
+PLANT NAME CORRECTIONS:
+If a plant is already in the plants list and the user asks to correct or rename it (e.g. "actually it's called Water Sprite Lace Leaf", "rename that plant to...", "correct the name to..."), confirm the correction: "Done — I've updated [old name] to [new name] in your plant list."
 
 TANK CREATION:
 You CAN and SHOULD create new tank profiles from ANY context — even when you are already viewing or discussing an existing tank. Never tell the user you are unable to create a new tank.
@@ -1146,6 +1149,17 @@ Rules:
 - Only include plants the user explicitly said to add — not ones already in the tank profile.
 - Only include aquatic/aquarium plants. Ignore non-aquatic plants.
 - If the conversation is just a question or clarification with no clear plant to add, return {"plants": []}"""
+
+
+_RENAME_PLANT_EXTRACT_PROMPT = """Based on this conversation, extract the plant name correction the user requested.
+
+Return ONLY valid JSON — no markdown, no explanation:
+{"old_name": "Sprite Lace Leaf", "new_name": "Water Sprite Lace Leaf"}
+
+Rules:
+- old_name: the name currently in the plant list that should be changed.
+- new_name: the corrected name the user wants. Use Title Case.
+- If the conversation does not involve renaming or correcting a plant name, return {"old_name": "", "new_name": ""}"""
 
 
 def _is_affirmation(text: str) -> bool:
@@ -1763,12 +1777,56 @@ def chat_tank(req: ChatRequest):
             except Exception as e:
                 print(f"[Chat/PlantExtract] error: {e}")
 
+        # Extract plant rename — triggered when AI confirms a name correction
+        rename_plant = None
+
+        reply_confirms_rename = any(k in reply_lower for k in [
+            "updated", "renamed", "corrected", "changed the name",
+            "updated the name", "i've updated", "i have updated",
+        ]) and any(k in reply_lower for k in ["plant", "your plant list"])
+
+        user_explicit_rename = bool(re.search(
+            r"\b(rename|correct|change|update)\b.{0,30}(plant|name)",
+            req.message, re.IGNORECASE,
+        ))
+
+        should_extract_rename = (
+            reply_confirms_rename
+            or user_explicit_rename
+        ) and plants  # only if there are existing plants to rename
+
+        if should_extract_rename:
+            convo = "\n".join(
+                f"{m['role'].upper()}: {m['content']}"
+                for m in (req.history or [])
+                if m.get("role") in ("user", "assistant")
+            )
+            convo += f"\nUSER: {req.message}\nASSISTANT: {reply}"
+            convo += f"\n\nCurrent plants in tank: {', '.join(plants)}"
+            try:
+                rename_response = _chat(client,
+                    model="claude-haiku-4-5",
+                    max_tokens=256,
+                    system=_RENAME_PLANT_EXTRACT_PROMPT,
+                    messages=[{"role": "user", "content": convo}],
+                )
+                raw = rename_response.content[0].text.strip()
+                raw = re.sub(r"^```(?:json)?\s*", "", raw)
+                raw = re.sub(r"\s*```$", "", raw).strip()
+                parsed = json.loads(raw)
+                if parsed.get("old_name") and parsed.get("new_name"):
+                    rename_plant = parsed
+                    print(f"[PlantRename] {rename_plant}")
+            except Exception as e:
+                print(f"[Chat/PlantRename] error: {e}")
+
         return {
             "response": reply,
             "tasks": extracted_tasks,
             "new_tank": new_tank,
             "new_inhabitant": new_inhabitant,
             "new_plants": new_plants,
+            "rename_plant": rename_plant,
             "_debug": {
                 "should_extract": should_extract_tasks,
                 "reply_confirms": reply_confirms_task_set,

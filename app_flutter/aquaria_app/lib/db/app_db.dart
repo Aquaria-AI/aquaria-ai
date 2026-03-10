@@ -244,6 +244,12 @@ class AppDb extends _$AppDb {
   Future<void> insertPlant(PlantsCompanion entry) =>
       into(plants).insert(entry);
 
+  Future<int> renamePlant(String tankId, String oldName, String newName) {
+    return (update(plants)..where((r) =>
+        r.tankId.equals(tankId) & r.name.equals(oldName)))
+        .write(PlantsCompanion(name: Value(newName)));
+  }
+
   Future<void> replacePlantsForTank(
     String tankId,
     List<PlantsCompanion> rows,

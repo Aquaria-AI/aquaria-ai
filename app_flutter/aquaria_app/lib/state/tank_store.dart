@@ -700,6 +700,21 @@ class TankStore {
     });
   }
 
+  Future<void> renamePlant({
+    required String tankId,
+    required String oldName,
+    required String newName,
+  }) async {
+    await _db.renamePlant(tankId, oldName, newName);
+    _cloudSync(() async {
+      final all = await _db.plantsForTank(tankId);
+      await SupabaseService.replacePlants(
+        tankId,
+        all.map((p) => p.name).toList(),
+      );
+    });
+  }
+
   Future<List<db.Plant>> plantsFor(String tankId) {
     return _db.plantsForTank(tankId);
   }

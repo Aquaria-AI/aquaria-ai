@@ -4688,7 +4688,7 @@ class _TankListScreenState extends State<TankListScreen> {
                                         clipBehavior: Clip.none,
                                         children: [
                                           _NavIconButton(
-                                            child: Image.asset('assets/images/fish.jpg', width: 28, height: 28),
+                                            child: const _FishPlantIcon(),
                                             tooltip: 'Inhabitants',
                                             color: const Color(0xFF2E86AB),
                                             onTap: () => Navigator.of(context).push(
@@ -5545,6 +5545,31 @@ class _HintStep extends StatelessWidget {
           const SizedBox(width: 8),
           Expanded(
             child: Text(text, style: const TextStyle(fontSize: 13, color: Color(0xFF444444), height: 1.45)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Fish + plant composite icon used for the Inhabitants button.
+class _FishPlantIcon extends StatelessWidget {
+  final double size;
+  const _FishPlantIcon({this.size = 28});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: size,
+      height: size,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Image.asset('assets/images/fish.jpg', width: size, height: size),
+          Positioned(
+            right: -3,
+            bottom: -2,
+            child: Icon(Icons.eco, size: size * 0.43, color: const Color(0xFF5B8C5A)),
           ),
         ],
       ),
@@ -6607,7 +6632,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
                 Stack(
                   clipBehavior: Clip.none,
                   children: [
-                    _NavIconButton(child: Image.asset('assets/images/fish.jpg', width: 28, height: 28), tooltip: 'Inhabitants', color: const Color(0xFF2E86AB), onTap: () async {
+                    _NavIconButton(child: const _FishPlantIcon(), tooltip: 'Inhabitants', color: const Color(0xFF2E86AB), onTap: () async {
                       await Navigator.of(context).push(MaterialPageRoute(builder: (_) => InhabitantsScreen(tank: _tank)));
                       await _load();
                     }),
@@ -7536,6 +7561,24 @@ class _ChatSheetState extends State<_ChatSheet> {
               }
             }
             if (plantList.isNotEmpty) {
+              await _loadTankData(_selectedTank!);
+              if (mounted) widget.onLogsChanged();
+            }
+          } catch (_) {}
+        }
+
+        // Rename a plant if AI confirmed a correction
+        if (data is Map && data['rename_plant'] != null && _selectedTank != null) {
+          try {
+            final renameData = data['rename_plant'] as Map<String, dynamic>;
+            final oldName = renameData['old_name']?.toString() ?? '';
+            final newName = renameData['new_name']?.toString() ?? '';
+            if (oldName.isNotEmpty && newName.isNotEmpty) {
+              await TankStore.instance.renamePlant(
+                tankId: _selectedTank!.id,
+                oldName: oldName,
+                newName: newName,
+              );
               await _loadTankData(_selectedTank!);
               if (mounted) widget.onLogsChanged();
             }
