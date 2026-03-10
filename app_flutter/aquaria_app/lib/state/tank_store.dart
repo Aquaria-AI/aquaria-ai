@@ -700,13 +700,22 @@ class TankStore {
     required List<Map<String, dynamic>> inhabitants,
     required List<String> plants,
   }) async {
+    // Auto-mark as planted if plants are present (freshwater only)
+    final hasPlants = plants.where((p) => p.trim().isNotEmpty).isNotEmpty;
+    WaterType effectiveType = tank.waterType;
+    if (hasPlants && effectiveType == WaterType.freshwater) {
+      effectiveType = WaterType.planted;
+    } else if (!hasPlants && effectiveType == WaterType.planted) {
+      effectiveType = WaterType.freshwater;
+    }
+
     // upsert tank locally
     await _db.upsertTank(
       db.TanksCompanion.insert(
         id: tank.id,
         name: tank.name,
         gallons: tank.gallons,
-        waterType: tank.waterType.name,
+        waterType: effectiveType.name,
         createdAt: tank.createdAt,
       ),
     );
@@ -749,7 +758,7 @@ class TankStore {
         id: tank.id,
         name: tank.name,
         gallons: tank.gallons,
-        waterType: tank.waterType.name,
+        waterType: effectiveType.name,
         createdAt: tank.createdAt,
       );
       await SupabaseService.replaceInhabitants(tank.id, inhMaps);

@@ -26,24 +26,8 @@ _MODEL_SONNET = "claude-sonnet-4-20250514"
 
 
 def _pick_model(experience: str = "", water_type: str = "", all_water_types: list = None) -> str:
-    """Route to Sonnet for advanced users or complex tank types, Haiku otherwise."""
-    exp = (experience or "").lower()
-    wt = (water_type or "").lower()
-    _complex = {"planted", "saltwater", "reef"}
-    has_complex_tank = wt in _complex or any(
-        (t or "").lower() in _complex for t in (all_water_types or [])
-    )
-    if exp == "advanced":
-        model = _MODEL_SONNET
-    elif exp == "intermediate" and has_complex_tank:
-        model = _MODEL_SONNET
-    elif not exp and wt in _complex:
-        # Summary endpoint: no experience level, route by water type alone
-        model = _MODEL_SONNET
-    else:
-        model = _MODEL_HAIKU
-    print(f"[ModelRouter] exp={exp or 'none'} wt={wt or 'none'} complex_any={has_complex_tank} → {model}")
-    return model
+    """Use Sonnet for all chat/summary requests for best analysis quality."""
+    return _MODEL_SONNET
 
 
 def _chat(client: anthropic.Anthropic, **kwargs):
@@ -1003,6 +987,7 @@ CONTINUOUS LEARNING:
 When a tank health profile is provided in the context, use it to give proactive, personalized guidance:
 - If the user hasn't tested in over 7 days, mention it naturally (e.g. "It's been a little while since your last test — how's everything looking?").
 - If a parameter trend shows "rising" toward a concerning level, flag it early.
+- Only describe a parameter as "trending" if it appears in the Trends section of the tank health profile (which requires at least 2 logged readings). A single data point is never a trend — it's just a reading.
 - If the user tests irregularly, gently encourage a routine without being pushy.
 - Reference their recurring issues when relevant (e.g. "Nitrate has been creeping up — you may want to consider an extra water change this week").
 - If past conversation summaries are available, reference them naturally to show continuity (e.g. "Last time we discussed your pH — any improvement?").
@@ -1504,7 +1489,7 @@ def chat_tank(req: ChatRequest):
         all_wt = [t.get("water_type", "") for t in (req.available_tanks_detail or [])]
         response = _chat(client,
             model=_pick_model(experience=req.experience_level or "", water_type=chat_water_type, all_water_types=all_wt),
-            max_tokens=256,
+            max_tokens=1024,
             system=_CHAT_SYSTEM_PROMPT + f"\n\n{tank_context}" + (f"\n\n{req.system_context}" if req.system_context else ""),
             messages=messages,
         )
