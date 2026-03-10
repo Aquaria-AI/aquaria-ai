@@ -1004,6 +1004,7 @@ IMPORTANT: Only detect species that are plausibly aquarium animals. Ignore if th
 CRITICAL: Never say "I've added it" after receiving only a clarifying answer — only say so after the user explicitly affirms OR explicitly asks you to add.
 
 UNKNOWN PLANTS:
+The ONLY plants in the user's tank are those listed after "Plants:" in the tank context above. Do NOT assume a plant is in the tank just because the user mentioned it in conversation — only the "Plants:" line is the source of truth.
 If the user mentions a plant that is NOT in the current plants list, treat it as a new discovery. Do the following in this order:
 1. If the plant name is unclear or generic (e.g. "some grass", "a moss"), ask ONE clarifying question: "What type of plant is it?" — then wait for the answer.
 2. Once the plant is known, offer to add it: "I don't see [plant] in your plant list — would you like me to add it?"
