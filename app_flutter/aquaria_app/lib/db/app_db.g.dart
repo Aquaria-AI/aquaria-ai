@@ -1989,6 +1989,32 @@ class $TasksTable extends Tasks with TableInfo<$TasksTable, Task> {
     type: DriftSqlType.dateTime,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _isCompleteMeta = const VerificationMeta(
+    'isComplete',
+  );
+  @override
+  late final GeneratedColumn<bool> isComplete = GeneratedColumn<bool>(
+    'is_complete',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("is_complete" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
+  static const VerificationMeta _completedAtMeta = const VerificationMeta(
+    'completedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> completedAt = GeneratedColumn<DateTime>(
+    'completed_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _repeatDaysMeta = const VerificationMeta(
     'repeatDays',
   );
@@ -2037,6 +2063,8 @@ class $TasksTable extends Tasks with TableInfo<$TasksTable, Task> {
     source,
     isDismissed,
     dismissedAt,
+    isComplete,
+    completedAt,
     repeatDays,
     isPaused,
     createdAt,
@@ -2111,6 +2139,21 @@ class $TasksTable extends Tasks with TableInfo<$TasksTable, Task> {
         ),
       );
     }
+    if (data.containsKey('is_complete')) {
+      context.handle(
+        _isCompleteMeta,
+        isComplete.isAcceptableOrUnknown(data['is_complete']!, _isCompleteMeta),
+      );
+    }
+    if (data.containsKey('completed_at')) {
+      context.handle(
+        _completedAtMeta,
+        completedAt.isAcceptableOrUnknown(
+          data['completed_at']!,
+          _completedAtMeta,
+        ),
+      );
+    }
     if (data.containsKey('repeat_days')) {
       context.handle(
         _repeatDaysMeta,
@@ -2170,6 +2213,14 @@ class $TasksTable extends Tasks with TableInfo<$TasksTable, Task> {
         DriftSqlType.dateTime,
         data['${effectivePrefix}dismissed_at'],
       ),
+      isComplete: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}is_complete'],
+      )!,
+      completedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}completed_at'],
+      ),
       repeatDays: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
         data['${effectivePrefix}repeat_days'],
@@ -2200,6 +2251,8 @@ class Task extends DataClass implements Insertable<Task> {
   final String source;
   final bool isDismissed;
   final DateTime? dismissedAt;
+  final bool isComplete;
+  final DateTime? completedAt;
   final int? repeatDays;
   final bool isPaused;
   final DateTime createdAt;
@@ -2212,6 +2265,8 @@ class Task extends DataClass implements Insertable<Task> {
     required this.source,
     required this.isDismissed,
     this.dismissedAt,
+    required this.isComplete,
+    this.completedAt,
     this.repeatDays,
     required this.isPaused,
     required this.createdAt,
@@ -2230,6 +2285,10 @@ class Task extends DataClass implements Insertable<Task> {
     map['is_dismissed'] = Variable<bool>(isDismissed);
     if (!nullToAbsent || dismissedAt != null) {
       map['dismissed_at'] = Variable<DateTime>(dismissedAt);
+    }
+    map['is_complete'] = Variable<bool>(isComplete);
+    if (!nullToAbsent || completedAt != null) {
+      map['completed_at'] = Variable<DateTime>(completedAt);
     }
     if (!nullToAbsent || repeatDays != null) {
       map['repeat_days'] = Variable<int>(repeatDays);
@@ -2253,6 +2312,10 @@ class Task extends DataClass implements Insertable<Task> {
       dismissedAt: dismissedAt == null && nullToAbsent
           ? const Value.absent()
           : Value(dismissedAt),
+      isComplete: Value(isComplete),
+      completedAt: completedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(completedAt),
       repeatDays: repeatDays == null && nullToAbsent
           ? const Value.absent()
           : Value(repeatDays),
@@ -2275,6 +2338,8 @@ class Task extends DataClass implements Insertable<Task> {
       source: serializer.fromJson<String>(json['source']),
       isDismissed: serializer.fromJson<bool>(json['isDismissed']),
       dismissedAt: serializer.fromJson<DateTime?>(json['dismissedAt']),
+      isComplete: serializer.fromJson<bool>(json['isComplete']),
+      completedAt: serializer.fromJson<DateTime?>(json['completedAt']),
       repeatDays: serializer.fromJson<int?>(json['repeatDays']),
       isPaused: serializer.fromJson<bool>(json['isPaused']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
@@ -2292,6 +2357,8 @@ class Task extends DataClass implements Insertable<Task> {
       'source': serializer.toJson<String>(source),
       'isDismissed': serializer.toJson<bool>(isDismissed),
       'dismissedAt': serializer.toJson<DateTime?>(dismissedAt),
+      'isComplete': serializer.toJson<bool>(isComplete),
+      'completedAt': serializer.toJson<DateTime?>(completedAt),
       'repeatDays': serializer.toJson<int?>(repeatDays),
       'isPaused': serializer.toJson<bool>(isPaused),
       'createdAt': serializer.toJson<DateTime>(createdAt),
@@ -2307,6 +2374,8 @@ class Task extends DataClass implements Insertable<Task> {
     String? source,
     bool? isDismissed,
     Value<DateTime?> dismissedAt = const Value.absent(),
+    bool? isComplete,
+    Value<DateTime?> completedAt = const Value.absent(),
     Value<int?> repeatDays = const Value.absent(),
     bool? isPaused,
     DateTime? createdAt,
@@ -2319,6 +2388,8 @@ class Task extends DataClass implements Insertable<Task> {
     source: source ?? this.source,
     isDismissed: isDismissed ?? this.isDismissed,
     dismissedAt: dismissedAt.present ? dismissedAt.value : this.dismissedAt,
+    isComplete: isComplete ?? this.isComplete,
+    completedAt: completedAt.present ? completedAt.value : this.completedAt,
     repeatDays: repeatDays.present ? repeatDays.value : this.repeatDays,
     isPaused: isPaused ?? this.isPaused,
     createdAt: createdAt ?? this.createdAt,
@@ -2339,6 +2410,12 @@ class Task extends DataClass implements Insertable<Task> {
       dismissedAt: data.dismissedAt.present
           ? data.dismissedAt.value
           : this.dismissedAt,
+      isComplete: data.isComplete.present
+          ? data.isComplete.value
+          : this.isComplete,
+      completedAt: data.completedAt.present
+          ? data.completedAt.value
+          : this.completedAt,
       repeatDays: data.repeatDays.present
           ? data.repeatDays.value
           : this.repeatDays,
@@ -2358,6 +2435,8 @@ class Task extends DataClass implements Insertable<Task> {
           ..write('source: $source, ')
           ..write('isDismissed: $isDismissed, ')
           ..write('dismissedAt: $dismissedAt, ')
+          ..write('isComplete: $isComplete, ')
+          ..write('completedAt: $completedAt, ')
           ..write('repeatDays: $repeatDays, ')
           ..write('isPaused: $isPaused, ')
           ..write('createdAt: $createdAt')
@@ -2375,6 +2454,8 @@ class Task extends DataClass implements Insertable<Task> {
     source,
     isDismissed,
     dismissedAt,
+    isComplete,
+    completedAt,
     repeatDays,
     isPaused,
     createdAt,
@@ -2391,6 +2472,8 @@ class Task extends DataClass implements Insertable<Task> {
           other.source == this.source &&
           other.isDismissed == this.isDismissed &&
           other.dismissedAt == this.dismissedAt &&
+          other.isComplete == this.isComplete &&
+          other.completedAt == this.completedAt &&
           other.repeatDays == this.repeatDays &&
           other.isPaused == this.isPaused &&
           other.createdAt == this.createdAt);
@@ -2405,6 +2488,8 @@ class TasksCompanion extends UpdateCompanion<Task> {
   final Value<String> source;
   final Value<bool> isDismissed;
   final Value<DateTime?> dismissedAt;
+  final Value<bool> isComplete;
+  final Value<DateTime?> completedAt;
   final Value<int?> repeatDays;
   final Value<bool> isPaused;
   final Value<DateTime> createdAt;
@@ -2417,6 +2502,8 @@ class TasksCompanion extends UpdateCompanion<Task> {
     this.source = const Value.absent(),
     this.isDismissed = const Value.absent(),
     this.dismissedAt = const Value.absent(),
+    this.isComplete = const Value.absent(),
+    this.completedAt = const Value.absent(),
     this.repeatDays = const Value.absent(),
     this.isPaused = const Value.absent(),
     this.createdAt = const Value.absent(),
@@ -2430,6 +2517,8 @@ class TasksCompanion extends UpdateCompanion<Task> {
     this.source = const Value.absent(),
     this.isDismissed = const Value.absent(),
     this.dismissedAt = const Value.absent(),
+    this.isComplete = const Value.absent(),
+    this.completedAt = const Value.absent(),
     this.repeatDays = const Value.absent(),
     this.isPaused = const Value.absent(),
     this.createdAt = const Value.absent(),
@@ -2444,6 +2533,8 @@ class TasksCompanion extends UpdateCompanion<Task> {
     Expression<String>? source,
     Expression<bool>? isDismissed,
     Expression<DateTime>? dismissedAt,
+    Expression<bool>? isComplete,
+    Expression<DateTime>? completedAt,
     Expression<int>? repeatDays,
     Expression<bool>? isPaused,
     Expression<DateTime>? createdAt,
@@ -2457,6 +2548,8 @@ class TasksCompanion extends UpdateCompanion<Task> {
       if (source != null) 'source': source,
       if (isDismissed != null) 'is_dismissed': isDismissed,
       if (dismissedAt != null) 'dismissed_at': dismissedAt,
+      if (isComplete != null) 'is_complete': isComplete,
+      if (completedAt != null) 'completed_at': completedAt,
       if (repeatDays != null) 'repeat_days': repeatDays,
       if (isPaused != null) 'is_paused': isPaused,
       if (createdAt != null) 'created_at': createdAt,
@@ -2472,6 +2565,8 @@ class TasksCompanion extends UpdateCompanion<Task> {
     Value<String>? source,
     Value<bool>? isDismissed,
     Value<DateTime?>? dismissedAt,
+    Value<bool>? isComplete,
+    Value<DateTime?>? completedAt,
     Value<int?>? repeatDays,
     Value<bool>? isPaused,
     Value<DateTime>? createdAt,
@@ -2485,6 +2580,8 @@ class TasksCompanion extends UpdateCompanion<Task> {
       source: source ?? this.source,
       isDismissed: isDismissed ?? this.isDismissed,
       dismissedAt: dismissedAt ?? this.dismissedAt,
+      isComplete: isComplete ?? this.isComplete,
+      completedAt: completedAt ?? this.completedAt,
       repeatDays: repeatDays ?? this.repeatDays,
       isPaused: isPaused ?? this.isPaused,
       createdAt: createdAt ?? this.createdAt,
@@ -2518,6 +2615,12 @@ class TasksCompanion extends UpdateCompanion<Task> {
     if (dismissedAt.present) {
       map['dismissed_at'] = Variable<DateTime>(dismissedAt.value);
     }
+    if (isComplete.present) {
+      map['is_complete'] = Variable<bool>(isComplete.value);
+    }
+    if (completedAt.present) {
+      map['completed_at'] = Variable<DateTime>(completedAt.value);
+    }
     if (repeatDays.present) {
       map['repeat_days'] = Variable<int>(repeatDays.value);
     }
@@ -2541,6 +2644,8 @@ class TasksCompanion extends UpdateCompanion<Task> {
           ..write('source: $source, ')
           ..write('isDismissed: $isDismissed, ')
           ..write('dismissedAt: $dismissedAt, ')
+          ..write('isComplete: $isComplete, ')
+          ..write('completedAt: $completedAt, ')
           ..write('repeatDays: $repeatDays, ')
           ..write('isPaused: $isPaused, ')
           ..write('createdAt: $createdAt')
@@ -3938,6 +4043,8 @@ typedef $$TasksTableCreateCompanionBuilder =
       Value<String> source,
       Value<bool> isDismissed,
       Value<DateTime?> dismissedAt,
+      Value<bool> isComplete,
+      Value<DateTime?> completedAt,
       Value<int?> repeatDays,
       Value<bool> isPaused,
       Value<DateTime> createdAt,
@@ -3952,6 +4059,8 @@ typedef $$TasksTableUpdateCompanionBuilder =
       Value<String> source,
       Value<bool> isDismissed,
       Value<DateTime?> dismissedAt,
+      Value<bool> isComplete,
+      Value<DateTime?> completedAt,
       Value<int?> repeatDays,
       Value<bool> isPaused,
       Value<DateTime> createdAt,
@@ -4002,6 +4111,16 @@ class $$TasksTableFilterComposer extends Composer<_$AppDb, $TasksTable> {
 
   ColumnFilters<DateTime> get dismissedAt => $composableBuilder(
     column: $table.dismissedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get isComplete => $composableBuilder(
+    column: $table.isComplete,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get completedAt => $composableBuilder(
+    column: $table.completedAt,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -4069,6 +4188,16 @@ class $$TasksTableOrderingComposer extends Composer<_$AppDb, $TasksTable> {
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<bool> get isComplete => $composableBuilder(
+    column: $table.isComplete,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get completedAt => $composableBuilder(
+    column: $table.completedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<int> get repeatDays => $composableBuilder(
     column: $table.repeatDays,
     builder: (column) => ColumnOrderings(column),
@@ -4123,6 +4252,16 @@ class $$TasksTableAnnotationComposer extends Composer<_$AppDb, $TasksTable> {
     builder: (column) => column,
   );
 
+  GeneratedColumn<bool> get isComplete => $composableBuilder(
+    column: $table.isComplete,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get completedAt => $composableBuilder(
+    column: $table.completedAt,
+    builder: (column) => column,
+  );
+
   GeneratedColumn<int> get repeatDays => $composableBuilder(
     column: $table.repeatDays,
     builder: (column) => column,
@@ -4171,6 +4310,8 @@ class $$TasksTableTableManager
                 Value<String> source = const Value.absent(),
                 Value<bool> isDismissed = const Value.absent(),
                 Value<DateTime?> dismissedAt = const Value.absent(),
+                Value<bool> isComplete = const Value.absent(),
+                Value<DateTime?> completedAt = const Value.absent(),
                 Value<int?> repeatDays = const Value.absent(),
                 Value<bool> isPaused = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
@@ -4183,6 +4324,8 @@ class $$TasksTableTableManager
                 source: source,
                 isDismissed: isDismissed,
                 dismissedAt: dismissedAt,
+                isComplete: isComplete,
+                completedAt: completedAt,
                 repeatDays: repeatDays,
                 isPaused: isPaused,
                 createdAt: createdAt,
@@ -4197,6 +4340,8 @@ class $$TasksTableTableManager
                 Value<String> source = const Value.absent(),
                 Value<bool> isDismissed = const Value.absent(),
                 Value<DateTime?> dismissedAt = const Value.absent(),
+                Value<bool> isComplete = const Value.absent(),
+                Value<DateTime?> completedAt = const Value.absent(),
                 Value<int?> repeatDays = const Value.absent(),
                 Value<bool> isPaused = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
@@ -4209,6 +4354,8 @@ class $$TasksTableTableManager
                 source: source,
                 isDismissed: isDismissed,
                 dismissedAt: dismissedAt,
+                isComplete: isComplete,
+                completedAt: completedAt,
                 repeatDays: repeatDays,
                 isPaused: isPaused,
                 createdAt: createdAt,
