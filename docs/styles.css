@@ -258,6 +258,11 @@ h2 { font-size: 2.2rem; font-weight: 700; text-align: center; margin-bottom: 48p
   box-shadow: 0 8px 30px rgba(14, 90, 102, 0.1);
 }
 
+.feature-card--highlight {
+  background: linear-gradient(135deg, var(--mint) 0%, var(--white) 100%);
+  border: 1.5px solid rgba(31, 162, 168, 0.25);
+}
+
 .feature-icon { font-size: 1.8rem; margin-bottom: 12px; }
 
 .feature-card h4 {
