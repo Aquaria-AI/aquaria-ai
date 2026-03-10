@@ -73,6 +73,22 @@ const _cLight   = Color(0xFF7FE2D5);
 const _cMint    = Color(0xFFD9F7F0);
 const _cBeige   = Color(0xFFE7D8C7);
 
+/// Show a floating snackbar at the top of the screen.
+void _showTopSnack(BuildContext context, String message, {Color? backgroundColor}) {
+  ScaffoldMessenger.of(context)
+    ..clearSnackBars()
+    ..showSnackBar(SnackBar(
+      content: Text(message),
+      backgroundColor: backgroundColor,
+      behavior: SnackBarBehavior.floating,
+      margin: EdgeInsets.only(
+        bottom: MediaQuery.of(context).size.height - 150,
+        left: 20,
+        right: 20,
+      ),
+    ));
+}
+
 /// Formal parameter display names with units.
 const _paramDisplayNames = <String, String>{
   'ph': 'pH',
@@ -635,7 +651,7 @@ Future<void> _sharePickedToCommunity(BuildContext context, String filePath) asyn
   } catch (e) {
     if (context.mounted) {
       Navigator.of(context).pop(); // dismiss overlay
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to share: $e')));
+      _showTopSnack(context, 'Failed to share: $e');
     }
   }
 }
@@ -644,9 +660,7 @@ Future<void> _sharePickedToCommunity(BuildContext context, String filePath) asyn
 Future<void> pickAndSavePhoto(BuildContext context, {String? tankId, String? pickedPath}) async {
   final tanks = TankStore.instance.tanks;
   if (tanks.isEmpty) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Add a tank first')),
-    );
+    _showTopSnack(context, 'Add a tank first');
     return;
   }
 
@@ -742,16 +756,12 @@ Future<void> pickAndSavePhoto(BuildContext context, {String? tankId, String? pic
     );
 
     if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Photo saved')),
-      );
+      _showTopSnack(context, 'Photo saved');
     }
   } catch (e) {
     debugPrint('[PhotoPick] error saving photo: $e');
     if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error saving photo: $e')),
-      );
+      _showTopSnack(context, 'Error saving photo: $e');
     }
   }
 }
@@ -1313,7 +1323,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _finishing = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+      _showTopSnack(context, 'Error: $e');
     }
   }
 
@@ -3088,9 +3098,7 @@ class _ObWaterQualityPageState extends State<_ObWaterQualityPage> {
       final rows = const CsvToListConverter(eol: '\n').convert(content);
       if (rows.length < 2) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('CSV must have a header row and at least one data row.')),
-          );
+          _showTopSnack(context, 'CSV must have a header row and at least one data row.');
         }
         return;
       }
@@ -3098,18 +3106,11 @@ class _ObWaterQualityPageState extends State<_ObWaterQualityPage> {
       _pendingCsvContent = content;
       widget.onCsvPending?.call(content);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('${rows.length - 1} rows ready to import after setup.'),
-            backgroundColor: _cDark,
-          ),
-        );
+        _showTopSnack(context, '${rows.length - 1} rows ready to import after setup.', backgroundColor: _cDark);
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to read file: $e')),
-        );
+        _showTopSnack(context, 'Failed to read file: $e');
       }
     }
   }
@@ -3709,6 +3710,9 @@ class _AquariaAppState extends State<AquariaApp> {
         colorScheme: ColorScheme.fromSeed(seedColor: _cDark),
         useMaterial3: true,
         textTheme: GoogleFonts.nunitoSansTextTheme(),
+        snackBarTheme: const SnackBarThemeData(
+          behavior: SnackBarBehavior.floating,
+        ),
       ),
       home: const _AppEntry(),
     );
@@ -3882,7 +3886,9 @@ class _TankListScreenState extends State<TankListScreen> {
     List<({String category, String tip})> tips, Set<WaterType> waterTypes,
   ) {
     if (waterTypes.isEmpty) return tips;
-    final hasFW = waterTypes.contains(WaterType.freshwater);
+    final hasFW = waterTypes.contains(WaterType.freshwater) ||
+        waterTypes.contains(WaterType.planted) ||
+        waterTypes.contains(WaterType.pond);
     final hasSW = waterTypes.contains(WaterType.saltwater) ||
         waterTypes.contains(WaterType.reef);
     if (hasFW && hasSW) return tips;
@@ -4120,7 +4126,7 @@ class _TankListScreenState extends State<TankListScreen> {
       );
       _processNoteForTasks(tank, noteText);
       await _refresh();
-      messenger.showSnackBar(const SnackBar(content: Text('Note saved')));
+      _showTopSnack(context, 'Note saved');
     }
   }
 
@@ -4176,7 +4182,7 @@ class _TankListScreenState extends State<TankListScreen> {
         repeatDays: result.days,
       );
       await _refresh();
-      messenger.showSnackBar(const SnackBar(content: Text('Recurring task added')));
+      _showTopSnack(context, 'Recurring task added');
     }
   }
 
@@ -4185,14 +4191,10 @@ class _TankListScreenState extends State<TankListScreen> {
       await TankStore.instance.archive(id);
       if (!mounted) return;
       setState(() {});
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Archived tank')),
-      );
+      _showTopSnack(context, 'Archived tank');
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Archive failed: $e')),
-      );
+      _showTopSnack(context, 'Archive failed: $e');
     }
   }
 
@@ -4221,14 +4223,10 @@ class _TankListScreenState extends State<TankListScreen> {
       await TankStore.instance.delete(tank.id);
       if (!mounted) return;
       setState(() {});
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Tank deleted')),
-      );
+      _showTopSnack(context, 'Tank deleted');
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Delete failed: $e')),
-      );
+      _showTopSnack(context, 'Delete failed: $e');
     }
   }
 
@@ -4468,6 +4466,7 @@ class _TankListScreenState extends State<TankListScreen> {
                             child: RefreshIndicator(
                               onRefresh: _refresh,
                               child: ListView.builder(
+                                padding: const EdgeInsets.fromLTRB(12, 4, 12, 100),
                                 // +3 for merged tips card, community card, and "My Tanks" header
                                 itemCount: tanks.length + 3,
                                 itemBuilder: (context, index) {
@@ -4760,7 +4759,6 @@ class _TankListScreenState extends State<TankListScreen> {
                           ),
                           );
                                 },
-                                padding: const EdgeInsets.fromLTRB(12, 4, 12, 16),
                               ),
                             ),
                           ),
@@ -4804,6 +4802,51 @@ class _NotificationsCardState extends State<_NotificationsCard> {
     if (dt == null) return raw;
     const ms = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
     return '${ms[dt.month - 1]} ${dt.day}';
+  }
+
+  /// Whether a task's due date is in the future (after today).
+  static bool _isFutureTask(db.Task task) {
+    if (task.dueDate == null || task.dueDate!.isEmpty) return false;
+    final due = DateTime.tryParse(task.dueDate!);
+    if (due == null) return false;
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    return due.isAfter(today);
+  }
+
+  void _onComplete(db.Task task) {
+    TankStore.instance.completeTaskById(task.id);
+    widget.onDismissed();
+  }
+
+  void _onDismiss(db.Task task) {
+    if (_isFutureTask(task)) return; // future tasks cannot be dismissed
+    // Ask whether the task was completed
+    showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Did you complete this task?'),
+        content: Text(task.description),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('No'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Yes, completed'),
+          ),
+        ],
+      ),
+    ).then((completed) {
+      if (completed == null) return; // dialog dismissed
+      if (completed) {
+        TankStore.instance.completeTaskById(task.id);
+      } else {
+        TankStore.instance.dismissTaskById(task.id);
+      }
+      widget.onDismissed();
+    });
   }
 
   @override
@@ -4861,8 +4904,9 @@ class _NotificationsCardState extends State<_NotificationsCard> {
                 final rawDue = item.task.dueDate;
                 final dueLabel = (rawDue != null && rawDue.isNotEmpty) ? _fmtDue(rawDue) : null;
                 final isRecurring = item.task.repeatDays != null && item.task.repeatDays! > 0;
+                final isFuture = _isFutureTask(item.task);
                 return Padding(
-                  padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
+                  padding: const EdgeInsets.fromLTRB(14, 8, 4, 8),
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -4884,23 +4928,41 @@ class _NotificationsCardState extends State<_NotificationsCard> {
                               if (dueLabel != null)
                                 TextSpan(
                                   text: ' — $dueLabel',
-                                  style: const TextStyle(color: Color(0xFF8D6E63)),
+                                  style: TextStyle(
+                                    color: isFuture ? const Color(0xFF6D8B74) : const Color(0xFF8D6E63),
+                                  ),
+                                ),
+                              if (isFuture)
+                                const TextSpan(
+                                  text: '  Scheduled',
+                                  style: TextStyle(fontSize: 10, color: Color(0xFF9E9E9E), fontStyle: FontStyle.italic),
                                 ),
                             ],
                           ),
                         ),
                       ),
-                      IconButton(
-                        onPressed: () {
-                          TankStore.instance.dismissTaskById(item.task.id);
-                          widget.onDismissed();
-                        },
-                        icon: const Icon(Icons.close, size: 16, color: Color(0xFF8D6E63)),
-                        iconSize: 16,
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-                        splashRadius: 18,
-                      ),
+                      if (!isFuture) ...[
+                        // Complete (checkmark) button — only for past/today tasks
+                        IconButton(
+                          onPressed: () => _onComplete(item.task),
+                          icon: const Icon(Icons.check_circle_outline, size: 18, color: Color(0xFF4CAF50)),
+                          iconSize: 18,
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                          splashRadius: 16,
+                          tooltip: 'Mark complete',
+                        ),
+                        // Dismiss (X) button — asks if completed
+                        IconButton(
+                          onPressed: () => _onDismiss(item.task),
+                          icon: const Icon(Icons.close, size: 16, color: Color(0xFF8D6E63)),
+                          iconSize: 16,
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                          splashRadius: 16,
+                          tooltip: 'Dismiss',
+                        ),
+                      ],
                     ],
                   ),
                 );
@@ -5333,7 +5395,9 @@ class _TipCardState extends State<_TipCard> {
   List<({String category, String tip})> _filteredTips() {
     final all = _kDailyTips[widget.experience] ?? _kDailyTips['beginner']!;
     if (widget.userWaterTypes.isEmpty) return all;
-    final hasFreshwater = widget.userWaterTypes.contains(WaterType.freshwater);
+    final hasFreshwater = widget.userWaterTypes.contains(WaterType.freshwater) ||
+        widget.userWaterTypes.contains(WaterType.planted) ||
+        widget.userWaterTypes.contains(WaterType.pond);
     final hasSaltwater = widget.userWaterTypes.contains(WaterType.saltwater) ||
         widget.userWaterTypes.contains(WaterType.reef);
     if (hasFreshwater && hasSaltwater) return all;
@@ -5600,7 +5664,7 @@ class _AddTankFlowScreenState extends State<AddTankFlowScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _finishing = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+      _showTopSnack(context, 'Error: $e');
     }
   }
 
@@ -5726,16 +5790,12 @@ class _AddTankScreenState extends State<AddTankScreen> {
   Future<void> _save() async {
     final name = _nameController.text.trim();
     if (name.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter a tank name.')),
-      );
+      _showTopSnack(context, 'Please enter a tank name.');
       return;
     }
     final sizeInput = int.tryParse(_sizeController.text.trim()) ?? 0;
     if (sizeInput <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter a valid tank size.')),
-      );
+      _showTopSnack(context, 'Please enter a valid tank size.');
       return;
     }
 
@@ -5969,7 +6029,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
       );
       _processNoteForTasks(noteText);
       await _load();
-      messenger.showSnackBar(const SnackBar(content: Text('Note saved')));
+      _showTopSnack(context, 'Note saved');
     }
   }
 
@@ -6025,7 +6085,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
         repeatDays: result.days,
       );
       await _load();
-      messenger.showSnackBar(const SnackBar(content: Text('Recurring task added')));
+      _showTopSnack(context, 'Recurring task added');
     }
   }
 
@@ -7252,6 +7312,16 @@ class _ChatSheetState extends State<_ChatSheet> {
               date: logDate,
             );
             debugPrint('[ParseLog] Log entry $i saved successfully');
+            // Auto-complete matching tasks when actions are logged
+            if (hasActions) {
+              final actions = (entry['actions'] as List).cast<String>();
+              for (final action in actions) {
+                await TankStore.instance.completeMatchingTask(
+                  tankId: tankSnapshot.id,
+                  actionDescription: action,
+                );
+              }
+            }
             if (i == logEntries.length - 1 && mounted) setState(() => _logDate = logDate);
           }
           if (mounted) widget.onLogsChanged();
@@ -7446,6 +7516,26 @@ class _ChatSheetState extends State<_ChatSheet> {
               }
             }
             if (inhList.isNotEmpty) {
+              await _loadTankData(_selectedTank!);
+              if (mounted) widget.onLogsChanged();
+            }
+          } catch (_) {}
+        }
+
+        // Add new plants if AI offered and user affirmed
+        if (data is Map && data['new_plants'] != null && _selectedTank != null) {
+          try {
+            final plantData = data['new_plants'] as Map<String, dynamic>;
+            final plantList = (plantData['plants'] as List?) ?? [];
+            for (final plant in plantList) {
+              if (plant is String && plant.isNotEmpty) {
+                await TankStore.instance.addPlant(
+                  tankId: _selectedTank!.id,
+                  name: plant,
+                );
+              }
+            }
+            if (plantList.isNotEmpty) {
               await _loadTankData(_selectedTank!);
               if (mounted) widget.onLogsChanged();
             }
@@ -9383,12 +9473,7 @@ class _CsvImportScreenState extends State<_CsvImportScreen> {
     } catch (_) {
       // Fallback: just confirm it's in the app documents
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Template saved to app documents.'),
-            backgroundColor: _cDark,
-          ),
-        );
+        _showTopSnack(context, 'Template saved to app documents.', backgroundColor: _cDark);
       }
     }
   }
@@ -9447,12 +9532,7 @@ class _CsvImportScreenState extends State<_CsvImportScreen> {
     }
     setState(() { _importing = false; _importedCount = count; });
     if (count > 0 && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Imported $count entries!'),
-          backgroundColor: _cDark,
-        ),
-      );
+      _showTopSnack(context, 'Imported $count entries!', backgroundColor: _cDark);
       Navigator.of(context).pop(true);
     }
   }
@@ -10122,7 +10202,7 @@ class _DailyLogsScreenState extends State<DailyLogsScreen> {
         parsedJson: jsonEncode({'source': 'manual_note', 'notes': [noteText]}),
       );
       await _reload();
-      messenger.showSnackBar(const SnackBar(content: Text('Note saved')));
+      _showTopSnack(context, 'Note saved');
     }
   }
 
@@ -10530,9 +10610,7 @@ class _PhotoDetailScreenState extends State<_PhotoDetailScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _sharing = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to share: $e')),
-        );
+        _showTopSnack(context, 'Failed to share: $e');
       }
     }
   }
@@ -11447,7 +11525,7 @@ class _EditTankScreenState extends State<EditTankScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _saving = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+      _showTopSnack(context, 'Error: $e');
     }
   }
 
@@ -11613,7 +11691,7 @@ class _EditInhabitantsScreenState extends State<EditInhabitantsScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _saving = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+      _showTopSnack(context, 'Error: $e');
     }
   }
 
@@ -11930,7 +12008,7 @@ class _ManageRecurringTasksScreenState extends State<_ManageRecurringTasksScreen
       );
       await _load();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Recurring task added')));
+        _showTopSnack(context, 'Recurring task added');
       }
     }
   }
@@ -12092,7 +12170,7 @@ class _CommunityScreenState extends State<_CommunityScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _loading = false);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error loading posts: $e')));
+        _showTopSnack(context, 'Error loading posts: $e');
       }
     }
   }
@@ -12221,7 +12299,7 @@ class _CommunityScreenState extends State<_CommunityScreen> {
       final updated = await SupabaseService.fetchReactions([postId]);
       if (mounted) setState(() => _reactions[postId] = updated[postId] ?? []);
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+      if (mounted) _showTopSnack(context, '$e');
     }
   }
 
@@ -12476,9 +12554,7 @@ class _CommunityScreenState extends State<_CommunityScreen> {
                                           if (ok == true) {
                                             await SupabaseService.adminDeletePost(postId);
                                             if (mounted) {
-                                              ScaffoldMessenger.of(context).showSnackBar(
-                                                const SnackBar(content: Text('Post removed and user notified.')),
-                                              );
+                                              _showTopSnack(context, 'Post removed and user notified.');
                                             }
                                             _load();
                                           }
@@ -12575,9 +12651,7 @@ class _CommunityScreenState extends State<_CommunityScreen> {
                                             if (ok == true) {
                                               final flagged = await SupabaseService.flagPost(postId);
                                               if (mounted) {
-                                                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                                                  content: Text(flagged ? 'Post reported. Thank you.' : 'You have already reported this post.'),
-                                                ));
+                                                _showTopSnack(context, flagged ? 'Post reported. Thank you.' : 'You have already reported this post.');
                                                 _load();
                                               }
                                             }
@@ -12693,7 +12767,7 @@ class _ProfileScreenState extends State<_ProfileScreen> {
       );
       if (mounted) {
         setState(() { _saving = false; _originalUsername = username.isNotEmpty ? username : null; });
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Profile saved')));
+        _showTopSnack(context, 'Profile saved');
       }
     } catch (e) {
       if (mounted) {
@@ -12702,7 +12776,7 @@ class _ProfileScreenState extends State<_ProfileScreen> {
         if (msg.contains('duplicate') || msg.contains('unique')) {
           setState(() => _usernameError = 'Username already taken');
         } else {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $msg')));
+          _showTopSnack(context, 'Error: $msg');
         }
       }
     }
@@ -12755,7 +12829,7 @@ class _ProfileScreenState extends State<_ProfileScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _deleting = false);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to close account: $e')));
+        _showTopSnack(context, 'Failed to close account: $e');
       }
     }
   }
@@ -12953,14 +13027,10 @@ class _ArchivedTanksScreenState extends State<ArchivedTanksScreen> {
       await TankStore.instance.restore(id);
       await _load();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Restored tank')),
-      );
+      _showTopSnack(context, 'Restored tank');
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Restore failed: $e')),
-      );
+      _showTopSnack(context, 'Restore failed: $e');
     }
   }
 

@@ -525,6 +525,105 @@ class TankStore {
     }
   }
 
+  /// Mark a task as complete, log the action, cancel its notification,
+  /// and auto-create next occurrence if recurring.
+  Future<void> completeTaskById(int id) async {
+    final task = await _db.getTaskById(id);
+    if (task == null) return;
+
+    await _db.completeTaskById(id);
+
+    // Cancel notification
+    NotificationService.cancelForTask(
+      tankId: task.tankId,
+      task: {'description': task.description, 'due_date': task.dueDate ?? ''},
+    );
+
+    // Log as an action
+    final now = DateTime.now();
+    final parsedJson = '{"actions":["${task.description}"],"notes":[],"measurements":{},"tasks":[]}';
+    await addLog(
+      tankId: task.tankId,
+      rawText: task.description,
+      parsedJson: parsedJson,
+      date: now,
+    );
+    invalidateSummary(task.tankId);
+
+    // Cloud sync
+    _cloudSync(() => SupabaseService.dismissTaskByKey(
+      tankId: task.tankId,
+      description: task.description,
+      createdAt: task.createdAt,
+    ));
+
+    // Auto-create next occurrence for recurring tasks (skip if paused)
+    if (task.repeatDays != null && task.repeatDays! > 0 && !task.isPaused) {
+      final nextDue = now.add(Duration(days: task.repeatDays!));
+      final nextDueStr = '${nextDue.year}-${nextDue.month.toString().padLeft(2, '0')}-${nextDue.day.toString().padLeft(2, '0')}';
+      await addTask(
+        tankId: task.tankId,
+        description: task.description,
+        dueDate: nextDueStr,
+        priority: task.priority,
+        source: task.source,
+        repeatDays: task.repeatDays,
+      );
+    }
+  }
+
+  /// Find and complete an open task matching the given description for a tank.
+  /// Used when the AI detects the user performed an action that matches a task.
+  /// Returns true if a matching task was found and completed.
+  Future<bool> completeMatchingTask({
+    required String tankId,
+    required String actionDescription,
+  }) async {
+    final tasks = await _db.tasksForTank(tankId);
+    final actionLower = actionDescription.toLowerCase().trim();
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+
+    for (final task in tasks) {
+      // Only match tasks due today or in the past (never future)
+      if (task.dueDate != null) {
+        final due = DateTime.tryParse(task.dueDate!);
+        if (due != null && due.isAfter(today)) continue;
+      }
+      final taskLower = task.description.toLowerCase().trim();
+      // Fuzzy match: check if the action contains the task description or vice versa
+      if (taskLower.contains(actionLower) ||
+          actionLower.contains(taskLower) ||
+          _fuzzyTaskMatch(taskLower, actionLower)) {
+        await completeTaskById(task.id);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// Simple fuzzy match: check if key words from the task appear in the action.
+  bool _fuzzyTaskMatch(String taskDesc, String actionDesc) {
+    // Common task/action keyword mappings
+    const synonyms = {
+      'water change': ['water change', 'wc', 'changed water', 'change water'],
+      'check': ['test', 'check', 'measure', 'tested', 'checked', 'measured'],
+      'clean': ['clean', 'cleaned', 'scrub', 'scrubbed', 'wipe', 'wiped'],
+      'feed': ['feed', 'fed', 'feeding'],
+      'trim': ['trim', 'trimmed', 'prune', 'pruned'],
+      'dose': ['dose', 'dosed', 'dosing', 'added'],
+    };
+
+    for (final entry in synonyms.entries) {
+      final taskHasKey = taskDesc.contains(entry.key) ||
+          entry.value.any((s) => taskDesc.contains(s));
+      final actionHasKey = actionDesc.contains(entry.key) ||
+          entry.value.any((s) => actionDesc.contains(s));
+      if (taskHasKey && actionHasKey) return true;
+    }
+    return false;
+  }
+
   Future<List<db.Task>> getRecurringTasks({String? tankId}) =>
       _db.allActiveRecurringTasks(tankId: tankId);
 
@@ -579,6 +678,26 @@ class TankStore {
 
   Future<List<db.Inhabitant>> inhabitantsFor(String tankId) {
     return _db.inhabitantsForTank(tankId);
+  }
+
+  Future<void> addPlant({
+    required String tankId,
+    required String name,
+  }) async {
+    await _db.insertPlant(
+      db.PlantsCompanion.insert(
+        tankId: tankId,
+        name: name,
+      ),
+    );
+    // Re-sync full plants list to cloud
+    _cloudSync(() async {
+      final all = await _db.plantsForTank(tankId);
+      await SupabaseService.replacePlants(
+        tankId,
+        all.map((p) => p.name).toList(),
+      );
+    });
   }
 
   Future<List<db.Plant>> plantsFor(String tankId) {

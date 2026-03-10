@@ -94,6 +94,8 @@ class Tasks extends Table {
   TextColumn get source => text().withDefault(const Constant('ai'))(); // 'ai' or 'alert'
   BoolColumn get isDismissed => boolean().withDefault(const Constant(false))();
   DateTimeColumn get dismissedAt => dateTime().nullable()();
+  BoolColumn get isComplete => boolean().withDefault(const Constant(false))();
+  DateTimeColumn get completedAt => dateTime().nullable()();
   IntColumn get repeatDays => integer().nullable()(); // recurrence interval in days (null = one-off)
   BoolColumn get isPaused => boolean().withDefault(const Constant(false))();
   DateTimeColumn get createdAt =>
@@ -119,7 +121,7 @@ class AppDb extends _$AppDb {
   AppDb() : super(_openConnection());
 
   @override
-  int get schemaVersion => 12;
+  int get schemaVersion => 13;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -166,6 +168,10 @@ class AppDb extends _$AppDb {
           }
           if (from <= 11) {
             await migrator.addColumn(tasks, tasks.isPaused);
+          }
+          if (from <= 12) {
+            await migrator.addColumn(tasks, tasks.isComplete);
+            await migrator.addColumn(tasks, tasks.completedAt);
           }
         },
       );
@@ -234,6 +240,9 @@ class AppDb extends _$AppDb {
   Future<List<Plant>> plantsForTank(String tankId) {
     return (select(plants)..where((r) => r.tankId.equals(tankId))).get();
   }
+
+  Future<void> insertPlant(PlantsCompanion entry) =>
+      into(plants).insert(entry);
 
   Future<void> replacePlantsForTank(
     String tankId,
@@ -425,6 +434,17 @@ class AppDb extends _$AppDb {
   Future<void> dismissTaskById(int id) async {
     await (update(tasks)..where((r) => r.id.equals(id))).write(
       TasksCompanion(
+        isDismissed: const Value(true),
+        dismissedAt: Value(DateTime.now()),
+      ),
+    );
+  }
+
+  Future<void> completeTaskById(int id) async {
+    await (update(tasks)..where((r) => r.id.equals(id))).write(
+      TasksCompanion(
+        isComplete: const Value(true),
+        completedAt: Value(DateTime.now()),
         isDismissed: const Value(true),
         dismissedAt: Value(DateTime.now()),
       ),

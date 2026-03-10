@@ -1003,6 +1003,15 @@ If the user mentions an animal (fish, shrimp, snail, coral, etc.) that is NOT in
 IMPORTANT: Only detect species that are plausibly aquarium animals. Ignore if the user is clearly speaking figuratively.
 CRITICAL: Never say "I've added it" after receiving only a clarifying answer — only say so after the user explicitly affirms OR explicitly asks you to add.
 
+UNKNOWN PLANTS:
+If the user mentions a plant that is NOT in the current plants list, treat it as a new discovery. Do the following in this order:
+1. If the plant name is unclear or generic (e.g. "some grass", "a moss"), ask ONE clarifying question: "What type of plant is it?" — then wait for the answer.
+2. Once the plant is known, offer to add it: "I don't see [plant] in your plant list — would you like me to add it?"
+3. When the user affirms, say "Done — I've added [plant] to your plant list."
+4. If the user explicitly says "add [plant] to my plants/tank/list", skip straight to step 3 and confirm it was added.
+IMPORTANT: Only detect species that are plausibly aquarium or aquatic plants (e.g. Java Fern, Anubias, Amazon Sword, Monte Carlo, Hornwort, Vallisneria, etc.). Ignore if the user is clearly speaking figuratively or about non-aquatic plants.
+CRITICAL: Never say "I've added it" after receiving only a clarifying answer — only say so after the user explicitly affirms OR explicitly asks you to add.
+
 TANK CREATION:
 You CAN and SHOULD create new tank profiles from ANY context — even when you are already viewing or discussing an existing tank. Never tell the user you are unable to create a new tank.
 When the user wants to add or set up a new tank (e.g. "add a tank", "I have a new tank", "setting up a tank", "create a tank"), guide them conversationally. Ask ONE question at a time in this order, skipping any already answered:
@@ -1126,6 +1135,18 @@ Rules:
 - If the conversation is NOT about creating a new tank (e.g. the user is asking about an existing tank), return {"tank": {}, "initial": {}}"""
 
 
+_NEW_PLANT_EXTRACT_PROMPT = """Based on this conversation, extract the new plant(s) the user wants to add to their tank profile.
+
+Return ONLY valid JSON — no markdown, no explanation:
+{"plants": ["Java Fern", "Anubias Nana"]}
+
+Rules:
+- Use the most specific common name mentioned (e.g. "Anubias Nana" not just "plant"). Capitalize properly using Title Case.
+- Only include plants the user explicitly said to add — not ones already in the tank profile.
+- Only include aquatic/aquarium plants. Ignore non-aquatic plants.
+- If the conversation is just a question or clarification with no clear plant to add, return {"plants": []}"""
+
+
 def _is_affirmation(text: str) -> bool:
     t = text.lower().strip().rstrip("!.")
     affirmations = ["yes", "yeah", "sure", "ok", "okay", "please", "yep", "yup",
@@ -1184,6 +1205,23 @@ def _history_has_inhabitant_add_offer(history: list) -> tuple[bool, str]:
                 "add it to your", "add them to your", "add to your tank profile",
                 "want me to add", "shall i add", "add your", "update your profile",
                 "log it as", "add it as",
+            ]):
+                return True, content
+            return False, ""
+    return False, ""
+
+
+def _history_has_plant_add_offer(history: list) -> tuple[bool, str]:
+    """Returns (has_offer, ai_message_text) if the last AI message offered to add a plant."""
+    for msg in reversed(history or []):
+        if msg.get("role") == "assistant":
+            content = msg.get("content", "")
+            lower = content.lower()
+            if any(k in lower for k in [
+                "add it to your plant", "add them to your plant",
+                "add to your plant list", "want me to add",
+                "shall i add", "add it as a plant",
+                "don't see", "not in your plant",
             ]):
                 return True, content
             return False, ""
@@ -1680,11 +1718,56 @@ def chat_tank(req: ChatRequest):
             except Exception as e:
                 print(f"[Chat/InhabitantExtract] error: {e}")
 
+        # Extract new plants — same three triggers as inhabitants
+        new_plants = None
+
+        reply_confirms_plant_added = any(k in reply_lower for k in [
+            "added to your plant", "i've added", "i have added",
+            "added it to your plant", "added them to your plant",
+            "added to the plant list", "adding to your plant",
+        ])
+
+        user_explicit_plant_add = bool(re.search(
+            r"\badd\b.{0,50}(to (my|the) (plants|plant list))",
+            req.message, re.IGNORECASE,
+        ))
+
+        should_extract_plants = (
+            (_is_affirmation(req.message) and _history_has_plant_add_offer(req.history or [])[0])
+            or reply_confirms_plant_added
+            or user_explicit_plant_add
+        )
+
+        if should_extract_plants:
+            convo = "\n".join(
+                f"{m['role'].upper()}: {m['content']}"
+                for m in (req.history or [])
+                if m.get("role") in ("user", "assistant")
+            )
+            convo += f"\nUSER: {req.message}\nASSISTANT: {reply}"
+            try:
+                plant_response = _chat(client,
+                    model="claude-haiku-4-5",
+                    max_tokens=256,
+                    system=_NEW_PLANT_EXTRACT_PROMPT,
+                    messages=[{"role": "user", "content": convo}],
+                )
+                raw = plant_response.content[0].text.strip()
+                raw = re.sub(r"^```(?:json)?\s*", "", raw)
+                raw = re.sub(r"\s*```$", "", raw).strip()
+                parsed = json.loads(raw)
+                if parsed.get("plants"):
+                    new_plants = parsed
+                    print(f"[PlantExtract] extracted plants: {new_plants}")
+            except Exception as e:
+                print(f"[Chat/PlantExtract] error: {e}")
+
         return {
             "response": reply,
             "tasks": extracted_tasks,
             "new_tank": new_tank,
             "new_inhabitant": new_inhabitant,
+            "new_plants": new_plants,
             "_debug": {
                 "should_extract": should_extract_tasks,
                 "reply_confirms": reply_confirms_task_set,
