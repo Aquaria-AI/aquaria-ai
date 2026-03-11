@@ -285,6 +285,30 @@ class SupabaseService {
     });
   }
 
+  /// Insert a log, ignoring duplicate key conflicts.
+  /// Used by push-back sync to safely re-push local-only logs.
+  static Future<void> upsertLog({
+    required String tankId,
+    required String rawText,
+    String? parsedJson,
+    required DateTime createdAt,
+  }) async {
+    final uid = userId;
+    if (uid == null) return;
+    try {
+      await client.from('logs').insert({
+        'tank_id': tankId,
+        'user_id': uid,
+        'raw_text': rawText,
+        'parsed_json': parsedJson,
+        'created_at': createdAt.toUtc().toIso8601String(),
+      });
+    } catch (e) {
+      // Ignore duplicate key errors — log already exists in cloud
+      debugPrint('[CloudSync] upsertLog conflict (already exists): $e');
+    }
+  }
+
   static Future<List<Map<String, dynamic>>> fetchLogs(String tankId) async {
     final data = await client
         .from('logs')

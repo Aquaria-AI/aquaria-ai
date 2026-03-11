@@ -65,9 +65,11 @@ class TankStore {
   /// then push any local-only logs back to the cloud.
   Future<void> pullFromCloud() async {
     if (!SupabaseService.isLoggedIn) return;
+    debugPrint('[CloudSync] pullFromCloud starting...');
     try {
       final data = await SupabaseService.pullAll();
       final cloudTanks = (data['tanks'] as List?) ?? [];
+      debugPrint('[CloudSync] Pulled ${cloudTanks.length} tank(s) from cloud');
 
       // Collect cloud log timestamps per tank for the push-back phase
       final cloudLogTimestamps = <String, Set<String>>{};
@@ -139,6 +141,7 @@ class TankStore {
           }
           final exists = await _db.logExistsForTankAt(tankId, createdAt);
           if (!exists) {
+            debugPrint('[CloudSync] Inserting cloud log locally: ${_normalizeTs(utcStr)}');
             await _db.insertLog(db.LogsCompanion.insert(
               tankId: tankId,
               rawText: lm['raw_text'] as String,
@@ -147,6 +150,7 @@ class TankStore {
             ));
           }
         }
+        debugPrint('[CloudSync] Tank $tankId: ${cloudLogs.length} cloud logs, ${deletedKeysNorm.length} tombstones');
         cloudLogTimestamps[tankId] = timestamps;
 
         // Remove any duplicate logs for this tank
@@ -190,17 +194,20 @@ class TankStore {
           allLocalTankIds.add(tank.id);
         }
       }
+      debugPrint('[CloudSync] Push-back: checking ${allLocalTankIds.length} tank(s), _tanks=${_tanks.length}');
       int pushed = 0;
       for (final tankId in allLocalTankIds) {
         final localLogs = await _db.logsForTank(tankId);
         final cloudTs = cloudLogTimestamps[tankId] ?? <String>{};
         // Normalize cloud timestamps to seconds for comparison
         final cloudTsNorm = cloudTs.map(_normalizeTs).toSet();
+        debugPrint('[CloudSync] Tank $tankId: ${localLogs.length} local, ${cloudTsNorm.length} cloud');
         for (final log in localLogs) {
           final localTs = _normalizeTs(log.createdAt.toUtc().toIso8601String());
           if (!cloudTsNorm.contains(localTs)) {
+            debugPrint('[CloudSync] Pushing local-only log: $localTs');
             try {
-              await SupabaseService.insertLog(
+              await SupabaseService.upsertLog(
                 tankId: tankId,
                 rawText: log.rawText,
                 parsedJson: log.parsedJson,
@@ -213,9 +220,7 @@ class TankStore {
           }
         }
       }
-      if (pushed > 0) {
-        debugPrint('[CloudSync] Pushed $pushed local-only log(s) to cloud');
-      }
+      debugPrint('[CloudSync] Push-back complete: pushed $pushed log(s)');
     } catch (e) {
       debugPrint('[CloudSync] pullFromCloud failed: $e');
     }
