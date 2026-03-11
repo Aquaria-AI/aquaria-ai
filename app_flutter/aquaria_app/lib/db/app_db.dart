@@ -344,6 +344,30 @@ class AppDb extends _$AppDb {
     return results.isNotEmpty;
   }
 
+  /// Insert or update a log by tank + timestamp. Updates content if exists.
+  Future<void> upsertLogByTimestamp(String tankId, DateTime createdAt, String rawText, String? parsedJson) async {
+    final existing = await (select(logs)
+          ..where((r) =>
+              r.tankId.equals(tankId) &
+              r.createdAt.equals(createdAt)))
+        .get();
+    if (existing.isEmpty) {
+      await insertLog(LogsCompanion.insert(
+        tankId: tankId,
+        rawText: rawText,
+        parsedJson: Value(parsedJson),
+        createdAt: Value(createdAt),
+      ));
+    } else {
+      await (update(logs)..where((r) => r.id.equals(existing.first.id))).write(
+        LogsCompanion(
+          rawText: Value(rawText),
+          parsedJson: Value(parsedJson),
+        ),
+      );
+    }
+  }
+
   /// Remove duplicate logs for a tank — keep only the oldest per (parsedJson, date).
   Future<int> deduplicateLogsForTank(String tankId) async {
     final all = await (select(logs)

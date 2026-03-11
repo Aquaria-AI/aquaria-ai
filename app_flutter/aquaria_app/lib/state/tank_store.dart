@@ -107,25 +107,19 @@ class TankStore {
           await _db.replacePlantsForTank(tankId, rows);
         }
 
-        // Logs — merge cloud into local (add-only, never delete local data)
+        // Logs — upsert cloud into local (insert or update content)
         final cloudLogMap = (data['logs'] as Map?) ?? {};
         final cloudLogs = (cloudLogMap[tankId] as List?) ?? [];
-        int inserted = 0;
         for (final l in cloudLogs) {
           final lm = l as Map<String, dynamic>;
-          final createdAt = DateTime.parse(lm['created_at'] as String);
-          final exists = await _db.logExistsForTankAt(tankId, createdAt);
-          if (!exists) {
-            await _db.insertLog(db.LogsCompanion.insert(
-              tankId: tankId,
-              rawText: lm['raw_text'] as String,
-              parsedJson: Value(lm['parsed_json'] as String?),
-              createdAt: Value(createdAt),
-            ));
-            inserted++;
-          }
+          await _db.upsertLogByTimestamp(
+            tankId,
+            DateTime.parse(lm['created_at'] as String),
+            lm['raw_text'] as String,
+            lm['parsed_json'] as String?,
+          );
         }
-        debugPrint('[CloudSync] Tank $tankId: ${cloudLogs.length} cloud, inserted $inserted new');
+        debugPrint('[CloudSync] Tank $tankId: upserted ${cloudLogs.length} cloud logs');
         await _db.deduplicateLogsForTank(tankId);
       }
 
