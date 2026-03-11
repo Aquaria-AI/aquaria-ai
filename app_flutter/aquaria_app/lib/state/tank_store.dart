@@ -196,6 +196,8 @@ class TankStore {
       }
       debugPrint('[CloudSync] Push-back: checking ${allLocalTankIds.length} tank(s), _tanks=${_tanks.length}');
       int pushed = 0;
+      // Track pushed timestamps so cleanup doesn't remove them
+      final pushedTimestamps = <String, Set<String>>{};
       for (final tankId in allLocalTankIds) {
         final localLogs = await _db.logsForTank(tankId);
         final cloudTs = cloudLogTimestamps[tankId] ?? <String>{};
@@ -214,6 +216,7 @@ class TankStore {
                 createdAt: log.createdAt,
               );
               pushed++;
+              pushedTimestamps.putIfAbsent(tankId, () => <String>{}).add(localTs);
             } catch (e) {
               debugPrint('[CloudSync] push-back log failed: $e');
             }
@@ -221,6 +224,29 @@ class TankStore {
         }
       }
       debugPrint('[CloudSync] Push-back complete: pushed $pushed log(s)');
+
+      // ── Cleanup: remove local logs deleted on other devices ──
+      // After push-back, the cloud is the source of truth.
+      // Any local log NOT in cloud AND NOT just-pushed was deleted elsewhere.
+      int removed = 0;
+      for (final tankId in allLocalTankIds) {
+        final cloudTs = cloudLogTimestamps[tankId] ?? <String>{};
+        final cloudTsNorm = cloudTs.map(_normalizeTs).toSet();
+        final justPushed = pushedTimestamps[tankId] ?? <String>{};
+        final validTs = {...cloudTsNorm, ...justPushed};
+        final localLogs = await _db.logsForTank(tankId);
+        for (final log in localLogs) {
+          final localTs = _normalizeTs(log.createdAt.toUtc().toIso8601String());
+          if (!validTs.contains(localTs)) {
+            debugPrint('[CloudSync] Removing locally-deleted-elsewhere log: $localTs');
+            await _db.deleteLog(log.id);
+            removed++;
+          }
+        }
+      }
+      if (removed > 0) {
+        debugPrint('[CloudSync] Cleanup: removed $removed log(s) deleted on other devices');
+      }
     } catch (e) {
       debugPrint('[CloudSync] pullFromCloud failed: $e');
     }
