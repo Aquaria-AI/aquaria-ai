@@ -51,12 +51,17 @@ class TankStore {
 
   List<TankModel> get tanks => List.unmodifiable(_tanks);
 
-  /// Pull from cloud and merge into local SQLite, then reload.
+  /// Bidirectional cloud sync: pull cloud data into local SQLite,
+  /// then push any local-only logs back to the cloud.
   Future<void> pullFromCloud() async {
     if (!SupabaseService.isLoggedIn) return;
     try {
       final data = await SupabaseService.pullAll();
       final cloudTanks = (data['tanks'] as List?) ?? [];
+
+      // Collect cloud log timestamps per tank for the push-back phase
+      final cloudLogTimestamps = <String, Set<String>>{};
+
       for (final ct in cloudTanks) {
         final m = ct as Map<String, dynamic>;
         await _db.upsertTank(db.TanksCompanion.insert(
@@ -103,12 +108,14 @@ class TankStore {
           await _db.replacePlantsForTank(tankId, rows);
         }
 
-        // Logs — use exact timestamp to avoid re-inserting deleted logs
+        // Logs — pull cloud → local
         final cloudLogMap = (data['logs'] as Map?) ?? {};
         final cloudLogs = (cloudLogMap[tankId] as List?) ?? [];
+        final timestamps = <String>{};
         for (final l in cloudLogs) {
           final lm = l as Map<String, dynamic>;
           final createdAt = DateTime.parse(lm['created_at'] as String);
+          timestamps.add(createdAt.toUtc().toIso8601String());
           final exists = await _db.logExistsForTankAt(tankId, createdAt);
           if (!exists) {
             await _db.insertLog(db.LogsCompanion.insert(
@@ -119,6 +126,8 @@ class TankStore {
             ));
           }
         }
+        cloudLogTimestamps[tankId] = timestamps;
+
         // Remove any duplicate logs for this tank
         await _db.deduplicateLogsForTank(tankId);
       }
@@ -148,6 +157,41 @@ class TankStore {
           isPaused: Value(tm['is_paused'] as bool? ?? false),
           createdAt: Value(DateTime.parse(tm['created_at'] as String)),
         ));
+      }
+
+      // ── Push local-only logs back to cloud ──
+      // Compare local logs against cloud timestamps and push any missing ones.
+      // This catches logs where the original fire-and-forget sync failed.
+      final allLocalTankIds = cloudLogTimestamps.keys.toList();
+      // Also include local tanks that may not be in the cloud yet
+      for (final tank in _tanks) {
+        if (!allLocalTankIds.contains(tank.id)) {
+          allLocalTankIds.add(tank.id);
+        }
+      }
+      int pushed = 0;
+      for (final tankId in allLocalTankIds) {
+        final localLogs = await _db.logsForTank(tankId);
+        final cloudTs = cloudLogTimestamps[tankId] ?? <String>{};
+        for (final log in localLogs) {
+          final localTs = log.createdAt.toUtc().toIso8601String();
+          if (!cloudTs.contains(localTs)) {
+            try {
+              await SupabaseService.insertLog(
+                tankId: tankId,
+                rawText: log.rawText,
+                parsedJson: log.parsedJson,
+                createdAt: log.createdAt,
+              );
+              pushed++;
+            } catch (e) {
+              debugPrint('[CloudSync] push-back log failed: $e');
+            }
+          }
+        }
+      }
+      if (pushed > 0) {
+        debugPrint('[CloudSync] Pushed $pushed local-only log(s) to cloud');
       }
     } catch (e) {
       debugPrint('[CloudSync] pullFromCloud failed: $e');

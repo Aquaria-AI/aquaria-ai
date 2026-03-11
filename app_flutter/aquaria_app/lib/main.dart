@@ -4054,6 +4054,9 @@ class _TankListScreenState extends State<TankListScreen> {
     });
 
     try {
+      if (SupabaseService.isLoggedIn) {
+        await TankStore.instance.pullFromCloud();
+      }
       await TankStore.instance.load();
       await _loadAllTasks();
       await _loadAllInhabitantTypes();
@@ -5111,11 +5114,6 @@ class _NotificationsCardState extends State<_NotificationsCard> {
                                     color: isFuture ? const Color(0xFF6D8B74) : const Color(0xFF8D6E63),
                                   ),
                                 ),
-                              if (isFuture)
-                                const TextSpan(
-                                  text: '  Scheduled',
-                                  style: TextStyle(fontSize: 10, color: Color(0xFF9E9E9E), fontStyle: FontStyle.italic),
-                                ),
                             ],
                           ),
                         ),
@@ -5305,7 +5303,7 @@ class _AddTaskSheetState extends State<_AddTaskSheet> {
           color: Colors.white,
           borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
         ),
-        padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(context).viewInsets.bottom + 32),
+        padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(context).viewInsets.bottom + MediaQuery.of(context).padding.bottom + 32),
         child: SingleChildScrollView(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -5415,7 +5413,7 @@ class _AddNoteSheetState extends State<_AddNoteSheet> {
           color: Colors.white,
           borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
         ),
-        padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(context).viewInsets.bottom + 32),
+        padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(context).viewInsets.bottom + MediaQuery.of(context).padding.bottom + 32),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
@@ -7105,7 +7103,11 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
         ).then((_) => _load()),
       ),
       body: RefreshIndicator(
-        onRefresh: _load,
+        onRefresh: () async {
+          if (SupabaseService.isLoggedIn) await TankStore.instance.pullFromCloud();
+          await TankStore.instance.load();
+          await _load();
+        },
         child: SingleChildScrollView(
         child: Column(
         children: [
@@ -7312,11 +7314,6 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
                                         style: TextStyle(
                                           color: isFuture ? const Color(0xFF6D8B74) : const Color(0xFF8D6E63),
                                         ),
-                                      ),
-                                    if (isFuture)
-                                      const TextSpan(
-                                        text: '  Scheduled',
-                                        style: TextStyle(fontSize: 10, color: Color(0xFF9E9E9E), fontStyle: FontStyle.italic),
                                       ),
                                   ],
                                 ),
@@ -8796,7 +8793,7 @@ class _AddMeasurementSheetState extends State<_AddMeasurementSheet> {
           color: Colors.white,
           borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
         ),
-        padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(context).viewInsets.bottom + 32),
+        padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(context).viewInsets.bottom + MediaQuery.of(context).padding.bottom + 32),
         child: SingleChildScrollView(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -8969,7 +8966,7 @@ class _LogEditSheetState extends State<_LogEditSheet> {
           color: Colors.white,
           borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
         ),
-        padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(context).viewInsets.bottom + 32),
+        padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(context).viewInsets.bottom + MediaQuery.of(context).padding.bottom + 32),
         child: SingleChildScrollView(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -11626,7 +11623,10 @@ class _DailyLogsScreenState extends State<DailyLogsScreen> {
             child: _logs.isEmpty
           ? const Center(child: Text('No log entries yet.', style: TextStyle(color: Colors.grey)))
           : RefreshIndicator(
-              onRefresh: _reload,
+              onRefresh: () async {
+                if (SupabaseService.isLoggedIn) await TankStore.instance.pullFromCloud();
+                await _reload();
+              },
               child: ListView.builder(
               padding: EdgeInsets.fromLTRB(12, 12, 12, MediaQuery.of(context).padding.bottom + 80),
               itemCount: items.length,

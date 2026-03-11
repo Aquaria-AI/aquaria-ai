@@ -109,6 +109,36 @@ class _AuthScreenState extends State<AuthScreen> {
     }
   }
 
+  Future<void> _forgotPassword() async {
+    final email = _emailCtrl.text.trim();
+    if (email.isEmpty) {
+      setState(() => _error = 'Enter your email address first.');
+      return;
+    }
+    setState(() { _loading = true; _error = null; });
+    try {
+      await Supabase.instance.client.auth.resetPasswordForEmail(email);
+      if (mounted) {
+        setState(() {
+          _error = null;
+          _loading = false;
+        });
+        ScaffoldMessenger.of(context)
+          ..clearSnackBars()
+          ..showSnackBar(const SnackBar(
+            content: Text('Password reset email sent. Check your inbox.'),
+            behavior: SnackBarBehavior.floating,
+          ));
+      }
+    } catch (e) {
+      final msg = _friendlyAuthError(e);
+      setState(() {
+        _error = msg.isNotEmpty ? msg : null;
+        _loading = false;
+      });
+    }
+  }
+
   Future<void> _signInGoogle() async {
     setState(() { _loading = true; _error = null; });
     try {
@@ -197,6 +227,22 @@ class _AuthScreenState extends State<AuthScreen> {
                   ),
                   onSubmitted: (_) => _submitEmail(),
                 ),
+
+                // Forgot password (sign-in only)
+                if (!_isSignUp)
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton(
+                      onPressed: _loading ? null : _forgotPassword,
+                      style: TextButton.styleFrom(
+                        padding: EdgeInsets.zero,
+                        minimumSize: const Size(0, 32),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      child: const Text('Forgot password?',
+                          style: TextStyle(color: _cMid, fontSize: 12)),
+                    ),
+                  ),
                 const SizedBox(height: 16),
 
                 // Error
