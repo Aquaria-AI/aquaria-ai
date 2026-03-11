@@ -7,6 +7,16 @@ import '../models/tank.dart';
 import '../services/notification_service.dart';
 import '../services/supabase_service.dart';
 
+/// Normalize an ISO-8601 timestamp to second precision for comparison.
+/// Drift stores milliseconds, Supabase may store microseconds or seconds —
+/// truncating to seconds avoids false mismatches.
+String _normalizeTs(String iso) {
+  // Parse and re-format to consistent second precision
+  final dt = DateTime.parse(iso).toUtc();
+  return '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}T'
+      '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}:${dt.second.toString().padLeft(2, '0')}Z';
+}
+
 /// Fire-and-forget cloud write. Never throws — errors are logged only.
 Future<void> _cloudSync(Future<void> Function() action) async {
   if (!SupabaseService.isLoggedIn) return;
@@ -108,14 +118,25 @@ class TankStore {
           await _db.replacePlantsForTank(tankId, rows);
         }
 
-        // Logs — pull cloud → local
+        // Logs — pull cloud → local (skip tombstoned logs)
         final cloudLogMap = (data['logs'] as Map?) ?? {};
         final cloudLogs = (cloudLogMap[tankId] as List?) ?? [];
         final timestamps = <String>{};
+        final deletedKeys = await _db.deletedLogKeysForTank(tankId);
+        final deletedKeysNorm = deletedKeys.map(_normalizeTs).toSet();
         for (final l in cloudLogs) {
           final lm = l as Map<String, dynamic>;
           final createdAt = DateTime.parse(lm['created_at'] as String);
-          timestamps.add(createdAt.toUtc().toIso8601String());
+          final utcStr = createdAt.toUtc().toIso8601String();
+          timestamps.add(utcStr);
+          // Skip if this log was locally deleted (tombstone exists)
+          if (deletedKeysNorm.contains(_normalizeTs(utcStr))) {
+            // Also delete from cloud so other devices don't see it
+            try {
+              await SupabaseService.deleteLogByKey(tankId, createdAt);
+            } catch (_) {}
+            continue;
+          }
           final exists = await _db.logExistsForTankAt(tankId, createdAt);
           if (!exists) {
             await _db.insertLog(db.LogsCompanion.insert(
@@ -173,9 +194,11 @@ class TankStore {
       for (final tankId in allLocalTankIds) {
         final localLogs = await _db.logsForTank(tankId);
         final cloudTs = cloudLogTimestamps[tankId] ?? <String>{};
+        // Normalize cloud timestamps to seconds for comparison
+        final cloudTsNorm = cloudTs.map(_normalizeTs).toSet();
         for (final log in localLogs) {
-          final localTs = log.createdAt.toUtc().toIso8601String();
-          if (!cloudTs.contains(localTs)) {
+          final localTs = _normalizeTs(log.createdAt.toUtc().toIso8601String());
+          if (!cloudTsNorm.contains(localTs)) {
             try {
               await SupabaseService.insertLog(
                 tankId: tankId,
@@ -854,9 +877,20 @@ class TankStore {
 
   Future<void> deleteLog(int id) async {
     final log = await _db.getLogById(id);
+    if (log != null) {
+      // Record tombstone so pullFromCloud won't re-insert this log
+      await _db.insertDeletedLogKey(log.tankId, log.createdAt);
+    }
     await _db.deleteLog(id);
     if (log != null) {
-      await _cloudSync(() => SupabaseService.deleteLogByKey(log.tankId, log.createdAt));
+      // Await cloud delete (not fire-and-forget) so it actually reaches Supabase
+      try {
+        if (SupabaseService.isLoggedIn) {
+          await SupabaseService.deleteLogByKey(log.tankId, log.createdAt);
+        }
+      } catch (e) {
+        debugPrint('[CloudSync] deleteLog cloud failed (tombstone saved): $e');
+      }
     }
   }
 

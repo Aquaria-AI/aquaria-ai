@@ -121,7 +121,7 @@ class AppDb extends _$AppDb {
   AppDb() : super(_openConnection());
 
   @override
-  int get schemaVersion => 13;
+  int get schemaVersion => 14;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -129,6 +129,11 @@ class AppDb extends _$AppDb {
           await m.createAll();
           await customStatement(
             'CREATE TABLE IF NOT EXISTS dismissed_tasks (task_key TEXT PRIMARY KEY)',
+          );
+          await customStatement(
+            'CREATE TABLE IF NOT EXISTS deleted_log_keys '
+            '(tank_id TEXT NOT NULL, created_at_utc TEXT NOT NULL, '
+            'PRIMARY KEY(tank_id, created_at_utc))',
           );
         },
         onUpgrade: (migrator, from, to) async {
@@ -172,6 +177,13 @@ class AppDb extends _$AppDb {
           if (from <= 12) {
             await migrator.addColumn(tasks, tasks.isComplete);
             await migrator.addColumn(tasks, tasks.completedAt);
+          }
+          if (from <= 13) {
+            await customStatement(
+              'CREATE TABLE IF NOT EXISTS deleted_log_keys '
+              '(tank_id TEXT NOT NULL, created_at_utc TEXT NOT NULL, '
+              'PRIMARY KEY(tank_id, created_at_utc))',
+            );
           }
         },
       );
@@ -510,6 +522,35 @@ class AppDb extends _$AppDb {
     return removed;
   }
 
+  // ---------- Deleted log tombstones ----------
+  /// Record a tombstone so pullFromCloud won't re-insert this log.
+  Future<void> insertDeletedLogKey(String tankId, DateTime createdAt) async {
+    final utcStr = createdAt.toUtc().toIso8601String();
+    await customStatement(
+      'INSERT OR IGNORE INTO deleted_log_keys (tank_id, created_at_utc) VALUES (?, ?)',
+      [tankId, utcStr],
+    );
+  }
+
+  /// Check if a log was locally deleted (tombstone exists).
+  Future<bool> isDeletedLog(String tankId, DateTime createdAt) async {
+    final utcStr = createdAt.toUtc().toIso8601String();
+    final rows = await customSelect(
+      'SELECT 1 FROM deleted_log_keys WHERE tank_id = ? AND created_at_utc = ?',
+      variables: [Variable.withString(tankId), Variable.withString(utcStr)],
+    ).get();
+    return rows.isNotEmpty;
+  }
+
+  /// Get all deleted log keys for a tank (for push-back filtering).
+  Future<Set<String>> deletedLogKeysForTank(String tankId) async {
+    final rows = await customSelect(
+      'SELECT created_at_utc FROM deleted_log_keys WHERE tank_id = ?',
+      variables: [Variable.withString(tankId)],
+    ).get();
+    return rows.map((r) => r.read<String>('created_at_utc')).toSet();
+  }
+
   Future<void> clearAll() async {
     await delete(chatSessions).go();
     await delete(tasks).go();
@@ -517,6 +558,7 @@ class AppDb extends _$AppDb {
     await delete(inhabitants).go();
     await delete(plants).go();
     await customStatement('DELETE FROM dismissed_tasks');
+    await customStatement('DELETE FROM deleted_log_keys');
     await delete(tanks).go();
   }
 }
