@@ -839,7 +839,27 @@ class TankStore {
           if (log.cloudId != null) {
             await SupabaseService.deleteLogById(log.cloudId!);
           } else {
-            await SupabaseService.deleteLogByKey(log.tankId, log.createdAt);
+            // No cloudId — fetch cloud logs and match by timestamp + content
+            final cloudLogs = await SupabaseService.fetchLogs(log.tankId);
+            final localMs = log.createdAt.toUtc().millisecondsSinceEpoch;
+            Map<String, dynamic>? match;
+            for (final cl in cloudLogs) {
+              final cloudMs = DateTime.parse(cl['created_at'] as String)
+                  .toUtc()
+                  .millisecondsSinceEpoch;
+              if ((cloudMs - localMs).abs() < 1000 &&
+                  cl['raw_text'] == log.rawText) {
+                match = cl;
+                break;
+              }
+            }
+            if (match != null && match['id'] != null) {
+              await SupabaseService.deleteLogById(match['id'] as int);
+              debugPrint('[CloudSync] deleteLog: matched cloud id=${match['id']}');
+            } else {
+              await SupabaseService.deleteLogByKey(log.tankId, log.createdAt);
+              debugPrint('[CloudSync] deleteLog: no cloud match, tried timestamp fallback');
+            }
           }
         }
       } catch (e) {
