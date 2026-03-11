@@ -121,7 +121,7 @@ class AppDb extends _$AppDb {
   AppDb() : super(_openConnection());
 
   @override
-  int get schemaVersion => 14;
+  int get schemaVersion => 15;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -132,6 +132,11 @@ class AppDb extends _$AppDb {
           );
           await customStatement(
             'CREATE TABLE IF NOT EXISTS deleted_log_keys '
+            '(tank_id TEXT NOT NULL, created_at_utc TEXT NOT NULL, '
+            'PRIMARY KEY(tank_id, created_at_utc))',
+          );
+          await customStatement(
+            'CREATE TABLE IF NOT EXISTS synced_log_keys '
             '(tank_id TEXT NOT NULL, created_at_utc TEXT NOT NULL, '
             'PRIMARY KEY(tank_id, created_at_utc))',
           );
@@ -181,6 +186,13 @@ class AppDb extends _$AppDb {
           if (from <= 13) {
             await customStatement(
               'CREATE TABLE IF NOT EXISTS deleted_log_keys '
+              '(tank_id TEXT NOT NULL, created_at_utc TEXT NOT NULL, '
+              'PRIMARY KEY(tank_id, created_at_utc))',
+            );
+          }
+          if (from <= 14) {
+            await customStatement(
+              'CREATE TABLE IF NOT EXISTS synced_log_keys '
               '(tank_id TEXT NOT NULL, created_at_utc TEXT NOT NULL, '
               'PRIMARY KEY(tank_id, created_at_utc))',
             );
@@ -551,6 +563,50 @@ class AppDb extends _$AppDb {
     return rows.map((r) => r.read<String>('created_at_utc')).toSet();
   }
 
+  // ---------- Synced log keys (tracks logs known to be in cloud) ----------
+  Future<void> markLogSynced(String tankId, DateTime createdAt) async {
+    final utcStr = createdAt.toUtc().toIso8601String();
+    await customStatement(
+      'INSERT OR IGNORE INTO synced_log_keys (tank_id, created_at_utc) VALUES (?, ?)',
+      [tankId, utcStr],
+    );
+  }
+
+  Future<bool> isLogSynced(String tankId, DateTime createdAt) async {
+    final utcStr = createdAt.toUtc().toIso8601String();
+    final rows = await customSelect(
+      'SELECT 1 FROM synced_log_keys WHERE tank_id = ? AND created_at_utc = ?',
+      variables: [Variable.withString(tankId), Variable.withString(utcStr)],
+    ).get();
+    return rows.isNotEmpty;
+  }
+
+  Future<Set<String>> syncedLogKeysForTank(String tankId) async {
+    final rows = await customSelect(
+      'SELECT created_at_utc FROM synced_log_keys WHERE tank_id = ?',
+      variables: [Variable.withString(tankId)],
+    ).get();
+    return rows.map((r) => r.read<String>('created_at_utc')).toSet();
+  }
+
+  Future<void> removeSyncedLogKey(String tankId, DateTime createdAt) async {
+    final utcStr = createdAt.toUtc().toIso8601String();
+    await customStatement(
+      'DELETE FROM synced_log_keys WHERE tank_id = ? AND created_at_utc = ?',
+      [tankId, utcStr],
+    );
+  }
+
+  /// Bulk-mark all cloud log timestamps as synced for a tank.
+  Future<void> markLogsSyncedBulk(String tankId, Set<String> utcStrings) async {
+    for (final utcStr in utcStrings) {
+      await customStatement(
+        'INSERT OR IGNORE INTO synced_log_keys (tank_id, created_at_utc) VALUES (?, ?)',
+        [tankId, utcStr],
+      );
+    }
+  }
+
   Future<void> clearAll() async {
     await delete(chatSessions).go();
     await delete(tasks).go();
@@ -559,6 +615,7 @@ class AppDb extends _$AppDb {
     await delete(plants).go();
     await customStatement('DELETE FROM dismissed_tasks');
     await customStatement('DELETE FROM deleted_log_keys');
+    await customStatement('DELETE FROM synced_log_keys');
     await delete(tanks).go();
   }
 }
