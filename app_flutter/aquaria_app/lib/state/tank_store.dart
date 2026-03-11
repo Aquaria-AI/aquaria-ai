@@ -107,28 +107,21 @@ class TankStore {
           await _db.replacePlantsForTank(tankId, rows);
         }
 
-        // Logs — pull all cloud logs into local (no tombstone blocking)
+        // Logs — replace local logs with cloud data (cloud wins)
         final cloudLogMap = (data['logs'] as Map?) ?? {};
         final cloudLogs = (cloudLogMap[tankId] as List?) ?? [];
-        int inserted = 0;
-        for (final l in cloudLogs) {
-          final lm = l as Map<String, dynamic>;
-          final createdAt = DateTime.parse(lm['created_at'] as String);
-          final exists = await _db.logExistsForTankAt(tankId, createdAt);
-          if (!exists) {
-            await _db.insertLog(db.LogsCompanion.insert(
+        if (cloudLogs.isNotEmpty) {
+          await _db.replaceLogsForTank(tankId, cloudLogs.map((l) {
+            final lm = l as Map<String, dynamic>;
+            return db.LogsCompanion.insert(
               tankId: tankId,
               rawText: lm['raw_text'] as String,
               parsedJson: Value(lm['parsed_json'] as String?),
-              createdAt: Value(createdAt),
-            ));
-            inserted++;
-          }
+              createdAt: Value(DateTime.parse(lm['created_at'] as String)),
+            );
+          }).toList());
         }
-        debugPrint('[CloudSync] Tank $tankId: ${cloudLogs.length} cloud, inserted $inserted new');
-
-        // Remove any duplicate logs for this tank
-        await _db.deduplicateLogsForTank(tankId);
+        debugPrint('[CloudSync] Tank $tankId: replaced with ${cloudLogs.length} cloud logs');
       }
 
       // Dismissed tasks (legacy)

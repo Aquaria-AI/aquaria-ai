@@ -296,6 +296,16 @@ class AppDb extends _$AppDb {
 
   Future<void> insertLog(LogsCompanion entry) => into(logs).insert(entry);
 
+  /// Replace all logs for a tank with the given rows (cloud wins).
+  Future<void> replaceLogsForTank(String tankId, List<LogsCompanion> rows) async {
+    await transaction(() async {
+      await (delete(logs)..where((r) => r.tankId.equals(tankId))).go();
+      if (rows.isNotEmpty) {
+        await batch((b) => b.insertAll(logs, rows));
+      }
+    });
+  }
+
   /// Check if a log with the same parsedJson already exists for this tank
   /// within the last 2 minutes (prevents duplicate parse results).
   Future<bool> hasDuplicateLog(String tankId, String? parsedJson) async {
