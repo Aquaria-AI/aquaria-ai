@@ -7697,6 +7697,7 @@ class _ChatSheetState extends State<_ChatSheet> {
   List<db.Plant> _plants = [];
   List<String> _recentLogs = [];
   List<db.Log> _allLogs = [];
+  List<db.JournalEntry> _allJournal = [];
   String? _tapWaterJson;
   bool _hasCsvImports = false;
   List<Map<String, dynamic>> _pendingTasks = [];
@@ -7728,19 +7729,46 @@ class _ChatSheetState extends State<_ChatSheet> {
     final inhabitants = await TankStore.instance.inhabitantsFor(tank.id);
     final plants = await TankStore.instance.plantsFor(tank.id);
     final logs = await TankStore.instance.logsFor(tank.id);
+    final journal = await TankStore.instance.journalFor(tank.id);
     final tapWaterJson = await TankStore.instance.tapWaterJsonFor(tank.id);
     final sessions = await TankStore.instance.recentSessions(tank.id);
     if (mounted) {
       setState(() {
         _inhabitants = inhabitants;
         _plants = plants;
-        final twoWeeksAgo = DateTime.now().subtract(const Duration(days: 14));
-        _recentLogs = logs
-            .where((l) => l.createdAt.isAfter(twoWeeksAgo))
-            .take(10)
-            .map((l) => l.rawText)
-            .toList();
         _allLogs = logs;
+        _allJournal = journal;
+
+        // Build recent_logs from journal entries (last 14 days)
+        final twoWeeksAgo = DateTime.now().subtract(const Duration(days: 14));
+        final twoWeeksKey = '${twoWeeksAgo.year}-${twoWeeksAgo.month.toString().padLeft(2,'0')}-${twoWeeksAgo.day.toString().padLeft(2,'0')}';
+        final recentJournal = journal.where((j) => j.date.compareTo(twoWeeksKey) >= 0).toList();
+        // Group by date and build summary strings
+        final byDate = <String, List<db.JournalEntry>>{};
+        for (final j in recentJournal) {
+          byDate.putIfAbsent(j.date, () => []).add(j);
+        }
+        _recentLogs = [];
+        for (final date in (byDate.keys.toList()..sort((a, b) => b.compareTo(a))).take(10)) {
+          final entries = byDate[date]!;
+          final parts = <String>[];
+          for (final e in entries) {
+            try {
+              if (e.category == 'measurements') {
+                final m = (jsonDecode(e.data) as Map).cast<String, dynamic>();
+                parts.add(m.entries.map((kv) => '${kv.key}: ${kv.value}').join(', '));
+              } else if (e.category == 'actions') {
+                final a = (jsonDecode(e.data) as List).cast<String>();
+                if (a.isNotEmpty) parts.add('Actions: ${a.join(", ")}');
+              } else if (e.category == 'notes') {
+                final n = (jsonDecode(e.data) as List).cast<String>();
+                if (n.isNotEmpty) parts.add('Notes: ${n.join(", ")}');
+              }
+            } catch (_) {}
+          }
+          if (parts.isNotEmpty) _recentLogs.add('$date: ${parts.join(" | ")}');
+        }
+
         _tapWaterJson = tapWaterJson;
         _hasCsvImports = logs.any((l) => l.rawText == 'CSV import');
         _sessionSummaries = sessions.map((s) => s.summary).toList();
@@ -7848,79 +7876,73 @@ class _ChatSheetState extends State<_ChatSheet> {
   Map<String, dynamic> _buildHealthProfile() {
     final now = DateTime.now();
     final thirtyDaysAgo = now.subtract(const Duration(days: 30));
+    final thirtyDaysKey = '${thirtyDaysAgo.year}-${thirtyDaysAgo.month.toString().padLeft(2,'0')}-${thirtyDaysAgo.day.toString().padLeft(2,'0')}';
 
-    // Collect logs that have measurements
-    final logsWithMeasurements = <db.Log>[];
+    // Journal entries sorted newest-first by date
+    final measEntries = _allJournal.where((j) => j.category == 'measurements').toList();
+    final actionEntries = _allJournal.where((j) => j.category == 'actions').toList();
+
     final allParamValues30d = <String, List<double>>{};
     final lastTwoReadings = <String, List<double>>{};
     int waterChanges30d = 0;
     final testedParams = <String>{};
+    final testDates = <String>[]; // YYYY-MM-DD strings of days with measurements
 
-    for (final log in _allLogs) {
-      final parsed = _parseParsedJson(log);
-      if (parsed == null) continue;
+    for (final entry in measEntries) {
+      try {
+        final m = (jsonDecode(entry.data) as Map).cast<String, dynamic>();
+        if (m.isEmpty) continue;
+        testDates.add(entry.date);
+        testedParams.addAll(m.keys);
 
-      final measurements = parsed['measurements'];
-      final hasMeasurements = measurements is Map && measurements.isNotEmpty;
-      if (hasMeasurements) {
-        logsWithMeasurements.add(log);
-        testedParams.addAll(
-          (measurements as Map).keys.map((k) => k.toString()),
-        );
-      }
-
-      // Count water changes in last 30 days
-      if (!log.createdAt.isBefore(thirtyDaysAgo)) {
-        final actions = parsed['actions'];
-        if (actions is List) {
-          for (final a in actions) {
-            if (a.toString().toLowerCase().contains('water change')) {
-              waterChanges30d++;
-            }
-          }
-        }
-
-        // Collect parameter values for 30-day averages
-        if (hasMeasurements) {
-          (measurements as Map).forEach((key, value) {
+        // 30-day window
+        if (entry.date.compareTo(thirtyDaysKey) >= 0) {
+          m.forEach((key, value) {
             final v = (value is num) ? value.toDouble() : double.tryParse('$value');
             if (v != null) {
-              allParamValues30d.putIfAbsent(key.toString(), () => []).add(v);
+              allParamValues30d.putIfAbsent(key, () => []).add(v);
             }
           });
         }
-      }
 
-      // Collect last 2 readings per parameter (logs are sorted newest-first)
-      if (hasMeasurements) {
-        (measurements as Map).forEach((key, value) {
-          final k = key.toString();
+        // Last 2 readings per param (entries are sorted newest-first)
+        m.forEach((key, value) {
           final v = (value is num) ? value.toDouble() : double.tryParse('$value');
           if (v != null) {
-            final list = lastTwoReadings.putIfAbsent(k, () => []);
+            final list = lastTwoReadings.putIfAbsent(key, () => []);
             if (list.length < 2) list.add(v);
           }
         });
-      }
+      } catch (_) {}
+    }
+
+    // Count water changes in last 30 days from action entries
+    for (final entry in actionEntries) {
+      if (entry.date.compareTo(thirtyDaysKey) < 0) continue;
+      try {
+        final actions = (jsonDecode(entry.data) as List).cast<String>();
+        for (final a in actions) {
+          if (a.toLowerCase().contains('water change')) waterChanges30d++;
+        }
+      } catch (_) {}
     }
 
     // Days since last test
-    final daysSinceLastTest = logsWithMeasurements.isNotEmpty
-        ? now.difference(logsWithMeasurements.first.createdAt).inDays
+    final daysSinceLastTest = testDates.isNotEmpty
+        ? now.difference(DateTime.parse(testDates.first)).inDays
         : null;
 
     // Average days between tests
     double? avgDaysBetweenTests;
-    if (logsWithMeasurements.length >= 2) {
+    if (testDates.length >= 2) {
       double totalGap = 0;
-      for (int i = 0; i < logsWithMeasurements.length - 1; i++) {
-        totalGap += logsWithMeasurements[i]
-            .createdAt
-            .difference(logsWithMeasurements[i + 1].createdAt)
+      for (int i = 0; i < testDates.length - 1; i++) {
+        totalGap += DateTime.parse(testDates[i])
+            .difference(DateTime.parse(testDates[i + 1]))
             .inDays
             .abs();
       }
-      avgDaysBetweenTests = totalGap / (logsWithMeasurements.length - 1);
+      avgDaysBetweenTests = totalGap / (testDates.length - 1);
     }
 
     // Parameter averages (30 days)
@@ -7934,7 +7956,7 @@ class _ChatSheetState extends State<_ChatSheet> {
     final parameterTrends = <String, String>{};
     lastTwoReadings.forEach((key, values) {
       if (values.length == 2) {
-        final diff = values[0] - values[1]; // newest - second newest
+        final diff = values[0] - values[1];
         if (diff.abs() < 0.01) {
           parameterTrends[key] = 'stable';
         } else if (diff > 0) {
@@ -7960,6 +7982,7 @@ class _ChatSheetState extends State<_ChatSheet> {
   Future<Map<String, dynamic>> _buildBehaviorProfile() async {
     final now = DateTime.now();
     final ninetyDaysAgo = now.subtract(const Duration(days: 90));
+    final ninetyDaysKey = '${ninetyDaysAgo.year}-${ninetyDaysAgo.month.toString().padLeft(2,'0')}-${ninetyDaysAgo.day.toString().padLeft(2,'0')}';
 
     // Normal ranges for common parameters (freshwater defaults)
     const normalRanges = <String, List<double>>{
@@ -7971,30 +7994,31 @@ class _ChatSheetState extends State<_ChatSheet> {
       'KH': [3, 8],
     };
 
-    // Logs within 90 days with measurements
+    // Journal measurement entries within 90 days
     final testDates = <DateTime>[];
     final paramFrequency = <String, int>{};
     final paramExceedCount = <String, int>{};
 
-    for (final log in _allLogs) {
-      if (log.createdAt.isBefore(ninetyDaysAgo)) continue;
-      final parsed = _parseParsedJson(log);
-      if (parsed == null) continue;
-      final measurements = parsed['measurements'];
-      if (measurements is! Map || measurements.isEmpty) continue;
+    final measEntries = _allJournal.where((j) =>
+        j.category == 'measurements' && j.date.compareTo(ninetyDaysKey) >= 0).toList();
 
-      testDates.add(log.createdAt);
-      measurements.forEach((key, value) {
-        final k = key.toString();
-        paramFrequency[k] = (paramFrequency[k] ?? 0) + 1;
-        final v = (value is num) ? value.toDouble() : double.tryParse('$value');
-        if (v != null && normalRanges.containsKey(k)) {
-          final range = normalRanges[k]!;
-          if (v < range[0] || v > range[1]) {
-            paramExceedCount[k] = (paramExceedCount[k] ?? 0) + 1;
+    for (final entry in measEntries) {
+      try {
+        final measurements = (jsonDecode(entry.data) as Map).cast<String, dynamic>();
+        if (measurements.isEmpty) continue;
+
+        testDates.add(DateTime.parse(entry.date));
+        measurements.forEach((key, value) {
+          paramFrequency[key] = (paramFrequency[key] ?? 0) + 1;
+          final v = (value is num) ? value.toDouble() : double.tryParse('$value');
+          if (v != null && normalRanges.containsKey(key)) {
+            final range = normalRanges[key]!;
+            if (v < range[0] || v > range[1]) {
+              paramExceedCount[key] = (paramExceedCount[key] ?? 0) + 1;
+            }
           }
-        }
-      });
+        });
+      } catch (_) {}
     }
 
     // Tests per month (over 90 days = 3 months)
