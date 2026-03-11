@@ -59,6 +59,7 @@ class Plants extends Table {
 
 class Logs extends Table {
   IntColumn get id => integer().autoIncrement()();
+  IntColumn get cloudId => integer().nullable()();
   TextColumn get tankId => text()();
   TextColumn get rawText => text()();
   TextColumn get parsedJson => text().nullable()();
@@ -121,7 +122,7 @@ class AppDb extends _$AppDb {
   AppDb() : super(_openConnection());
 
   @override
-  int get schemaVersion => 15;
+  int get schemaVersion => 16;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -196,6 +197,9 @@ class AppDb extends _$AppDb {
               '(tank_id TEXT NOT NULL, created_at_utc TEXT NOT NULL, '
               'PRIMARY KEY(tank_id, created_at_utc))',
             );
+          }
+          if (from <= 15) {
+            await migrator.addColumn(logs, logs.cloudId);
           }
         },
       );
@@ -294,7 +298,7 @@ class AppDb extends _$AppDb {
         .get();
   }
 
-  Future<void> insertLog(LogsCompanion entry) => into(logs).insert(entry);
+  Future<int> insertLog(LogsCompanion entry) => into(logs).insert(entry);
 
   /// Replace all logs for a tank with the given rows (cloud wins).
   Future<void> replaceLogsForTank(String tankId, List<LogsCompanion> rows) async {
@@ -344,8 +348,15 @@ class AppDb extends _$AppDb {
     return results.isNotEmpty;
   }
 
+  /// Set the cloud (Supabase) ID on a local log row.
+  Future<void> setLogCloudId(int localId, int cloudId) async {
+    await (update(logs)..where((r) => r.id.equals(localId))).write(
+      LogsCompanion(cloudId: Value(cloudId)),
+    );
+  }
+
   /// Insert or update a log by tank + timestamp. Updates content if exists.
-  Future<void> upsertLogByTimestamp(String tankId, DateTime createdAt, String rawText, String? parsedJson) async {
+  Future<void> upsertLogByTimestamp(String tankId, DateTime createdAt, String rawText, String? parsedJson, {int? cloudId}) async {
     final existing = await (select(logs)
           ..where((r) =>
               r.tankId.equals(tankId) &
@@ -357,12 +368,14 @@ class AppDb extends _$AppDb {
         rawText: rawText,
         parsedJson: Value(parsedJson),
         createdAt: Value(createdAt),
+        cloudId: Value(cloudId),
       ));
     } else {
       await (update(logs)..where((r) => r.id.equals(existing.first.id))).write(
         LogsCompanion(
           rawText: Value(rawText),
           parsedJson: Value(parsedJson),
+          cloudId: Value(cloudId),
         ),
       );
     }

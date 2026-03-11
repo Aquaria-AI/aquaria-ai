@@ -1221,6 +1221,17 @@ class $LogsTable extends Logs with TableInfo<$LogsTable, Log> {
       'PRIMARY KEY AUTOINCREMENT',
     ),
   );
+  static const VerificationMeta _cloudIdMeta = const VerificationMeta(
+    'cloudId',
+  );
+  @override
+  late final GeneratedColumn<int> cloudId = GeneratedColumn<int>(
+    'cloud_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _tankIdMeta = const VerificationMeta('tankId');
   @override
   late final GeneratedColumn<String> tankId = GeneratedColumn<String>(
@@ -1267,6 +1278,7 @@ class $LogsTable extends Logs with TableInfo<$LogsTable, Log> {
   @override
   List<GeneratedColumn> get $columns => [
     id,
+    cloudId,
     tankId,
     rawText,
     parsedJson,
@@ -1286,6 +1298,12 @@ class $LogsTable extends Logs with TableInfo<$LogsTable, Log> {
     final data = instance.toColumns(true);
     if (data.containsKey('id')) {
       context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('cloud_id')) {
+      context.handle(
+        _cloudIdMeta,
+        cloudId.isAcceptableOrUnknown(data['cloud_id']!, _cloudIdMeta),
+      );
     }
     if (data.containsKey('tank_id')) {
       context.handle(
@@ -1328,6 +1346,10 @@ class $LogsTable extends Logs with TableInfo<$LogsTable, Log> {
         DriftSqlType.int,
         data['${effectivePrefix}id'],
       )!,
+      cloudId: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}cloud_id'],
+      ),
       tankId: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}tank_id'],
@@ -1355,12 +1377,14 @@ class $LogsTable extends Logs with TableInfo<$LogsTable, Log> {
 
 class Log extends DataClass implements Insertable<Log> {
   final int id;
+  final int? cloudId;
   final String tankId;
   final String rawText;
   final String? parsedJson;
   final DateTime createdAt;
   const Log({
     required this.id,
+    this.cloudId,
     required this.tankId,
     required this.rawText,
     this.parsedJson,
@@ -1370,6 +1394,9 @@ class Log extends DataClass implements Insertable<Log> {
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
     map['id'] = Variable<int>(id);
+    if (!nullToAbsent || cloudId != null) {
+      map['cloud_id'] = Variable<int>(cloudId);
+    }
     map['tank_id'] = Variable<String>(tankId);
     map['raw_text'] = Variable<String>(rawText);
     if (!nullToAbsent || parsedJson != null) {
@@ -1382,6 +1409,9 @@ class Log extends DataClass implements Insertable<Log> {
   LogsCompanion toCompanion(bool nullToAbsent) {
     return LogsCompanion(
       id: Value(id),
+      cloudId: cloudId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(cloudId),
       tankId: Value(tankId),
       rawText: Value(rawText),
       parsedJson: parsedJson == null && nullToAbsent
@@ -1398,6 +1428,7 @@ class Log extends DataClass implements Insertable<Log> {
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return Log(
       id: serializer.fromJson<int>(json['id']),
+      cloudId: serializer.fromJson<int?>(json['cloudId']),
       tankId: serializer.fromJson<String>(json['tankId']),
       rawText: serializer.fromJson<String>(json['rawText']),
       parsedJson: serializer.fromJson<String?>(json['parsedJson']),
@@ -1409,6 +1440,7 @@ class Log extends DataClass implements Insertable<Log> {
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return <String, dynamic>{
       'id': serializer.toJson<int>(id),
+      'cloudId': serializer.toJson<int?>(cloudId),
       'tankId': serializer.toJson<String>(tankId),
       'rawText': serializer.toJson<String>(rawText),
       'parsedJson': serializer.toJson<String?>(parsedJson),
@@ -1418,12 +1450,14 @@ class Log extends DataClass implements Insertable<Log> {
 
   Log copyWith({
     int? id,
+    Value<int?> cloudId = const Value.absent(),
     String? tankId,
     String? rawText,
     Value<String?> parsedJson = const Value.absent(),
     DateTime? createdAt,
   }) => Log(
     id: id ?? this.id,
+    cloudId: cloudId.present ? cloudId.value : this.cloudId,
     tankId: tankId ?? this.tankId,
     rawText: rawText ?? this.rawText,
     parsedJson: parsedJson.present ? parsedJson.value : this.parsedJson,
@@ -1432,6 +1466,7 @@ class Log extends DataClass implements Insertable<Log> {
   Log copyWithCompanion(LogsCompanion data) {
     return Log(
       id: data.id.present ? data.id.value : this.id,
+      cloudId: data.cloudId.present ? data.cloudId.value : this.cloudId,
       tankId: data.tankId.present ? data.tankId.value : this.tankId,
       rawText: data.rawText.present ? data.rawText.value : this.rawText,
       parsedJson: data.parsedJson.present
@@ -1445,6 +1480,7 @@ class Log extends DataClass implements Insertable<Log> {
   String toString() {
     return (StringBuffer('Log(')
           ..write('id: $id, ')
+          ..write('cloudId: $cloudId, ')
           ..write('tankId: $tankId, ')
           ..write('rawText: $rawText, ')
           ..write('parsedJson: $parsedJson, ')
@@ -1454,12 +1490,14 @@ class Log extends DataClass implements Insertable<Log> {
   }
 
   @override
-  int get hashCode => Object.hash(id, tankId, rawText, parsedJson, createdAt);
+  int get hashCode =>
+      Object.hash(id, cloudId, tankId, rawText, parsedJson, createdAt);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       (other is Log &&
           other.id == this.id &&
+          other.cloudId == this.cloudId &&
           other.tankId == this.tankId &&
           other.rawText == this.rawText &&
           other.parsedJson == this.parsedJson &&
@@ -1468,12 +1506,14 @@ class Log extends DataClass implements Insertable<Log> {
 
 class LogsCompanion extends UpdateCompanion<Log> {
   final Value<int> id;
+  final Value<int?> cloudId;
   final Value<String> tankId;
   final Value<String> rawText;
   final Value<String?> parsedJson;
   final Value<DateTime> createdAt;
   const LogsCompanion({
     this.id = const Value.absent(),
+    this.cloudId = const Value.absent(),
     this.tankId = const Value.absent(),
     this.rawText = const Value.absent(),
     this.parsedJson = const Value.absent(),
@@ -1481,6 +1521,7 @@ class LogsCompanion extends UpdateCompanion<Log> {
   });
   LogsCompanion.insert({
     this.id = const Value.absent(),
+    this.cloudId = const Value.absent(),
     required String tankId,
     required String rawText,
     this.parsedJson = const Value.absent(),
@@ -1489,6 +1530,7 @@ class LogsCompanion extends UpdateCompanion<Log> {
        rawText = Value(rawText);
   static Insertable<Log> custom({
     Expression<int>? id,
+    Expression<int>? cloudId,
     Expression<String>? tankId,
     Expression<String>? rawText,
     Expression<String>? parsedJson,
@@ -1496,6 +1538,7 @@ class LogsCompanion extends UpdateCompanion<Log> {
   }) {
     return RawValuesInsertable({
       if (id != null) 'id': id,
+      if (cloudId != null) 'cloud_id': cloudId,
       if (tankId != null) 'tank_id': tankId,
       if (rawText != null) 'raw_text': rawText,
       if (parsedJson != null) 'parsed_json': parsedJson,
@@ -1505,6 +1548,7 @@ class LogsCompanion extends UpdateCompanion<Log> {
 
   LogsCompanion copyWith({
     Value<int>? id,
+    Value<int?>? cloudId,
     Value<String>? tankId,
     Value<String>? rawText,
     Value<String?>? parsedJson,
@@ -1512,6 +1556,7 @@ class LogsCompanion extends UpdateCompanion<Log> {
   }) {
     return LogsCompanion(
       id: id ?? this.id,
+      cloudId: cloudId ?? this.cloudId,
       tankId: tankId ?? this.tankId,
       rawText: rawText ?? this.rawText,
       parsedJson: parsedJson ?? this.parsedJson,
@@ -1524,6 +1569,9 @@ class LogsCompanion extends UpdateCompanion<Log> {
     final map = <String, Expression>{};
     if (id.present) {
       map['id'] = Variable<int>(id.value);
+    }
+    if (cloudId.present) {
+      map['cloud_id'] = Variable<int>(cloudId.value);
     }
     if (tankId.present) {
       map['tank_id'] = Variable<String>(tankId.value);
@@ -1544,6 +1592,7 @@ class LogsCompanion extends UpdateCompanion<Log> {
   String toString() {
     return (StringBuffer('LogsCompanion(')
           ..write('id: $id, ')
+          ..write('cloudId: $cloudId, ')
           ..write('tankId: $tankId, ')
           ..write('rawText: $rawText, ')
           ..write('parsedJson: $parsedJson, ')
@@ -3661,6 +3710,7 @@ typedef $$PlantsTableProcessedTableManager =
 typedef $$LogsTableCreateCompanionBuilder =
     LogsCompanion Function({
       Value<int> id,
+      Value<int?> cloudId,
       required String tankId,
       required String rawText,
       Value<String?> parsedJson,
@@ -3669,6 +3719,7 @@ typedef $$LogsTableCreateCompanionBuilder =
 typedef $$LogsTableUpdateCompanionBuilder =
     LogsCompanion Function({
       Value<int> id,
+      Value<int?> cloudId,
       Value<String> tankId,
       Value<String> rawText,
       Value<String?> parsedJson,
@@ -3685,6 +3736,11 @@ class $$LogsTableFilterComposer extends Composer<_$AppDb, $LogsTable> {
   });
   ColumnFilters<int> get id => $composableBuilder(
     column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get cloudId => $composableBuilder(
+    column: $table.cloudId,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -3722,6 +3778,11 @@ class $$LogsTableOrderingComposer extends Composer<_$AppDb, $LogsTable> {
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<int> get cloudId => $composableBuilder(
+    column: $table.cloudId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get tankId => $composableBuilder(
     column: $table.tankId,
     builder: (column) => ColumnOrderings(column),
@@ -3753,6 +3814,9 @@ class $$LogsTableAnnotationComposer extends Composer<_$AppDb, $LogsTable> {
   });
   GeneratedColumn<int> get id =>
       $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<int> get cloudId =>
+      $composableBuilder(column: $table.cloudId, builder: (column) => column);
 
   GeneratedColumn<String> get tankId =>
       $composableBuilder(column: $table.tankId, builder: (column) => column);
@@ -3798,12 +3862,14 @@ class $$LogsTableTableManager
           updateCompanionCallback:
               ({
                 Value<int> id = const Value.absent(),
+                Value<int?> cloudId = const Value.absent(),
                 Value<String> tankId = const Value.absent(),
                 Value<String> rawText = const Value.absent(),
                 Value<String?> parsedJson = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
               }) => LogsCompanion(
                 id: id,
+                cloudId: cloudId,
                 tankId: tankId,
                 rawText: rawText,
                 parsedJson: parsedJson,
@@ -3812,12 +3878,14 @@ class $$LogsTableTableManager
           createCompanionCallback:
               ({
                 Value<int> id = const Value.absent(),
+                Value<int?> cloudId = const Value.absent(),
                 required String tankId,
                 required String rawText,
                 Value<String?> parsedJson = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
               }) => LogsCompanion.insert(
                 id: id,
+                cloudId: cloudId,
                 tankId: tankId,
                 rawText: rawText,
                 parsedJson: parsedJson,

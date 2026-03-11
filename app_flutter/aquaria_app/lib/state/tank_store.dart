@@ -107,7 +107,7 @@ class TankStore {
           await _db.replacePlantsForTank(tankId, rows);
         }
 
-        // Logs — upsert cloud into local (insert or update content)
+        // Logs — upsert cloud into local (insert or update content + cloud ID)
         final cloudLogMap = (data['logs'] as Map?) ?? {};
         final cloudLogs = (cloudLogMap[tankId] as List?) ?? [];
         for (final l in cloudLogs) {
@@ -117,6 +117,7 @@ class TankStore {
             DateTime.parse(lm['created_at'] as String),
             lm['raw_text'] as String,
             lm['parsed_json'] as String?,
+            cloudId: lm['id'] as int?,
           );
         }
         debugPrint('[CloudSync] Tank $tankId: upserted ${cloudLogs.length} cloud logs');
@@ -777,7 +778,7 @@ class TankStore {
     // Skip duplicate log entries (same parsed content within 2 minutes)
     if (await _db.hasDuplicateLog(tankId, parsedJson)) return;
     final ts = date ?? DateTime.now();
-    await _db.insertLog(
+    final localId = await _db.insertLog(
       db.LogsCompanion.insert(
         tankId: tankId,
         rawText: rawText,
@@ -788,12 +789,15 @@ class TankStore {
     // Await cloud insert — NOT fire-and-forget, so data reaches Supabase
     try {
       if (SupabaseService.isLoggedIn) {
-        await SupabaseService.insertLog(
+        final cloudId = await SupabaseService.insertLog(
           tankId: tankId,
           rawText: rawText,
           parsedJson: parsedJson,
           createdAt: ts,
         );
+        if (cloudId != null) {
+          await _db.setLogCloudId(localId, cloudId);
+        }
       }
     } catch (e) {
       debugPrint('[CloudSync] addLog cloud insert failed: $e');
@@ -814,7 +818,11 @@ class TankStore {
     if (log != null) {
       try {
         if (SupabaseService.isLoggedIn) {
-          await SupabaseService.updateLogByKey(log.tankId, log.createdAt, rawText, parsedJson);
+          if (log.cloudId != null) {
+            await SupabaseService.updateLogById(log.cloudId!, rawText, parsedJson);
+          } else {
+            await SupabaseService.updateLogByKey(log.tankId, log.createdAt, rawText, parsedJson);
+          }
         }
       } catch (e) {
         debugPrint('[CloudSync] updateLog cloud failed: $e');
@@ -826,10 +834,13 @@ class TankStore {
     final log = await _db.getLogById(id);
     await _db.deleteLog(id);
     if (log != null) {
-      // Delete from cloud — await so it actually reaches Supabase
       try {
         if (SupabaseService.isLoggedIn) {
-          await SupabaseService.deleteLogByKey(log.tankId, log.createdAt);
+          if (log.cloudId != null) {
+            await SupabaseService.deleteLogById(log.cloudId!);
+          } else {
+            await SupabaseService.deleteLogByKey(log.tankId, log.createdAt);
+          }
         }
       } catch (e) {
         debugPrint('[CloudSync] deleteLog cloud failed: $e');

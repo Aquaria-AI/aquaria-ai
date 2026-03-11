@@ -268,21 +268,23 @@ class SupabaseService {
 
   // ── Logs CRUD ────────────────────────────────────────────────────────────
 
-  static Future<void> insertLog({
+  /// Insert a log and return the Supabase row ID (or null on failure).
+  static Future<int?> insertLog({
     required String tankId,
     required String rawText,
     String? parsedJson,
     required DateTime createdAt,
   }) async {
     final uid = userId;
-    if (uid == null) return;
-    await client.from('logs').insert({
+    if (uid == null) return null;
+    final row = await client.from('logs').insert({
       'tank_id': tankId,
       'user_id': uid,
       'raw_text': rawText,
       'parsed_json': parsedJson,
       'created_at': createdAt.toUtc().toIso8601String(),
-    });
+    }).select('id').single();
+    return row['id'] as int?;
   }
 
   /// Insert a log, ignoring duplicate key conflicts.
@@ -325,6 +327,15 @@ class SupabaseService {
     }).eq('id', id);
   }
 
+  /// Update a cloud log by its Supabase row ID.
+  static Future<void> updateLogById(int cloudId, String rawText, String? parsedJson) async {
+    await client.from('logs').update({
+      'raw_text': rawText,
+      'parsed_json': parsedJson,
+    }).eq('id', cloudId);
+  }
+
+  /// Fallback: update by composite key (tank + user + timestamp).
   static Future<void> updateLogByKey(String tankId, DateTime createdAt, String rawText, String? parsedJson) async {
     final uid = userId;
     if (uid == null) return;
@@ -338,6 +349,12 @@ class SupabaseService {
     await client.from('logs').delete().eq('id', id);
   }
 
+  /// Delete a cloud log by its Supabase row ID.
+  static Future<void> deleteLogById(int cloudId) async {
+    await client.from('logs').delete().eq('id', cloudId);
+  }
+
+  /// Fallback: delete by composite key (tank + user + timestamp).
   static Future<void> deleteLogByKey(String tankId, DateTime createdAt) async {
     final uid = userId;
     if (uid == null) return;
