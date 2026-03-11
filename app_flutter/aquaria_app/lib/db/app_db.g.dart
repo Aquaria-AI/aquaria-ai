@@ -2703,6 +2703,448 @@ class TasksCompanion extends UpdateCompanion<Task> {
   }
 }
 
+class $JournalEntriesTable extends JournalEntries
+    with TableInfo<$JournalEntriesTable, JournalEntry> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $JournalEntriesTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<int> id = GeneratedColumn<int>(
+    'id',
+    aliasedName,
+    false,
+    hasAutoIncrement: true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'PRIMARY KEY AUTOINCREMENT',
+    ),
+  );
+  static const VerificationMeta _cloudIdMeta = const VerificationMeta(
+    'cloudId',
+  );
+  @override
+  late final GeneratedColumn<int> cloudId = GeneratedColumn<int>(
+    'cloud_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _tankIdMeta = const VerificationMeta('tankId');
+  @override
+  late final GeneratedColumn<String> tankId = GeneratedColumn<String>(
+    'tank_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _dateMeta = const VerificationMeta('date');
+  @override
+  late final GeneratedColumn<String> date = GeneratedColumn<String>(
+    'date',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _categoryMeta = const VerificationMeta(
+    'category',
+  );
+  @override
+  late final GeneratedColumn<String> category = GeneratedColumn<String>(
+    'category',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _dataMeta = const VerificationMeta('data');
+  @override
+  late final GeneratedColumn<String> data = GeneratedColumn<String>(
+    'data',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _updatedAtMeta = const VerificationMeta(
+    'updatedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> updatedAt = GeneratedColumn<DateTime>(
+    'updated_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    cloudId,
+    tankId,
+    date,
+    category,
+    data,
+    updatedAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'journal_entries';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<JournalEntry> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('cloud_id')) {
+      context.handle(
+        _cloudIdMeta,
+        cloudId.isAcceptableOrUnknown(data['cloud_id']!, _cloudIdMeta),
+      );
+    }
+    if (data.containsKey('tank_id')) {
+      context.handle(
+        _tankIdMeta,
+        tankId.isAcceptableOrUnknown(data['tank_id']!, _tankIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_tankIdMeta);
+    }
+    if (data.containsKey('date')) {
+      context.handle(
+        _dateMeta,
+        date.isAcceptableOrUnknown(data['date']!, _dateMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_dateMeta);
+    }
+    if (data.containsKey('category')) {
+      context.handle(
+        _categoryMeta,
+        category.isAcceptableOrUnknown(data['category']!, _categoryMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_categoryMeta);
+    }
+    if (data.containsKey('data')) {
+      context.handle(
+        _dataMeta,
+        this.data.isAcceptableOrUnknown(data['data']!, _dataMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_dataMeta);
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(
+        _updatedAtMeta,
+        updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_updatedAtMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  JournalEntry map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return JournalEntry(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}id'],
+      )!,
+      cloudId: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}cloud_id'],
+      ),
+      tankId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}tank_id'],
+      )!,
+      date: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}date'],
+      )!,
+      category: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}category'],
+      )!,
+      data: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}data'],
+      )!,
+      updatedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}updated_at'],
+      )!,
+    );
+  }
+
+  @override
+  $JournalEntriesTable createAlias(String alias) {
+    return $JournalEntriesTable(attachedDatabase, alias);
+  }
+}
+
+class JournalEntry extends DataClass implements Insertable<JournalEntry> {
+  final int id;
+  final int? cloudId;
+  final String tankId;
+  final String date;
+  final String category;
+  final String data;
+  final DateTime updatedAt;
+  const JournalEntry({
+    required this.id,
+    this.cloudId,
+    required this.tankId,
+    required this.date,
+    required this.category,
+    required this.data,
+    required this.updatedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<int>(id);
+    if (!nullToAbsent || cloudId != null) {
+      map['cloud_id'] = Variable<int>(cloudId);
+    }
+    map['tank_id'] = Variable<String>(tankId);
+    map['date'] = Variable<String>(date);
+    map['category'] = Variable<String>(category);
+    map['data'] = Variable<String>(data);
+    map['updated_at'] = Variable<DateTime>(updatedAt);
+    return map;
+  }
+
+  JournalEntriesCompanion toCompanion(bool nullToAbsent) {
+    return JournalEntriesCompanion(
+      id: Value(id),
+      cloudId: cloudId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(cloudId),
+      tankId: Value(tankId),
+      date: Value(date),
+      category: Value(category),
+      data: Value(data),
+      updatedAt: Value(updatedAt),
+    );
+  }
+
+  factory JournalEntry.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return JournalEntry(
+      id: serializer.fromJson<int>(json['id']),
+      cloudId: serializer.fromJson<int?>(json['cloudId']),
+      tankId: serializer.fromJson<String>(json['tankId']),
+      date: serializer.fromJson<String>(json['date']),
+      category: serializer.fromJson<String>(json['category']),
+      data: serializer.fromJson<String>(json['data']),
+      updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<int>(id),
+      'cloudId': serializer.toJson<int?>(cloudId),
+      'tankId': serializer.toJson<String>(tankId),
+      'date': serializer.toJson<String>(date),
+      'category': serializer.toJson<String>(category),
+      'data': serializer.toJson<String>(data),
+      'updatedAt': serializer.toJson<DateTime>(updatedAt),
+    };
+  }
+
+  JournalEntry copyWith({
+    int? id,
+    Value<int?> cloudId = const Value.absent(),
+    String? tankId,
+    String? date,
+    String? category,
+    String? data,
+    DateTime? updatedAt,
+  }) => JournalEntry(
+    id: id ?? this.id,
+    cloudId: cloudId.present ? cloudId.value : this.cloudId,
+    tankId: tankId ?? this.tankId,
+    date: date ?? this.date,
+    category: category ?? this.category,
+    data: data ?? this.data,
+    updatedAt: updatedAt ?? this.updatedAt,
+  );
+  JournalEntry copyWithCompanion(JournalEntriesCompanion data) {
+    return JournalEntry(
+      id: data.id.present ? data.id.value : this.id,
+      cloudId: data.cloudId.present ? data.cloudId.value : this.cloudId,
+      tankId: data.tankId.present ? data.tankId.value : this.tankId,
+      date: data.date.present ? data.date.value : this.date,
+      category: data.category.present ? data.category.value : this.category,
+      data: data.data.present ? data.data.value : this.data,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('JournalEntry(')
+          ..write('id: $id, ')
+          ..write('cloudId: $cloudId, ')
+          ..write('tankId: $tankId, ')
+          ..write('date: $date, ')
+          ..write('category: $category, ')
+          ..write('data: $data, ')
+          ..write('updatedAt: $updatedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(id, cloudId, tankId, date, category, data, updatedAt);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is JournalEntry &&
+          other.id == this.id &&
+          other.cloudId == this.cloudId &&
+          other.tankId == this.tankId &&
+          other.date == this.date &&
+          other.category == this.category &&
+          other.data == this.data &&
+          other.updatedAt == this.updatedAt);
+}
+
+class JournalEntriesCompanion extends UpdateCompanion<JournalEntry> {
+  final Value<int> id;
+  final Value<int?> cloudId;
+  final Value<String> tankId;
+  final Value<String> date;
+  final Value<String> category;
+  final Value<String> data;
+  final Value<DateTime> updatedAt;
+  const JournalEntriesCompanion({
+    this.id = const Value.absent(),
+    this.cloudId = const Value.absent(),
+    this.tankId = const Value.absent(),
+    this.date = const Value.absent(),
+    this.category = const Value.absent(),
+    this.data = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+  });
+  JournalEntriesCompanion.insert({
+    this.id = const Value.absent(),
+    this.cloudId = const Value.absent(),
+    required String tankId,
+    required String date,
+    required String category,
+    required String data,
+    required DateTime updatedAt,
+  }) : tankId = Value(tankId),
+       date = Value(date),
+       category = Value(category),
+       data = Value(data),
+       updatedAt = Value(updatedAt);
+  static Insertable<JournalEntry> custom({
+    Expression<int>? id,
+    Expression<int>? cloudId,
+    Expression<String>? tankId,
+    Expression<String>? date,
+    Expression<String>? category,
+    Expression<String>? data,
+    Expression<DateTime>? updatedAt,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (cloudId != null) 'cloud_id': cloudId,
+      if (tankId != null) 'tank_id': tankId,
+      if (date != null) 'date': date,
+      if (category != null) 'category': category,
+      if (data != null) 'data': data,
+      if (updatedAt != null) 'updated_at': updatedAt,
+    });
+  }
+
+  JournalEntriesCompanion copyWith({
+    Value<int>? id,
+    Value<int?>? cloudId,
+    Value<String>? tankId,
+    Value<String>? date,
+    Value<String>? category,
+    Value<String>? data,
+    Value<DateTime>? updatedAt,
+  }) {
+    return JournalEntriesCompanion(
+      id: id ?? this.id,
+      cloudId: cloudId ?? this.cloudId,
+      tankId: tankId ?? this.tankId,
+      date: date ?? this.date,
+      category: category ?? this.category,
+      data: data ?? this.data,
+      updatedAt: updatedAt ?? this.updatedAt,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<int>(id.value);
+    }
+    if (cloudId.present) {
+      map['cloud_id'] = Variable<int>(cloudId.value);
+    }
+    if (tankId.present) {
+      map['tank_id'] = Variable<String>(tankId.value);
+    }
+    if (date.present) {
+      map['date'] = Variable<String>(date.value);
+    }
+    if (category.present) {
+      map['category'] = Variable<String>(category.value);
+    }
+    if (data.present) {
+      map['data'] = Variable<String>(data.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<DateTime>(updatedAt.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('JournalEntriesCompanion(')
+          ..write('id: $id, ')
+          ..write('cloudId: $cloudId, ')
+          ..write('tankId: $tankId, ')
+          ..write('date: $date, ')
+          ..write('category: $category, ')
+          ..write('data: $data, ')
+          ..write('updatedAt: $updatedAt')
+          ..write(')'))
+        .toString();
+  }
+}
+
 class $ChatSessionsTable extends ChatSessions
     with TableInfo<$ChatSessionsTable, ChatSession> {
   @override
@@ -3064,6 +3506,7 @@ abstract class _$AppDb extends GeneratedDatabase {
   late final $LogsTable logs = $LogsTable(this);
   late final $TankPhotosTable tankPhotos = $TankPhotosTable(this);
   late final $TasksTable tasks = $TasksTable(this);
+  late final $JournalEntriesTable journalEntries = $JournalEntriesTable(this);
   late final $ChatSessionsTable chatSessions = $ChatSessionsTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
@@ -3076,6 +3519,7 @@ abstract class _$AppDb extends GeneratedDatabase {
     logs,
     tankPhotos,
     tasks,
+    journalEntries,
     chatSessions,
   ];
 }
@@ -4450,6 +4894,238 @@ typedef $$TasksTableProcessedTableManager =
       Task,
       PrefetchHooks Function()
     >;
+typedef $$JournalEntriesTableCreateCompanionBuilder =
+    JournalEntriesCompanion Function({
+      Value<int> id,
+      Value<int?> cloudId,
+      required String tankId,
+      required String date,
+      required String category,
+      required String data,
+      required DateTime updatedAt,
+    });
+typedef $$JournalEntriesTableUpdateCompanionBuilder =
+    JournalEntriesCompanion Function({
+      Value<int> id,
+      Value<int?> cloudId,
+      Value<String> tankId,
+      Value<String> date,
+      Value<String> category,
+      Value<String> data,
+      Value<DateTime> updatedAt,
+    });
+
+class $$JournalEntriesTableFilterComposer
+    extends Composer<_$AppDb, $JournalEntriesTable> {
+  $$JournalEntriesTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get cloudId => $composableBuilder(
+    column: $table.cloudId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get tankId => $composableBuilder(
+    column: $table.tankId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get date => $composableBuilder(
+    column: $table.date,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get category => $composableBuilder(
+    column: $table.category,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get data => $composableBuilder(
+    column: $table.data,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$JournalEntriesTableOrderingComposer
+    extends Composer<_$AppDb, $JournalEntriesTable> {
+  $$JournalEntriesTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get cloudId => $composableBuilder(
+    column: $table.cloudId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get tankId => $composableBuilder(
+    column: $table.tankId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get date => $composableBuilder(
+    column: $table.date,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get category => $composableBuilder(
+    column: $table.category,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get data => $composableBuilder(
+    column: $table.data,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$JournalEntriesTableAnnotationComposer
+    extends Composer<_$AppDb, $JournalEntriesTable> {
+  $$JournalEntriesTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<int> get cloudId =>
+      $composableBuilder(column: $table.cloudId, builder: (column) => column);
+
+  GeneratedColumn<String> get tankId =>
+      $composableBuilder(column: $table.tankId, builder: (column) => column);
+
+  GeneratedColumn<String> get date =>
+      $composableBuilder(column: $table.date, builder: (column) => column);
+
+  GeneratedColumn<String> get category =>
+      $composableBuilder(column: $table.category, builder: (column) => column);
+
+  GeneratedColumn<String> get data =>
+      $composableBuilder(column: $table.data, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+}
+
+class $$JournalEntriesTableTableManager
+    extends
+        RootTableManager<
+          _$AppDb,
+          $JournalEntriesTable,
+          JournalEntry,
+          $$JournalEntriesTableFilterComposer,
+          $$JournalEntriesTableOrderingComposer,
+          $$JournalEntriesTableAnnotationComposer,
+          $$JournalEntriesTableCreateCompanionBuilder,
+          $$JournalEntriesTableUpdateCompanionBuilder,
+          (
+            JournalEntry,
+            BaseReferences<_$AppDb, $JournalEntriesTable, JournalEntry>,
+          ),
+          JournalEntry,
+          PrefetchHooks Function()
+        > {
+  $$JournalEntriesTableTableManager(_$AppDb db, $JournalEntriesTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$JournalEntriesTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$JournalEntriesTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$JournalEntriesTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<int> id = const Value.absent(),
+                Value<int?> cloudId = const Value.absent(),
+                Value<String> tankId = const Value.absent(),
+                Value<String> date = const Value.absent(),
+                Value<String> category = const Value.absent(),
+                Value<String> data = const Value.absent(),
+                Value<DateTime> updatedAt = const Value.absent(),
+              }) => JournalEntriesCompanion(
+                id: id,
+                cloudId: cloudId,
+                tankId: tankId,
+                date: date,
+                category: category,
+                data: data,
+                updatedAt: updatedAt,
+              ),
+          createCompanionCallback:
+              ({
+                Value<int> id = const Value.absent(),
+                Value<int?> cloudId = const Value.absent(),
+                required String tankId,
+                required String date,
+                required String category,
+                required String data,
+                required DateTime updatedAt,
+              }) => JournalEntriesCompanion.insert(
+                id: id,
+                cloudId: cloudId,
+                tankId: tankId,
+                date: date,
+                category: category,
+                data: data,
+                updatedAt: updatedAt,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$JournalEntriesTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDb,
+      $JournalEntriesTable,
+      JournalEntry,
+      $$JournalEntriesTableFilterComposer,
+      $$JournalEntriesTableOrderingComposer,
+      $$JournalEntriesTableAnnotationComposer,
+      $$JournalEntriesTableCreateCompanionBuilder,
+      $$JournalEntriesTableUpdateCompanionBuilder,
+      (
+        JournalEntry,
+        BaseReferences<_$AppDb, $JournalEntriesTable, JournalEntry>,
+      ),
+      JournalEntry,
+      PrefetchHooks Function()
+    >;
 typedef $$ChatSessionsTableCreateCompanionBuilder =
     ChatSessionsCompanion Function({
       Value<int> id,
@@ -4658,6 +5334,8 @@ class $AppDbManager {
       $$TankPhotosTableTableManager(_db, _db.tankPhotos);
   $$TasksTableTableManager get tasks =>
       $$TasksTableTableManager(_db, _db.tasks);
+  $$JournalEntriesTableTableManager get journalEntries =>
+      $$JournalEntriesTableTableManager(_db, _db.journalEntries);
   $$ChatSessionsTableTableManager get chatSessions =>
       $$ChatSessionsTableTableManager(_db, _db.chatSessions);
 }

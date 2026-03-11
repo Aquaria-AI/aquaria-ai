@@ -709,6 +709,71 @@ class SupabaseService {
     await client.from('community_posts').delete().eq('id', postId);
   }
 
+  // ── Journal Entries ─────────────────────────────────────────────────────
+
+  /// Insert a journal entry and return the Supabase row ID.
+  static Future<int?> insertJournalEntry({
+    required String tankId,
+    required String date,
+    required String category,
+    required String data,
+  }) async {
+    final uid = userId;
+    if (uid == null) return null;
+    final row = await client.from('journal_entries').insert({
+      'tank_id': tankId,
+      'user_id': uid,
+      'date': date,
+      'category': category,
+      'data': data,
+      'updated_at': DateTime.now().toUtc().toIso8601String(),
+    }).select('id').single();
+    return row['id'] as int?;
+  }
+
+  /// Update a journal entry by its Supabase row ID.
+  static Future<void> updateJournalEntryById(int cloudId, String data) async {
+    await client.from('journal_entries').update({
+      'data': data,
+      'updated_at': DateTime.now().toUtc().toIso8601String(),
+    }).eq('id', cloudId);
+  }
+
+  /// Upsert a journal entry by composite key (user + tank + date + category).
+  static Future<int?> upsertJournalEntry({
+    required String tankId,
+    required String date,
+    required String category,
+    required String data,
+  }) async {
+    final uid = userId;
+    if (uid == null) return null;
+    final row = await client.from('journal_entries').upsert({
+      'tank_id': tankId,
+      'user_id': uid,
+      'date': date,
+      'category': category,
+      'data': data,
+      'updated_at': DateTime.now().toUtc().toIso8601String(),
+    }, onConflict: 'user_id,tank_id,date,category').select('id').single();
+    return row['id'] as int?;
+  }
+
+  /// Delete a journal entry by its Supabase row ID.
+  static Future<void> deleteJournalEntryById(int cloudId) async {
+    await client.from('journal_entries').delete().eq('id', cloudId);
+  }
+
+  /// Fetch all journal entries for a tank.
+  static Future<List<Map<String, dynamic>>> fetchJournalEntries(String tankId) async {
+    final data = await client
+        .from('journal_entries')
+        .select()
+        .eq('tank_id', tankId)
+        .order('date', ascending: false);
+    return List<Map<String, dynamic>>.from(data);
+  }
+
   // ── Full Sync (pull from cloud) ──────────────────────────────────────────
 
   static Future<Map<String, dynamic>> pullAll() async {
@@ -720,17 +785,20 @@ class SupabaseService {
     final allInhabitants = <String, List<Map<String, dynamic>>>{};
     final allPlants = <String, List<Map<String, dynamic>>>{};
     final allLogs = <String, List<Map<String, dynamic>>>{};
+    final allJournal = <String, List<Map<String, dynamic>>>{};
     for (final tank in tanks) {
       final id = tank['id'] as String;
       allInhabitants[id] = await fetchInhabitants(id);
       allPlants[id] = await fetchPlants(id);
       allLogs[id] = await fetchLogs(id);
+      allJournal[id] = await fetchJournalEntries(id);
     }
     return {
       'tanks': tanks,
       'inhabitants': allInhabitants,
       'plants': allPlants,
       'logs': allLogs,
+      'journal': allJournal,
       'dismissed_tasks': dismissed,
       'tasks': activeTasks,
     };

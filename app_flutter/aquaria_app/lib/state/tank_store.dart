@@ -122,6 +122,21 @@ class TankStore {
         }
         debugPrint('[CloudSync] Tank $tankId: upserted ${cloudLogs.length} cloud logs');
         await _db.deduplicateLogsForTank(tankId);
+
+        // Journal entries — upsert by (tankId, date, category)
+        final cloudJournalMap = (data['journal'] as Map?) ?? {};
+        final cloudJournal = (cloudJournalMap[tankId] as List?) ?? [];
+        for (final j in cloudJournal) {
+          final jm = j as Map<String, dynamic>;
+          await _db.upsertJournalEntry(
+            tankId: tankId,
+            date: jm['date'] as String,
+            category: jm['category'] as String,
+            data: jm['data'] as String,
+            cloudId: jm['id'] as int?,
+          );
+        }
+        debugPrint('[CloudSync] Tank $tankId: upserted ${cloudJournal.length} journal entries');
       }
 
       // Dismissed tasks (legacy)
@@ -876,6 +891,78 @@ class TankStore {
   }) async {
     await addLog(tankId: tankId, rawText: rawText, parsedJson: parsedJson, date: date);
     invalidateSummary(tankId);
+  }
+
+  // ----------------------------------------------------------------
+  // Journal Entries (user-facing curated view)
+  // ----------------------------------------------------------------
+
+  Future<List<db.JournalEntry>> journalFor(String tankId) =>
+      _db.journalForTank(tankId);
+
+  Future<List<db.JournalEntry>> journalForDate(String tankId, String date) =>
+      _db.journalForTankOnDate(tankId, date);
+
+  /// Upsert a journal entry (measurements, actions, or notes) for a tank+date.
+  /// Merges with existing data: measurements overwrite keys, lists append/deduplicate.
+  Future<void> upsertJournal({
+    required String tankId,
+    required String date,
+    required String category,
+    required String data,
+  }) async {
+    final localId = await _db.upsertJournalEntry(
+      tankId: tankId,
+      date: date,
+      category: category,
+      data: data,
+    );
+    try {
+      if (SupabaseService.isLoggedIn) {
+        final cloudId = await SupabaseService.upsertJournalEntry(
+          tankId: tankId,
+          date: date,
+          category: category,
+          data: data,
+        );
+        if (cloudId != null) {
+          await _db.setJournalCloudId(localId, cloudId);
+        }
+      }
+    } catch (e) {
+      debugPrint('[CloudSync] upsertJournal cloud failed: $e');
+    }
+  }
+
+  /// Delete a journal entry by local ID (and from cloud).
+  Future<void> deleteJournalEntry(int id) async {
+    final entry = await _db.getJournalEntryById(id);
+    await _db.deleteJournalEntry(id);
+    if (entry != null) {
+      try {
+        if (SupabaseService.isLoggedIn && entry.cloudId != null) {
+          await SupabaseService.deleteJournalEntryById(entry.cloudId!);
+        }
+      } catch (e) {
+        debugPrint('[CloudSync] deleteJournalEntry cloud failed: $e');
+      }
+    }
+  }
+
+  /// Delete a journal category for a tank+date (and from cloud).
+  Future<void> deleteJournalByKey(String tankId, String date, String category) async {
+    final entries = await _db.journalForTankOnDate(tankId, date);
+    final match = entries.where((e) => e.category == category).toList();
+    await _db.deleteJournalByKey(tankId, date, category);
+    for (final entry in match) {
+      try {
+        if (SupabaseService.isLoggedIn && entry.cloudId != null) {
+          await SupabaseService.deleteJournalEntryById(entry.cloudId!);
+        }
+      } catch (e) {
+        debugPrint('[CloudSync] deleteJournalByKey cloud failed: $e');
+      }
+    }
   }
 
   // ----------------------------------------------------------------

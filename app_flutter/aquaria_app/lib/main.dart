@@ -8119,13 +8119,56 @@ class _ChatSheetState extends State<_ChatSheet> {
             entry.remove('tasks');
             final dateStr = entry['date'] as String?;
             final logDate = (dateStr != null ? DateTime.tryParse(dateStr) : null) ?? logDateSnapshot;
+            final journalDate = '${logDate.year}-${logDate.month.toString().padLeft(2,'0')}-${logDate.day.toString().padLeft(2,'0')}';
             debugPrint('[ParseLog] Saving log entry $i for tank ${tankSnapshot.id}');
+            // Save to audit log
             await TankStore.instance.addLog(
               tankId: tankSnapshot.id,
               rawText: logEntries.length == 1 ? text : '',
               parsedJson: jsonEncode(entry),
               date: logDate,
             );
+            // Save to journal (user-facing curated view)
+            if (hasMeasurements) {
+              final existing = await TankStore.instance.journalForDate(tankSnapshot.id, journalDate);
+              final measEntry = existing.where((e) => e.category == 'measurements').toList();
+              Map<String, dynamic> measurements = {};
+              if (measEntry.isNotEmpty) {
+                try { measurements = Map<String, dynamic>.from(jsonDecode(measEntry.first.data) as Map); } catch (_) {}
+              }
+              measurements.addAll((entry['measurements'] as Map).cast<String, dynamic>());
+              await TankStore.instance.upsertJournal(
+                tankId: tankSnapshot.id, date: journalDate, category: 'measurements', data: jsonEncode(measurements),
+              );
+            }
+            if (hasActions) {
+              final existing = await TankStore.instance.journalForDate(tankSnapshot.id, journalDate);
+              final actEntry = existing.where((e) => e.category == 'actions').toList();
+              List<String> actions = [];
+              if (actEntry.isNotEmpty) {
+                try { actions = (jsonDecode(actEntry.first.data) as List).cast<String>(); } catch (_) {}
+              }
+              for (final a in (entry['actions'] as List).cast<String>()) {
+                if (!actions.contains(a)) actions.add(a);
+              }
+              await TankStore.instance.upsertJournal(
+                tankId: tankSnapshot.id, date: journalDate, category: 'actions', data: jsonEncode(actions),
+              );
+            }
+            if (hasNotes) {
+              final existing = await TankStore.instance.journalForDate(tankSnapshot.id, journalDate);
+              final noteEntry = existing.where((e) => e.category == 'notes').toList();
+              List<String> notes = [];
+              if (noteEntry.isNotEmpty) {
+                try { notes = (jsonDecode(noteEntry.first.data) as List).cast<String>(); } catch (_) {}
+              }
+              for (final n in (entry['notes'] as List).cast<String>()) {
+                if (!notes.contains(n)) notes.add(n);
+              }
+              await TankStore.instance.upsertJournal(
+                tankId: tankSnapshot.id, date: journalDate, category: 'notes', data: jsonEncode(notes),
+              );
+            }
             debugPrint('[ParseLog] Log entry $i saved successfully');
             // Auto-complete matching tasks when actions are logged
             if (hasActions) {
@@ -9368,70 +9411,77 @@ class _LogEntryCardState extends State<_LogEntryCard> {
 
 // ── Merged day card — consolidates all logs from one day ─────────────────────
 
-class _MergedDayCard extends StatelessWidget {
-  final List<db.Log> logs;
+class _JournalDayCard extends StatelessWidget {
+  final String tankId;
+  final String date;
+  final List<db.JournalEntry> entries;
   final Future<void> Function() onChanged;
 
-  const _MergedDayCard({required this.logs, required this.onChanged});
+  const _JournalDayCard({
+    required this.tankId,
+    required this.date,
+    required this.entries,
+    required this.onChanged,
+  });
 
-  /// Build the merged parsed map from all logs for the day.
-  Map<String, dynamic> _buildMerged() {
-    final mergedParams = <String, dynamic>{};
-    final mergedActions = <String>[];
-    final mergedNotes = <String>[];
-    final mergedTasks = <Map<String, dynamic>>[];
-    String? source;
-    final actionsSeen = <String>{};
-    final notesSeen = <String>{};
-
-    // Iterate oldest-first so newer values overwrite older duplicates
-    for (final log in logs.reversed) {
-      if (log.parsedJson == null) continue;
-      try {
-        final p = jsonDecode(log.parsedJson!) as Map;
-        if (p['source'] == 'tap_water') source = 'tap_water';
-        final m = (p['measurements'] as Map?)?.cast<String, dynamic>() ?? {};
-        mergedParams.addAll(m);
-        for (final a in ((p['actions'] as List?) ?? []).map((e) => e.toString())) {
-          if (actionsSeen.add(a)) mergedActions.add(a);
-        }
-        for (final n in ((p['notes'] as List?) ?? []).map((e) => e.toString())) {
-          if (notesSeen.add(n)) mergedNotes.add(n);
-        }
-        for (final t in ((p['tasks'] as List?) ?? []).cast<Map<String, dynamic>>()) {
-          mergedTasks.add(t);
-        }
-      } catch (_) {}
-    }
-    return {
-      if (source != null) 'source': source,
-      'measurements': mergedParams,
-      'actions': mergedActions,
-      'notes': mergedNotes,
-      'tasks': mergedTasks,
-    };
+  Map<String, dynamic> _measurements() {
+    final e = entries.where((e) => e.category == 'measurements').toList();
+    if (e.isEmpty) return {};
+    try { return Map<String, dynamic>.from(jsonDecode(e.first.data) as Map); } catch (_) { return {}; }
   }
 
-  /// Save edits back: update the first log with merged content, delete the rest.
+  List<String> _actions() {
+    final e = entries.where((e) => e.category == 'actions').toList();
+    if (e.isEmpty) return [];
+    try { return (jsonDecode(e.first.data) as List).cast<String>(); } catch (_) { return []; }
+  }
+
+  List<String> _notes() {
+    final e = entries.where((e) => e.category == 'notes').toList();
+    if (e.isEmpty) return [];
+    try { return (jsonDecode(e.first.data) as List).cast<String>(); } catch (_) { return []; }
+  }
+
+  /// Save edits back to journal entries.
   Future<void> _saveEdits(String rawText, String parsedJson) async {
-    await TankStore.instance.updateLog(logs.first.id, rawText, parsedJson);
-    for (var i = 1; i < logs.length; i++) {
-      await TankStore.instance.deleteLog(logs[i].id);
-    }
+    try {
+      final parsed = jsonDecode(parsedJson) as Map<String, dynamic>;
+      final measurements = (parsed['measurements'] as Map?)?.cast<String, dynamic>() ?? {};
+      final actions = ((parsed['actions'] as List?) ?? []).cast<String>();
+      final notes = ((parsed['notes'] as List?) ?? []).cast<String>();
+
+      if (measurements.isNotEmpty) {
+        await TankStore.instance.upsertJournal(
+          tankId: tankId, date: date, category: 'measurements', data: jsonEncode(measurements),
+        );
+      } else {
+        await TankStore.instance.deleteJournalByKey(tankId, date, 'measurements');
+      }
+      if (actions.isNotEmpty) {
+        await TankStore.instance.upsertJournal(
+          tankId: tankId, date: date, category: 'actions', data: jsonEncode(actions),
+        );
+      } else {
+        await TankStore.instance.deleteJournalByKey(tankId, date, 'actions');
+      }
+      if (notes.isNotEmpty) {
+        await TankStore.instance.upsertJournal(
+          tankId: tankId, date: date, category: 'notes', data: jsonEncode(notes),
+        );
+      } else {
+        await TankStore.instance.deleteJournalByKey(tankId, date, 'notes');
+      }
+    } catch (_) {}
     await onChanged();
   }
 
   @override
   Widget build(BuildContext context) {
-    final merged = _buildMerged();
-    final mergedParams = (merged['measurements'] as Map<String, dynamic>?) ?? {};
-    final mergedActions = (merged['actions'] as List<String>?) ?? [];
-    final mergedNotes = (merged['notes'] as List<String>?) ?? [];
-    final mergedTasks = (merged['tasks'] as List<Map<String, dynamic>>?) ?? [];
-    final isTapWater = merged['source'] == 'tap_water';
+    final params = _measurements();
+    final acts = _actions();
+    final nts = _notes();
 
-    final hasContent = mergedParams.isNotEmpty || mergedActions.isNotEmpty ||
-        mergedNotes.isNotEmpty || mergedTasks.isNotEmpty;
+    final hasContent = params.isNotEmpty || acts.isNotEmpty || nts.isNotEmpty;
     if (!hasContent) return const SizedBox.shrink();
 
     return Card(
@@ -9450,27 +9500,22 @@ class _MergedDayCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 // Measurements
-                if (mergedParams.isNotEmpty) ...[
+                if (params.isNotEmpty) ...[
                   const SizedBox(height: 12),
-                  Row(
+                  const Row(
                     children: [
-                      Icon(
-                        isTapWater ? Icons.water_drop_outlined : Icons.straighten,
-                        size: 15, color: Colors.black87,
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        isTapWater ? 'TAP WATER' : 'MEASUREMENTS',
-                        style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
-                            color: Colors.black, letterSpacing: 0.8),
-                      ),
+                      Icon(Icons.straighten, size: 15, color: Colors.black87),
+                      SizedBox(width: 4),
+                      Text('MEASUREMENTS',
+                        style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
+                            color: Colors.black, letterSpacing: 0.8)),
                     ],
                   ),
                   const SizedBox(height: 6),
                   Wrap(
                     spacing: 6,
                     runSpacing: 6,
-                    children: mergedParams.entries.map((e) {
+                    children: params.entries.map((e) {
                       final canonical = _paramAliases[e.key.toLowerCase()];
                       final bgColor = (canonical != null ? _paramColors[canonical] : null) ?? _cMint;
                       final textColor = bgColor.computeLuminance() < 0.35 ? Colors.white : Colors.black;
@@ -9499,7 +9544,7 @@ class _MergedDayCard extends StatelessWidget {
                   ),
                 ],
                 // Actions
-                if (mergedActions.isNotEmpty) ...[
+                if (acts.isNotEmpty) ...[
                   const SizedBox(height: 12),
                   const Row(
                     children: [
@@ -9511,7 +9556,7 @@ class _MergedDayCard extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 6),
-                  ...mergedActions.map((a) => Padding(
+                  ...acts.map((a) => Padding(
                     padding: const EdgeInsets.only(top: 4),
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -9527,7 +9572,7 @@ class _MergedDayCard extends StatelessWidget {
                   )),
                 ],
                 // Notes
-                if (mergedNotes.isNotEmpty) ...[
+                if (nts.isNotEmpty) ...[
                   const SizedBox(height: 12),
                   const Row(
                     children: [
@@ -9539,7 +9584,7 @@ class _MergedDayCard extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 6),
-                  ...mergedNotes.map((n) => Padding(
+                  ...nts.map((n) => Padding(
                     padding: const EdgeInsets.only(top: 4),
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -9554,41 +9599,6 @@ class _MergedDayCard extends StatelessWidget {
                     ),
                   )),
                 ],
-                // Tasks
-                if (mergedTasks.isNotEmpty) ...[
-                  const SizedBox(height: 12),
-                  const Row(
-                    children: [
-                      Icon(Icons.task_alt, size: 15, color: Colors.black87),
-                      SizedBox(width: 4),
-                      Text('TASKS',
-                          style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
-                              color: Colors.black, letterSpacing: 0.8)),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  ...mergedTasks.map((t) {
-                    final desc = (t['description'] ?? '').toString();
-                    final due = (t['due_date'] ?? t['due'] ?? '').toString();
-                    return Padding(
-                      padding: const EdgeInsets.only(top: 4),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Padding(
-                            padding: EdgeInsets.only(top: 5),
-                            child: _Dot(color: Colors.orange),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(child: Text(
-                            due.isNotEmpty ? '$desc (due $due)' : desc,
-                            style: const TextStyle(fontSize: 13, height: 1.4),
-                          )),
-                        ],
-                      ),
-                    );
-                  }),
-                ],
               ],
             ),
           ),
@@ -9601,25 +9611,28 @@ class _MergedDayCard extends StatelessWidget {
               iconColor: _cMid,
               onSelected: (value) async {
                 if (value == 'edit') {
-                  final mergedParsed = _buildMerged();
-                  final mergedRaw = logs.map((l) => l.rawText).join('\n');
+                  final editParsed = <String, dynamic>{
+                    'measurements': params,
+                    'actions': acts,
+                    'notes': nts,
+                  };
                   final saved = await showModalBottomSheet<bool>(
                     context: context,
                     isScrollControlled: true,
                     backgroundColor: Colors.transparent,
                     builder: (_) => _LogEditSheet(
-                      parsed: mergedParsed,
-                      rawText: mergedRaw,
+                      parsed: editParsed,
+                      rawText: '',
                       onSave: _saveEdits,
                     ),
                   );
                   if (saved == true && context.mounted) {
-                    _showTopSnack(context, 'Log updated');
+                    _showTopSnack(context, 'Journal updated');
                   }
                 }
                 if (value == 'delete') {
-                  for (final log in logs) {
-                    await TankStore.instance.deleteLog(log.id);
+                  for (final entry in entries) {
+                    await TankStore.instance.deleteJournalEntry(entry.id);
                   }
                   await onChanged();
                 }
@@ -11395,15 +11408,14 @@ class _SpeciesPickerSheetState extends State<_SpeciesPickerSheet> {
 // ─────────────────────────────────────────────
 class DailyLogsScreen extends StatefulWidget {
   final TankModel tank;
-  final List<db.Log> logs;
+  final List<db.Log> logs; // kept for backward compat; screen loads journal internally
   const DailyLogsScreen({super.key, required this.tank, required this.logs});
   @override
   State<DailyLogsScreen> createState() => _DailyLogsScreenState();
 }
 
 class _DailyLogsScreenState extends State<DailyLogsScreen> {
-  static const _baseUrl = _kBaseUrl;
-  late List<db.Log> _logs;
+  List<db.JournalEntry> _journal = [];
   late Set<String> _collapsedDays;
 
   static const _months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -11412,14 +11424,18 @@ class _DailyLogsScreenState extends State<DailyLogsScreen> {
   @override
   void initState() {
     super.initState();
-    _logs = widget.logs;
     _collapsedDays = {};
     _reload();
   }
 
   Future<void> _reload() async {
-    final fresh = await TankStore.instance.logsFor(widget.tank.id);
-    if (mounted) setState(() => _logs = fresh);
+    final fresh = await TankStore.instance.journalFor(widget.tank.id);
+    if (mounted) setState(() => _journal = fresh);
+  }
+
+  String _todayKey() {
+    final d = DateTime.now();
+    return '${d.year}-${d.month.toString().padLeft(2,'0')}-${d.day.toString().padLeft(2,'0')}';
   }
 
   Future<void> _showAddNoteDialog() async {
@@ -11434,13 +11450,29 @@ class _DailyLogsScreenState extends State<DailyLogsScreen> {
       builder: (_) => _AddNoteSheet(tankName: widget.tank.name),
     );
     if (noteText != null && noteText.isNotEmpty && mounted) {
+      final date = _todayKey();
+      // Merge with existing notes for today
+      final existing = await TankStore.instance.journalForDate(widget.tank.id, date);
+      final noteEntry = existing.where((e) => e.category == 'notes').toList();
+      List<String> notes = [];
+      if (noteEntry.isNotEmpty) {
+        try { notes = (jsonDecode(noteEntry.first.data) as List).cast<String>(); } catch (_) {}
+      }
+      if (!notes.contains(noteText)) notes.add(noteText);
+      await TankStore.instance.upsertJournal(
+        tankId: widget.tank.id,
+        date: date,
+        category: 'notes',
+        data: jsonEncode(notes),
+      );
+      // Also save to logs (audit trail)
       await TankStore.instance.addLog(
         tankId: widget.tank.id,
         rawText: noteText,
         parsedJson: jsonEncode({'source': 'manual_note', 'notes': [noteText]}),
       );
       await _reload();
-      _showTopSnack(context, 'Note saved');
+      if (mounted) _showTopSnack(context, 'Note saved');
     }
   }
 
@@ -11454,20 +11486,35 @@ class _DailyLogsScreenState extends State<DailyLogsScreen> {
       builder: (_) => _AddMeasurementSheet(tankName: widget.tank.name),
     );
     if (result != null && result.isNotEmpty && mounted) {
-      final parsedJson = jsonEncode({
-        'measurements': result,
-        'actions': <String>[],
-        'notes': <String>[],
-        'tasks': <dynamic>[],
-      });
+      final date = _todayKey();
+      // Merge with existing measurements for today
+      final existing = await TankStore.instance.journalForDate(widget.tank.id, date);
+      final measEntry = existing.where((e) => e.category == 'measurements').toList();
+      Map<String, dynamic> measurements = {};
+      if (measEntry.isNotEmpty) {
+        try { measurements = Map<String, dynamic>.from(jsonDecode(measEntry.first.data) as Map); } catch (_) {}
+      }
+      measurements.addAll(result);
+      await TankStore.instance.upsertJournal(
+        tankId: widget.tank.id,
+        date: date,
+        category: 'measurements',
+        data: jsonEncode(measurements),
+      );
+      // Also save to logs (audit trail)
       final parts = result.entries.map((e) => '${_paramShortLabel(e.key)}: ${e.value}').join(', ');
       await TankStore.instance.addLog(
         tankId: widget.tank.id,
         rawText: parts,
-        parsedJson: parsedJson,
+        parsedJson: jsonEncode({
+          'measurements': result,
+          'actions': <String>[],
+          'notes': <String>[],
+          'tasks': <dynamic>[],
+        }),
       );
       await _reload();
-      _showTopSnack(context, 'Measurement saved');
+      if (mounted) _showTopSnack(context, 'Measurement saved');
     }
   }
 
@@ -11505,27 +11552,24 @@ class _DailyLogsScreenState extends State<DailyLogsScreen> {
           repeatDays: result.repeatDays,
         );
       }
+      // Save action to journal
+      final date = _todayKey();
+      final existing = await TankStore.instance.journalForDate(widget.tank.id, date);
+      final actEntry = existing.where((e) => e.category == 'actions').toList();
+      List<String> actions = [];
+      if (actEntry.isNotEmpty) {
+        try { actions = (jsonDecode(actEntry.first.data) as List).cast<String>(); } catch (_) {}
+      }
+      if (!actions.contains(result.desc)) actions.add(result.desc);
+      await TankStore.instance.upsertJournal(
+        tankId: widget.tank.id,
+        date: date,
+        category: 'actions',
+        data: jsonEncode(actions),
+      );
       await _reload();
-      _showTopSnack(context, result.markComplete ? 'Task completed & logged' : 'Task added');
+      if (mounted) _showTopSnack(context, result.markComplete ? 'Task completed & logged' : 'Task added');
     }
-  }
-
-  String _dayKey(db.Log l) {
-    // Prefer the explicit date from parsedJson (e.g. CSV imports) over createdAt
-    if (l.parsedJson != null) {
-      try {
-        final p = jsonDecode(l.parsedJson!);
-        if (p is Map && p['date'] is String) {
-          final dt = DateTime.tryParse(p['date']);
-          if (dt != null) {
-            final d = dt.toLocal();
-            return '${d.year}-${d.month.toString().padLeft(2,'0')}-${d.day.toString().padLeft(2,'0')}';
-          }
-        }
-      } catch (_) {}
-    }
-    final d = l.createdAt.toLocal();
-    return '${d.year}-${d.month.toString().padLeft(2,'0')}-${d.day.toString().padLeft(2,'0')}';
   }
 
   String _dayLabel(DateTime dt) {
@@ -11538,28 +11582,17 @@ class _DailyLogsScreenState extends State<DailyLogsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // build grouped flat list — one merged card per day
-    final groups = <String, List<db.Log>>{};
-    for (final log in _logs) { groups.putIfAbsent(_dayKey(log), () => []).add(log); }
+    // Group journal entries by date
+    final groups = <String, List<db.JournalEntry>>{};
+    for (final entry in _journal) {
+      groups.putIfAbsent(entry.date, () => []).add(entry);
+    }
     final sortedKeys = groups.keys.toList()..sort((a, b) => b.compareTo(a));
-    // items: String = day header, List<db.Log> = merged day group
+    // items: String = day header, List<db.JournalEntry> = entries for that day
     final items = <Object>[];
     for (final key in sortedKeys) {
       items.add(key);
       if (!_collapsedDays.contains(key)) items.add(groups[key]!);
-    }
-    final dayCounts = <String, int>{};
-    for (final e in groups.entries) {
-      dayCounts[e.key] = e.value.where((log) {
-        if (log.parsedJson == null) return log.rawText.isNotEmpty;
-        try {
-          final p = jsonDecode(log.parsedJson!) as Map;
-          return (p['measurements'] as Map?)?.isNotEmpty == true ||
-              (p['actions'] as List?)?.isNotEmpty == true ||
-              (p['notes'] as List?)?.isNotEmpty == true ||
-              (p['tasks'] as List?)?.isNotEmpty == true;
-        } catch (_) { return false; }
-      }).length;
     }
 
     return Scaffold(
@@ -11586,7 +11619,7 @@ class _DailyLogsScreenState extends State<DailyLogsScreen> {
               children: [
                 Expanded(
                   child: Text(
-                    '${widget.tank.name} — Log History',
+                    '${widget.tank.name} — Journal',
                     style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: _cDark),
                   ),
                 ),
@@ -11594,15 +11627,9 @@ class _DailyLogsScreenState extends State<DailyLogsScreen> {
                   icon: const Icon(Icons.more_vert, size: 22),
                   tooltip: 'More options',
                   onSelected: (value) {
-                    if (value == 'add_measurement') {
-                      _showAddMeasurementDialog();
-                    }
-                    if (value == 'add_task') {
-                      _showAddTaskDialog();
-                    }
-                    if (value == 'add_note') {
-                      _showAddNoteDialog();
-                    }
+                    if (value == 'add_measurement') _showAddMeasurementDialog();
+                    if (value == 'add_task') _showAddTaskDialog();
+                    if (value == 'add_note') _showAddNoteDialog();
                     if (value == 'import_csv') {
                       Navigator.of(context).push(MaterialPageRoute(
                         builder: (_) => _CsvImportScreen(tank: widget.tank),
@@ -11620,8 +11647,8 @@ class _DailyLogsScreenState extends State<DailyLogsScreen> {
             ),
           ),
           Expanded(
-            child: _logs.isEmpty
-          ? const Center(child: Text('No log entries yet.', style: TextStyle(color: Colors.grey)))
+            child: _journal.isEmpty
+          ? const Center(child: Text('No journal entries yet.', style: TextStyle(color: Colors.grey)))
           : RefreshIndicator(
               onRefresh: () async {
                 if (SupabaseService.isLoggedIn) await TankStore.instance.pullFromCloud();
@@ -11635,8 +11662,8 @@ class _DailyLogsScreenState extends State<DailyLogsScreen> {
                 if (item is String) {
                   final key = item;
                   final isCollapsed = _collapsedDays.contains(key);
-                  final count = dayCounts[key] ?? 0;
-                  if (count == 0) return const SizedBox.shrink();
+                  final entryCount = groups[key]?.length ?? 0;
+                  if (entryCount == 0) return const SizedBox.shrink();
                   final parts = key.split('-');
                   final dt = DateTime(int.parse(parts[0]), int.parse(parts[1]), int.parse(parts[2]));
                   return InkWell(
@@ -11650,15 +11677,15 @@ class _DailyLogsScreenState extends State<DailyLogsScreen> {
                         Icon(isCollapsed ? Icons.chevron_right : Icons.expand_more, size: 18, color: _cDark),
                         const SizedBox(width: 4),
                         Text(_dayLabel(dt), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _cDark)),
-                        const SizedBox(width: 6),
-                        Text('$count ${count == 1 ? "entry" : "entries"}', style: const TextStyle(fontSize: 12, color: Color(0xFF757575))),
                       ]),
                     ),
                   );
                 }
-                if (item is List<db.Log>) {
-                  return _MergedDayCard(
-                    logs: item,
+                if (item is List<db.JournalEntry>) {
+                  return _JournalDayCard(
+                    tankId: widget.tank.id,
+                    date: item.first.date,
+                    entries: item,
                     onChanged: _reload,
                   );
                 }

@@ -108,6 +108,22 @@ class Tasks extends Table {
       ];
 }
 
+class JournalEntries extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  IntColumn get cloudId => integer().nullable()();
+  TextColumn get tankId => text()();
+  TextColumn get date => text()(); // YYYY-MM-DD
+  TextColumn get category => text()(); // 'measurements', 'actions', 'notes'
+  TextColumn get data => text()(); // JSON (object for measurements, array for actions/notes)
+  DateTimeColumn get updatedAt => dateTime()();
+
+  @override
+  List<String> get customConstraints => [
+        'FOREIGN KEY(tank_id) REFERENCES tanks(id) ON DELETE CASCADE',
+        'UNIQUE(tank_id, date, category)',
+      ];
+}
+
 class ChatSessions extends Table {
   IntColumn get id => integer().autoIncrement()();
   TextColumn get tankId => text().nullable()();
@@ -117,12 +133,12 @@ class ChatSessions extends Table {
       dateTime().withDefault(Constant(DateTime.now()))();
 }
 
-@DriftDatabase(tables: [Tanks, Inhabitants, Plants, Logs, TankPhotos, Tasks, ChatSessions])
+@DriftDatabase(tables: [Tanks, Inhabitants, Plants, Logs, TankPhotos, Tasks, JournalEntries, ChatSessions])
 class AppDb extends _$AppDb {
   AppDb() : super(_openConnection());
 
   @override
-  int get schemaVersion => 16;
+  int get schemaVersion => 17;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -200,6 +216,9 @@ class AppDb extends _$AppDb {
           }
           if (from <= 15) {
             await migrator.addColumn(logs, logs.cloudId);
+          }
+          if (from <= 16) {
+            await migrator.createTable(journalEntries);
           }
         },
       );
@@ -581,6 +600,83 @@ class AppDb extends _$AppDb {
     return removed;
   }
 
+  // ---------- Journal Entries ----------
+  Future<List<JournalEntry>> journalForTank(String tankId) {
+    return (select(journalEntries)
+          ..where((r) => r.tankId.equals(tankId))
+          ..orderBy([
+            (r) => OrderingTerm.desc(r.date),
+            (r) => OrderingTerm.asc(r.category),
+          ]))
+        .get();
+  }
+
+  Future<List<JournalEntry>> journalForTankOnDate(String tankId, String date) {
+    return (select(journalEntries)
+          ..where((r) => r.tankId.equals(tankId) & r.date.equals(date)))
+        .get();
+  }
+
+  /// Upsert a journal entry by (tankId, date, category).
+  /// Returns the local row ID.
+  Future<int> upsertJournalEntry({
+    required String tankId,
+    required String date,
+    required String category,
+    required String data,
+    int? cloudId,
+  }) async {
+    final now = DateTime.now();
+    final existing = await (select(journalEntries)
+          ..where((r) =>
+              r.tankId.equals(tankId) &
+              r.date.equals(date) &
+              r.category.equals(category)))
+        .get();
+    if (existing.isEmpty) {
+      return into(journalEntries).insert(JournalEntriesCompanion.insert(
+        tankId: tankId,
+        date: date,
+        category: category,
+        data: data,
+        updatedAt: now,
+        cloudId: Value(cloudId),
+      ));
+    } else {
+      final row = existing.first;
+      await (update(journalEntries)..where((r) => r.id.equals(row.id))).write(
+        JournalEntriesCompanion(
+          data: Value(data),
+          updatedAt: Value(now),
+          cloudId: Value(cloudId ?? row.cloudId),
+        ),
+      );
+      return row.id;
+    }
+  }
+
+  Future<JournalEntry?> getJournalEntryById(int id) async {
+    final rows = await (select(journalEntries)..where((r) => r.id.equals(id))).get();
+    return rows.isEmpty ? null : rows.first;
+  }
+
+  Future<void> setJournalCloudId(int localId, int cloudId) async {
+    await (update(journalEntries)..where((r) => r.id.equals(localId))).write(
+      JournalEntriesCompanion(cloudId: Value(cloudId)),
+    );
+  }
+
+  Future<void> deleteJournalEntry(int id) async {
+    await (delete(journalEntries)..where((r) => r.id.equals(id))).go();
+  }
+
+  Future<void> deleteJournalByKey(String tankId, String date, String category) async {
+    await (delete(journalEntries)..where((r) =>
+        r.tankId.equals(tankId) &
+        r.date.equals(date) &
+        r.category.equals(category))).go();
+  }
+
   // ---------- Deleted log tombstones ----------
   /// Record a tombstone so pullFromCloud won't re-insert this log.
   Future<void> insertDeletedLogKey(String tankId, DateTime createdAt) async {
@@ -657,6 +753,7 @@ class AppDb extends _$AppDb {
   Future<void> clearAll() async {
     await delete(chatSessions).go();
     await delete(tasks).go();
+    await delete(journalEntries).go();
     await delete(logs).go();
     await delete(inhabitants).go();
     await delete(plants).go();
