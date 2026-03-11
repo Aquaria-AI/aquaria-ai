@@ -107,21 +107,26 @@ class TankStore {
           await _db.replacePlantsForTank(tankId, rows);
         }
 
-        // Logs — replace local logs with cloud data (cloud wins)
+        // Logs — merge cloud into local (add-only, never delete local data)
         final cloudLogMap = (data['logs'] as Map?) ?? {};
         final cloudLogs = (cloudLogMap[tankId] as List?) ?? [];
-        if (cloudLogs.isNotEmpty) {
-          await _db.replaceLogsForTank(tankId, cloudLogs.map((l) {
-            final lm = l as Map<String, dynamic>;
-            return db.LogsCompanion.insert(
+        int inserted = 0;
+        for (final l in cloudLogs) {
+          final lm = l as Map<String, dynamic>;
+          final createdAt = DateTime.parse(lm['created_at'] as String);
+          final exists = await _db.logExistsForTankAt(tankId, createdAt);
+          if (!exists) {
+            await _db.insertLog(db.LogsCompanion.insert(
               tankId: tankId,
               rawText: lm['raw_text'] as String,
               parsedJson: Value(lm['parsed_json'] as String?),
-              createdAt: Value(DateTime.parse(lm['created_at'] as String)),
-            );
-          }).toList());
+              createdAt: Value(createdAt),
+            ));
+            inserted++;
+          }
         }
-        debugPrint('[CloudSync] Tank $tankId: replaced with ${cloudLogs.length} cloud logs');
+        debugPrint('[CloudSync] Tank $tankId: ${cloudLogs.length} cloud, inserted $inserted new');
+        await _db.deduplicateLogsForTank(tankId);
       }
 
       // Dismissed tasks (legacy)
@@ -786,12 +791,19 @@ class TankStore {
         createdAt: Value(ts),
       ),
     );
-    _cloudSync(() => SupabaseService.insertLog(
-      tankId: tankId,
-      rawText: rawText,
-      parsedJson: parsedJson,
-      createdAt: ts,
-    ));
+    // Await cloud insert — NOT fire-and-forget, so data reaches Supabase
+    try {
+      if (SupabaseService.isLoggedIn) {
+        await SupabaseService.insertLog(
+          tankId: tankId,
+          rawText: rawText,
+          parsedJson: parsedJson,
+          createdAt: ts,
+        );
+      }
+    } catch (e) {
+      debugPrint('[CloudSync] addLog cloud insert failed: $e');
+    }
   }
 
   Future<db.Log?> logForTodayForTank(String tankId) {
@@ -806,7 +818,13 @@ class TankStore {
     final log = await _db.getLogById(id);
     await _db.updateLog(id, rawText, parsedJson);
     if (log != null) {
-      _cloudSync(() => SupabaseService.updateLogByKey(log.tankId, log.createdAt, rawText, parsedJson));
+      try {
+        if (SupabaseService.isLoggedIn) {
+          await SupabaseService.updateLogByKey(log.tankId, log.createdAt, rawText, parsedJson);
+        }
+      } catch (e) {
+        debugPrint('[CloudSync] updateLog cloud failed: $e');
+      }
     }
   }
 
