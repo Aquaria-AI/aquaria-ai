@@ -1261,6 +1261,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           measurements[e.value] = val ?? raw;
         }
         if (measurements.isEmpty) continue;
+        final csvDate = '${logDate.year}-${logDate.month.toString().padLeft(2,'0')}-${logDate.day.toString().padLeft(2,'0')}';
         await TankStore.instance.addLog(
           tankId: tankId,
           rawText: 'CSV import',
@@ -1270,9 +1271,23 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             'actions': <String>[],
             'notes': <String>[],
             'tasks': <Map>[],
-            'date': logDate.toIso8601String().substring(0, 10),
+            'date': csvDate,
           }),
           date: logDate,
+        );
+        // Write to journal
+        final existing = await TankStore.instance.journalForDate(tankId, csvDate);
+        final measEntry = existing.where((e) => e.category == 'measurements').toList();
+        Map<String, dynamic> merged = {};
+        if (measEntry.isNotEmpty) {
+          try { merged = Map<String, dynamic>.from(jsonDecode(measEntry.first.data) as Map); } catch (_) {}
+        }
+        merged.addAll(measurements);
+        await TankStore.instance.upsertJournal(
+          tankId: tankId,
+          date: csvDate,
+          category: 'measurements',
+          data: jsonEncode(merged),
         );
       }
     } catch (_) {}
@@ -6450,6 +6465,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
 
   late TankModel _tank;
   List<db.Log> _logs = [];
+  List<db.JournalEntry> _journal = [];
   List<db.Inhabitant> _inhabitants = [];
   List<db.Plant> _plants = [];
   List<db.Task> _tasks = [];
@@ -6620,6 +6636,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
 
   Future<void> _load() async {
     final logs = await TankStore.instance.logsFor(_tank.id);
+    final journal = await TankStore.instance.journalFor(_tank.id);
     final inhabitants = await TankStore.instance.inhabitantsFor(_tank.id);
     final plants = await TankStore.instance.plantsFor(_tank.id);
     final tasks = await TankStore.instance.tasksForTank(_tank.id);
@@ -6632,6 +6649,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
     setState(() {
       if (updatedTank != null) _tank = updatedTank;
       _logs = logs;
+      _journal = journal;
       _inhabitants = inhabitants;
       _plants = plants;
       _tasks = tasks;
@@ -6640,7 +6658,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
   }
 
   Future<void> _loadSummary() async {
-    if (_logs.isEmpty) return;
+    if (_journal.isEmpty) return;
 
     // Use cached summary if logs haven't changed and cache is fresh
     final cached = TankStore.instance.getCachedSummary(_tank.id, _logs);
@@ -6651,25 +6669,31 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
 
     setState(() => _summaryLoading = true);
     try {
-      final logsData = _logs.take(10).map((l) {
-        var text = l.rawText;
-        // Reconstruct readable text from parsedJson when rawText is a placeholder
-        if (l.parsedJson != null && (text.isEmpty || text.trim().toLowerCase() == 'csv import')) {
+      // Build summary data from journal entries (grouped by date)
+      final byDate = <String, List<db.JournalEntry>>{};
+      for (final j in _journal) {
+        byDate.putIfAbsent(j.date, () => []).add(j);
+      }
+      final sortedDates = byDate.keys.toList()..sort((a, b) => b.compareTo(a));
+      final logsData = sortedDates.take(10).map((date) {
+        final entries = byDate[date]!;
+        final parts = <String>[];
+        parts.add('Date: $date');
+        for (final e in entries) {
           try {
-            final parsed = jsonDecode(l.parsedJson!) as Map<String, dynamic>;
-            final parts = <String>[];
-            if (parsed['date'] is String) parts.add('Date: ${parsed['date']}');
-            if (parsed['measurements'] is Map) {
-              parts.add('Measurements: ${(parsed['measurements'] as Map).entries.map((e) => '${e.key}=${e.value}').join(', ')}');
+            if (e.category == 'measurements') {
+              final m = (jsonDecode(e.data) as Map).cast<String, dynamic>();
+              parts.add('Measurements: ${m.entries.map((kv) => '${kv.key}=${kv.value}').join(', ')}');
+            } else if (e.category == 'actions') {
+              final a = (jsonDecode(e.data) as List).cast<String>();
+              if (a.isNotEmpty) parts.add('Actions: ${a.join('; ')}');
+            } else if (e.category == 'notes') {
+              final n = (jsonDecode(e.data) as List).cast<String>();
+              if (n.isNotEmpty) parts.add('Notes: ${n.join('; ')}');
             }
-            if (parsed['actions'] is List) parts.add('Actions: ${(parsed['actions'] as List).join('; ')}');
-            if (parsed['notes'] is List) parts.add('Notes: ${(parsed['notes'] as List).join('; ')}');
-            if (parts.isNotEmpty) text = parts.join(' | ');
           } catch (_) {}
         }
-        final map = <String, dynamic>{'text': text};
-        if (l.parsedJson != null) map['parsed'] = l.parsedJson;
-        return map;
+        return <String, dynamic>{'text': parts.join(' | ')};
       }).toList();
       final resp = await http
           .post(
@@ -6703,28 +6727,28 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
     if (mounted) setState(() => _summaryLoading = false);
   }
 
-  /// Most recent value + date for each known parameter across all logs.
-  /// Returns {canonical → (value, logDate, deduced)} in preferred display order.
+  /// Most recent value + date for each known parameter from journal entries.
+  /// Returns {canonical → (value, date, deduced)} in preferred display order.
   Map<String, ({String value, DateTime date, bool deduced})> _latestMeasurements() {
     const order = ['ammonia', 'nitrite', 'nitrate', 'ph', 'kh', 'gh',
                    'phosphate', 'potassium', 'calcium', 'magnesium', 'ca_mg_ratio', 'co2', 'temp', 'salinity'];
     final raw = <String, ({String value, DateTime date, bool deduced})>{};
     final twoWeeksAgo = DateTime.now().subtract(const Duration(days: 14));
-    // _logs is newest-first; reversed = oldest-first so later writes win (newest)
-    for (final log in _logs.reversed) {
-      if (log.createdAt.isBefore(twoWeeksAgo)) continue;
-      if (log.parsedJson == null) continue;
+    final twoWeeksKey = '${twoWeeksAgo.year}-${twoWeeksAgo.month.toString().padLeft(2,'0')}-${twoWeeksAgo.day.toString().padLeft(2,'0')}';
+
+    // Journal measurement entries, oldest-first so newer dates overwrite
+    final measEntries = _journal.where((j) =>
+        j.category == 'measurements' && j.date.compareTo(twoWeeksKey) >= 0).toList()
+      ..sort((a, b) => a.date.compareTo(b.date)); // oldest first
+
+    for (final entry in measEntries) {
       try {
-        final parsed = jsonDecode(log.parsedJson!);
-        if (parsed is! Map) continue;
-        // Skip tap water logs — they shouldn't affect tank measurements
-        if (parsed['source'] == 'tap_water') continue;
-        final m = (parsed['measurements'] as Map?)?.cast<String, dynamic>() ?? {};
-        final logDate = DateTime(log.createdAt.toLocal().year,
-            log.createdAt.toLocal().month, log.createdAt.toLocal().day);
+        final m = (jsonDecode(entry.data) as Map).cast<String, dynamic>();
+        final parts = entry.date.split('-');
+        final entryDate = DateTime(int.parse(parts[0]), int.parse(parts[1]), int.parse(parts[2]));
         for (final e in m.entries) {
           final canonical = _paramAliases[e.key.toLowerCase()];
-          if (canonical != null) raw[canonical] = (value: e.value.toString(), date: logDate, deduced: false);
+          if (canonical != null) raw[canonical] = (value: e.value.toString(), date: entryDate, deduced: false);
         }
       } catch (_) {}
     }
@@ -7576,20 +7600,19 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
           // Actions last two weeks card
           Builder(builder: (context) {
             final twoWeeksAgo = DateTime.now().subtract(const Duration(days: 14));
+            final twoWeeksKey = '${twoWeeksAgo.year}-${twoWeeksAgo.month.toString().padLeft(2,'0')}-${twoWeeksAgo.day.toString().padLeft(2,'0')}';
             final recentActions = <({String action, DateTime date})>[];
-            for (final log in _logs) {
-              if (log.createdAt.isBefore(twoWeeksAgo)) continue;
-              if (log.parsedJson == null) continue;
+            for (final entry in _journal) {
+              if (entry.category != 'actions') continue;
+              if (entry.date.compareTo(twoWeeksKey) < 0) continue;
               try {
-                final parsed = jsonDecode(log.parsedJson!);
-                if (parsed is! Map) continue;
-                final actions = parsed['actions'];
-                if (actions is List) {
-                  for (final a in actions) {
-                    final text = a.toString().trim();
-                    if (text.isNotEmpty) {
-                      recentActions.add((action: text, date: log.createdAt));
-                    }
+                final actions = (jsonDecode(entry.data) as List).cast<String>();
+                final parts = entry.date.split('-');
+                final entryDate = DateTime(int.parse(parts[0]), int.parse(parts[1]), int.parse(parts[2]));
+                for (final a in actions) {
+                  final text = a.trim();
+                  if (text.isNotEmpty) {
+                    recentActions.add((action: text, date: entryDate));
                   }
                 }
               } catch (_) {}
@@ -10824,6 +10847,22 @@ class _CsvImportScreenState extends State<_CsvImportScreen> {
         rawText: 'CSV import',
         parsedJson: parsedJson,
         date: logDate,
+      );
+      // Also write to journal for the curated view
+      final journalDate = '${logDate.year}-${logDate.month.toString().padLeft(2,'0')}-${logDate.day.toString().padLeft(2,'0')}';
+      // Merge with existing measurements for that date
+      final existing = await TankStore.instance.journalForDate(widget.tank.id, journalDate);
+      final measEntry = existing.where((e) => e.category == 'measurements').toList();
+      Map<String, dynamic> merged = {};
+      if (measEntry.isNotEmpty) {
+        try { merged = Map<String, dynamic>.from(jsonDecode(measEntry.first.data) as Map); } catch (_) {}
+      }
+      merged.addAll(measurements);
+      await TankStore.instance.upsertJournal(
+        tankId: widget.tank.id,
+        date: journalDate,
+        category: 'measurements',
+        data: jsonEncode(merged),
       );
       count++;
     }
