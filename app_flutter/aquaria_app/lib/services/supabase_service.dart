@@ -60,7 +60,7 @@ class SupabaseService {
     const iosClientId = '710206253790-4qollfoaeal3bau5rhas3emqn9uhqpd2.apps.googleusercontent.com';
 
     final googleSignIn = GoogleSignIn(
-      clientId: iosClientId,
+      clientId: Platform.isIOS ? iosClientId : null,
       serverClientId: webClientId,
     );
 

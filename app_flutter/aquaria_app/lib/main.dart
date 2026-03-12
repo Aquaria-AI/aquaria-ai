@@ -4526,9 +4526,9 @@ class _TankListScreenState extends State<TankListScreen> {
                                   padding: EdgeInsets.zero,
                                   constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
                                   tooltip: 'Mark complete',
-                                  onPressed: () {
-                                    TankStore.instance.completeTaskById(item.task.id);
-                                    _refresh();
+                                  onPressed: () async {
+                                    await TankStore.instance.completeTaskById(item.task.id);
+                                    await _refresh();
                                     setS(() {});
                                   },
                                 ),
@@ -4554,14 +4554,14 @@ class _TankListScreenState extends State<TankListScreen> {
                                           ),
                                         ],
                                       ),
-                                    ).then((completed) {
+                                    ).then((completed) async {
                                       if (completed == null) return;
                                       if (completed) {
-                                        TankStore.instance.completeTaskById(item.task.id);
+                                        await TankStore.instance.completeTaskById(item.task.id);
                                       } else {
-                                        TankStore.instance.dismissTaskById(item.task.id);
+                                        await TankStore.instance.dismissTaskById(item.task.id);
                                       }
-                                      _refresh();
+                                      await _refresh();
                                       setS(() {});
                                     });
                                   },
