@@ -221,8 +221,11 @@ class _CommunityBadgeIconState extends State<_CommunityBadgeIcon> {
     return IconButton(
       tooltip: 'Community',
       icon: Badge(
-        isLabelVisible: _count > 0,
-        label: Text('$_count', style: const TextStyle(fontSize: 10)),
+        isLabelVisible: true,
+        label: _count > 0
+            ? Text('$_count', style: const TextStyle(fontSize: 10))
+            : const Text('New', style: TextStyle(fontSize: 8, fontWeight: FontWeight.w600)),
+        backgroundColor: _count > 0 ? null : const Color(0xFF1FA2A8),
         child: const Icon(Icons.groups_outlined),
       ),
       onPressed: () async {
@@ -4209,6 +4212,7 @@ class _TankListScreenState extends State<TankListScreen> {
         tankId: tank.id,
         rawText: noteText,
         parsedJson: jsonEncode({'source': 'manual_note', 'notes': [noteText]}),
+        date: DateTime.tryParse(date),
       );
       _processNoteForTasks(tank, noteText);
       await _refresh();
@@ -4306,6 +4310,18 @@ class _TankListScreenState extends State<TankListScreen> {
           repeatDays: result.repeatDays,
         );
       }
+      // Save action to journal
+      final date = result.dueDate ?? '${DateTime.now().year}-${DateTime.now().month.toString().padLeft(2, '0')}-${DateTime.now().day.toString().padLeft(2, '0')}';
+      final existing = await TankStore.instance.journalForDate(tank.id, date);
+      final actEntry = existing.where((e) => e.category == 'actions').toList();
+      List<String> actions = [];
+      if (actEntry.isNotEmpty) {
+        try { actions = (jsonDecode(actEntry.first.data) as List).cast<String>(); } catch (_) {}
+      }
+      if (!actions.contains(result.desc)) actions.add(result.desc);
+      await TankStore.instance.upsertJournal(
+        tankId: tank.id, date: date, category: 'actions', data: jsonEncode(actions),
+      );
       await _refresh();
       _showTopSnack(context, result.markComplete ? 'Task completed & logged' : 'Task added');
     }
@@ -4347,6 +4363,7 @@ class _TankListScreenState extends State<TankListScreen> {
         tankId: tank.id,
         rawText: parts,
         parsedJson: parsedJson,
+        date: DateTime.tryParse(date),
       );
       await _refresh();
       _showTopSnack(context, 'Measurement saved');
@@ -4719,6 +4736,15 @@ class _TankListScreenState extends State<TankListScreen> {
                                                   style: const TextStyle(fontSize: 14, color: Colors.black87),
                                                 ),
                                               ),
+                                              Container(
+                                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                                decoration: BoxDecoration(
+                                                  color: const Color(0xFF1FA2A8),
+                                                  borderRadius: BorderRadius.circular(8),
+                                                ),
+                                                child: const Text('New', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: Colors.white)),
+                                              ),
+                                              const SizedBox(width: 4),
                                               const Icon(Icons.chevron_right, color: Colors.grey, size: 20),
                                             ],
                                           ),
@@ -6581,6 +6607,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
         tankId: _tank.id,
         rawText: noteText,
         parsedJson: jsonEncode({'source': 'manual_note', 'notes': [noteText]}),
+        date: DateTime.tryParse(date),
       );
       _processNoteForTasks(noteText);
       await _load();
@@ -6678,6 +6705,18 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
           repeatDays: result.repeatDays,
         );
       }
+      // Save action to journal
+      final date = result.dueDate ?? '${DateTime.now().year}-${DateTime.now().month.toString().padLeft(2, '0')}-${DateTime.now().day.toString().padLeft(2, '0')}';
+      final existing = await TankStore.instance.journalForDate(_tank.id, date);
+      final actEntry = existing.where((e) => e.category == 'actions').toList();
+      List<String> actions = [];
+      if (actEntry.isNotEmpty) {
+        try { actions = (jsonDecode(actEntry.first.data) as List).cast<String>(); } catch (_) {}
+      }
+      if (!actions.contains(result.desc)) actions.add(result.desc);
+      await TankStore.instance.upsertJournal(
+        tankId: _tank.id, date: date, category: 'actions', data: jsonEncode(actions),
+      );
       await _load();
       _showTopSnack(context, result.markComplete ? 'Task completed & logged' : 'Task added');
     }
@@ -6719,6 +6758,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
         tankId: _tank.id,
         rawText: parts,
         parsedJson: parsedJson,
+        date: DateTime.tryParse(date),
       );
       await _load();
       if (mounted) _showTopSnack(context, 'Measurement saved');
@@ -6751,8 +6791,8 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
   Future<void> _loadSummary() async {
     if (_journal.isEmpty) return;
 
-    // Use cached summary if logs haven't changed and cache is fresh
-    final cached = TankStore.instance.getCachedSummary(_tank.id, _logs);
+    // Use cached summary if journal hasn't changed and cache is fresh (6 days)
+    final cached = TankStore.instance.getCachedSummary(_tank.id, _journal);
     if (cached != null) {
       if (mounted) setState(() { _summary = cached.text; _summaryExpanded = false; });
       return;
@@ -6809,7 +6849,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
             lower.contains('nothing logged') ||
             lower.contains('no information');
         final text = isEmpty ? null : raw;
-        if (text != null) TankStore.instance.cacheSummary(_tank.id, text, _logs);
+        if (text != null) TankStore.instance.cacheSummary(_tank.id, text, _journal);
         setState(() { _summary = text; _summaryExpanded = false; });
       }
     } catch (e) {
@@ -11658,6 +11698,7 @@ class _DailyLogsScreenState extends State<DailyLogsScreen> {
         tankId: widget.tank.id,
         rawText: noteText,
         parsedJson: jsonEncode({'source': 'manual_note', 'notes': [noteText]}),
+        date: DateTime.tryParse(date),
       );
       await _reload();
       if (mounted) _showTopSnack(context, 'Note saved');
@@ -11700,6 +11741,7 @@ class _DailyLogsScreenState extends State<DailyLogsScreen> {
           'notes': <String>[],
           'tasks': <dynamic>[],
         }),
+        date: DateTime.tryParse(date),
       );
       await _reload();
       if (mounted) _showTopSnack(context, 'Measurement saved');
@@ -11741,7 +11783,7 @@ class _DailyLogsScreenState extends State<DailyLogsScreen> {
         );
       }
       // Save action to journal
-      final date = _todayKey();
+      final date = result.dueDate ?? _todayKey();
       final existing = await TankStore.instance.journalForDate(widget.tank.id, date);
       final actEntry = existing.where((e) => e.category == 'actions').toList();
       List<String> actions = [];

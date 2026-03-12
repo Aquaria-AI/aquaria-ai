@@ -58,6 +58,7 @@ class _AuthScreenState extends State<AuthScreen> {
   final _passCtrl = TextEditingController();
   bool _isSignUp = false;
   bool _loading = false;
+  bool _showConfirmation = false;
   String? _error;
 
   @override
@@ -81,7 +82,12 @@ class _AuthScreenState extends State<AuthScreen> {
     setState(() { _loading = true; _error = null; });
     try {
       if (_isSignUp) {
-        await SupabaseService.signUpWithEmail(email, pass);
+        final res = await SupabaseService.signUpWithEmail(email, pass);
+        // If no session returned, email confirmation is required
+        if (res.session == null) {
+          setState(() { _showConfirmation = true; _loading = false; });
+          return;
+        }
       } else {
         await SupabaseService.signInWithEmail(email, pass);
       }
@@ -94,9 +100,7 @@ class _AuthScreenState extends State<AuthScreen> {
         widget.onAuthSuccess();
       } else {
         setState(() {
-          _error = _isSignUp
-              ? 'Account created. Please sign in.'
-              : 'Sign in failed. Please try again.';
+          _error = 'Sign in failed. Please try again.';
           _loading = false;
         });
       }
@@ -181,6 +185,44 @@ class _AuthScreenState extends State<AuthScreen> {
     }
   }
 
+  Widget _buildConfirmationView() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Image.asset('assets/images/fulllogo.jpg', width: 180),
+        const SizedBox(height: 24),
+        const Icon(Icons.mark_email_read_outlined, size: 56, color: _cMid),
+        const SizedBox(height: 16),
+        const Text('Check your email', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: _cDark)),
+        const SizedBox(height: 12),
+        Text(
+          'We sent a confirmation link to\n${_emailCtrl.text.trim()}',
+          textAlign: TextAlign.center,
+          style: const TextStyle(fontSize: 14, color: Colors.black54, height: 1.4),
+        ),
+        const SizedBox(height: 8),
+        const Text(
+          'Click the link in your email to activate your account, then come back here to sign in.',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 13, color: Colors.black38),
+        ),
+        const SizedBox(height: 32),
+        SizedBox(
+          width: double.infinity,
+          child: FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: _cDark,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            onPressed: () => setState(() { _showConfirmation = false; _isSignUp = false; _error = null; }),
+            child: const Text('Back to Sign In', style: TextStyle(fontSize: 15)),
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -189,7 +231,7 @@ class _AuthScreenState extends State<AuthScreen> {
         child: Center(
           child: SingleChildScrollView(
             padding: const EdgeInsets.symmetric(horizontal: 32),
-            child: Column(
+            child: _showConfirmation ? _buildConfirmationView() : Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 // Logo

@@ -977,11 +977,15 @@ When it is natural to do so — such as when a user mentions a health concern, a
 - Do not push testing every single reply — only when it's genuinely relevant to the conversation.
 
 TAP WATER PROFILE:
-If a "Tap water profile" is provided in the tank context, use it when giving advice about water parameter adjustments. Examples:
+If a "Tap water profile" is provided in the tank context, you MUST factor it into every response about water chemistry, water changes, or parameter adjustments. Tap water is the baseline — every water change moves tank parameters toward tap water values, not toward zero.
 - If the tap water GH is high (e.g. 15°dH) and the user reports high GH in their tank, advise that their tap water is the likely source and explain that RO water or mixing with softer water is needed to reduce it — not just a water change.
 - If the tap water pH is high (e.g. 8.2) and the user's tank pH is elevated, clarify that water changes will bring pH back toward the tap water level, not lower it.
 - If the tap water has detectable ammonia or nitrates, warn the user and suggest using a water conditioner and testing source water regularly.
-- If no tap water profile is present and it would be helpful, gently suggest the user test their tap water and add the results on the tank details page so advice can be more accurate.
+- If tap water contains phosphate or silicate, mention it when discussing algae problems — these are common algae fuel sources from tap water.
+- If tap water has chlorine or chloramine, always remind about water conditioner when discussing water changes.
+- When the user asks about adjusting any parameter, compare their tank value to their tap water value and explain what a water change will actually do (move it toward tap, not fix it).
+- If the user's tank parameter is already close to their tap water value, explain that water changes alone won't improve it further — they need additives, buffers, or RO water.
+- If no tap water profile is present and the conversation involves water chemistry, gently suggest the user test their tap water and add the results on the tank details page so advice can be more accurate.
 
 CONTINUOUS LEARNING:
 When a tank health profile is provided in the context, use it to give proactive, personalized guidance:
@@ -1377,9 +1381,16 @@ def chat_tank(req: ChatRequest):
     if tap_water and isinstance(tap_water, dict):
         tw_parts = []
         labels = {"ph": "pH", "gh": "GH", "kh": "KH", "ammonia": "Ammonia",
-                  "nitrite": "Nitrite", "nitrate": "Nitrate", "tds": "TDS"}
+                  "nitrite": "Nitrite", "nitrate": "Nitrate", "tds": "TDS",
+                  "phosphate": "Phosphate", "silicate": "Silicate", "copper": "Copper",
+                  "iron": "Iron", "calcium": "Calcium", "magnesium": "Magnesium",
+                  "salinity": "Salinity", "temp": "Temperature", "chlorine": "Chlorine",
+                  "chloramine": "Chloramine", "potassium": "Potassium", "co2": "CO₂"}
         units  = {"gh": "°dH", "kh": "°dH", "ammonia": "ppm", "nitrite": "ppm",
-                  "nitrate": "ppm", "tds": "ppm"}
+                  "nitrate": "ppm", "tds": "ppm", "phosphate": "ppm", "silicate": "ppm",
+                  "copper": "ppm", "iron": "ppm", "calcium": "ppm", "magnesium": "ppm",
+                  "salinity": "ppt", "temp": "°F", "chlorine": "ppm", "chloramine": "ppm",
+                  "potassium": "ppm", "co2": "ppm"}
         for k, v in tap_water.items():
             lbl = labels.get(k, k)
             unit = units.get(k, "")
@@ -1398,9 +1409,10 @@ def chat_tank(req: ChatRequest):
         "1. WATER TYPE: freshwater vs saltwater vs reef vs planted — advice differs dramatically between these.\n"
         "2. INHABITANTS: Which specific fish, invertebrates, corals are in the tank. Tailor advice to their needs and sensitivities.\n"
         "3. PLANTS: Whether the tank has live plants and which species. Planted tanks have different parameter priorities.\n"
-        "4. RECENT MEASUREMENTS & OBSERVATIONS: Any log entries from the last 2 weeks. Reference specific values when relevant.\n"
-        "5. USER EXPERIENCE LEVEL: Beginner, intermediate, or advanced — adjust depth and tone accordingly.\n"
-        "6. INHABITANT PLAUSIBILITY: If the user mentions an animal or plant that does NOT match the tank's water type "
+        "4. TAP WATER PROFILE: If provided, factor tap water parameters into all water chemistry advice. Every water change moves tank values toward tap water, not toward zero.\n"
+        "5. RECENT MEASUREMENTS & OBSERVATIONS: Any log entries from the last 2 weeks. Reference specific values when relevant.\n"
+        "6. USER EXPERIENCE LEVEL: Beginner, intermediate, or advanced — adjust depth and tone accordingly.\n"
+        "7. INHABITANT PLAUSIBILITY: If the user mentions an animal or plant that does NOT match the tank's water type "
         "(e.g. an octopus in a freshwater tank, a discus in a saltwater tank, a coral in a freshwater tank), "
         "do NOT assume they have it. Instead, gently ask for clarification — e.g. "
         "\"Octopuses are saltwater animals — could you mean a different creature, or has your setup changed?\" "

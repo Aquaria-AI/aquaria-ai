@@ -430,22 +430,26 @@ class TankStore {
   // ----------------------------------------------------------------
   final Map<String, _SummaryCache> _summaryCache = {};
 
-  _SummaryCache? getCachedSummary(String tankId, List<db.Log> currentLogs) {
+  _SummaryCache? getCachedSummary(String tankId, List<db.JournalEntry> currentJournal) {
     final cache = _summaryCache[tankId];
     if (cache == null) return null;
-    final latestCreatedAt = currentLogs.isNotEmpty ? currentLogs.first.createdAt : null;
-    final stale = DateTime.now().difference(cache.generatedAt).inHours >= 6;
-    final logsChanged = cache.logCount != currentLogs.length ||
-        cache.latestLogCreatedAt != latestCreatedAt;
-    if (stale || logsChanged) return null;
+    final latestUpdatedAt = currentJournal.isNotEmpty
+        ? currentJournal.map((j) => j.updatedAt).reduce((a, b) => a.isAfter(b) ? a : b)
+        : null;
+    final stale = DateTime.now().difference(cache.generatedAt).inDays >= 6;
+    final journalChanged = cache.entryCount != currentJournal.length ||
+        cache.latestEntryUpdatedAt != latestUpdatedAt;
+    if (stale || journalChanged) return null;
     return cache;
   }
 
-  void cacheSummary(String tankId, String text, List<db.Log> logs) {
+  void cacheSummary(String tankId, String text, List<db.JournalEntry> journal) {
     _summaryCache[tankId] = _SummaryCache(
       text: text,
-      logCount: logs.length,
-      latestLogCreatedAt: logs.isNotEmpty ? logs.first.createdAt : null,
+      entryCount: journal.length,
+      latestEntryUpdatedAt: journal.isNotEmpty
+          ? journal.map((j) => j.updatedAt).reduce((a, b) => a.isAfter(b) ? a : b)
+          : null,
       generatedAt: DateTime.now(),
     );
   }
@@ -1056,14 +1060,14 @@ class TankStore {
 
 class _SummaryCache {
   final String text;
-  final int logCount;
-  final DateTime? latestLogCreatedAt;
+  final int entryCount;
+  final DateTime? latestEntryUpdatedAt;
   final DateTime generatedAt;
 
   const _SummaryCache({
     required this.text,
-    required this.logCount,
-    required this.latestLogCreatedAt,
+    required this.entryCount,
+    required this.latestEntryUpdatedAt,
     required this.generatedAt,
   });
 }
