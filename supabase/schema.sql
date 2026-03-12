@@ -458,6 +458,28 @@ create policy "Users can add own reactions"
 create policy "Users can remove own reactions"
   on public.post_reactions for delete using (auth.uid() = user_id);
 
+-- Blocked users: one block per blocker/blocked pair
+create table if not exists public.blocked_users (
+  id bigint generated always as identity primary key,
+  user_id uuid references auth.users(id) on delete cascade not null,
+  blocked_user_id uuid references auth.users(id) on delete cascade not null,
+  created_at timestamptz not null default now(),
+  unique(user_id, blocked_user_id),
+  -- Direct FK to profiles so PostgREST can resolve the join
+  constraint blocked_users_profile_fk foreign key (blocked_user_id) references public.profiles(id)
+);
+
+create index if not exists idx_blocked_users_user_id on public.blocked_users(user_id);
+
+alter table public.blocked_users enable row level security;
+
+create policy "Users can view own blocks"
+  on public.blocked_users for select using (auth.uid() = user_id);
+create policy "Users can block others"
+  on public.blocked_users for insert with check (auth.uid() = user_id);
+create policy "Users can unblock others"
+  on public.blocked_users for delete using (auth.uid() = user_id);
+
 -- ============================================================
 -- CLOSE USER ACCOUNT (soft-delete)
 -- ============================================================

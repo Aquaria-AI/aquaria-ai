@@ -677,6 +677,38 @@ class AppDb extends _$AppDb {
         r.category.equals(category))).go();
   }
 
+  /// Remove local journal entries for a tank that are not in the cloud.
+  /// Keeps entries with null cloudId (not yet synced upstream).
+  Future<int> removeJournalNotInCloud(String tankId, Set<int> cloudIds) async {
+    final local = await (select(journalEntries)
+      ..where((r) => r.tankId.equals(tankId) & r.cloudId.isNotNull()))
+      .get();
+    int removed = 0;
+    for (final entry in local) {
+      if (!cloudIds.contains(entry.cloudId)) {
+        await (delete(journalEntries)..where((r) => r.id.equals(entry.id))).go();
+        removed++;
+      }
+    }
+    return removed;
+  }
+
+  /// Remove local logs for a tank that are not in the cloud.
+  /// Keeps logs with null cloudId (not yet synced upstream).
+  Future<int> removeLogsNotInCloud(String tankId, Set<int> cloudIds) async {
+    final local = await (select(logs)
+      ..where((r) => r.tankId.equals(tankId) & r.cloudId.isNotNull()))
+      .get();
+    int removed = 0;
+    for (final log in local) {
+      if (!cloudIds.contains(log.cloudId)) {
+        await (delete(logs)..where((r) => r.id.equals(log.id))).go();
+        removed++;
+      }
+    }
+    return removed;
+  }
+
   // ---------- Deleted log tombstones ----------
   /// Record a tombstone so pullFromCloud won't re-insert this log.
   Future<void> insertDeletedLogKey(String tankId, DateTime createdAt) async {

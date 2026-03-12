@@ -86,14 +86,10 @@ flutter:
   uses-material-design: true
 
   assets:
-    - assets/images/21034573.jpg
-    - assets/images/Sand.png
-    - assets/images/rocks1.jpg
     - assets/images/pre-video.mp4
     - assets/images/clownie-random-silent.mp4
     - assets/images/pouring-silent.mp4
     - assets/images/dropin-silent.mp4
-    - assets/images/fish-smile.png
     - assets/images/fish-smile-v2.png
     - assets/images/fulllogo.jpg
     - assets/images/logo-side.png

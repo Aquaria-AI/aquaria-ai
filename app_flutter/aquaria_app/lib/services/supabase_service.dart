@@ -484,6 +484,45 @@ class SupabaseService {
     return data.map<String>((r) => r['task_key'] as String).toSet();
   }
 
+  // ── Blocked Users ────────────────────────────────────────────────────────
+
+  /// Fetch the set of user IDs the current user has blocked.
+  static Future<Set<String>> fetchBlockedUserIds() async {
+    final uid = userId;
+    if (uid == null) return {};
+    final data = await client
+        .from('blocked_users')
+        .select('blocked_user_id')
+        .eq('user_id', uid);
+    return (data as List).map((r) => r['blocked_user_id'] as String).toSet();
+  }
+
+  /// Block a user. Returns true if newly blocked, false if already blocked.
+  static Future<bool> blockUser(String blockedUserId) async {
+    final uid = userId;
+    if (uid == null) return false;
+    try {
+      await client.from('blocked_users').insert({
+        'user_id': uid,
+        'blocked_user_id': blockedUserId,
+      });
+      return true;
+    } catch (_) {
+      return false; // already blocked (unique constraint)
+    }
+  }
+
+  /// Unblock a user.
+  static Future<void> unblockUser(String blockedUserId) async {
+    final uid = userId;
+    if (uid == null) return;
+    await client
+        .from('blocked_users')
+        .delete()
+        .eq('user_id', uid)
+        .eq('blocked_user_id', blockedUserId);
+  }
+
   // ── Community ──────────────────────────────────────────────────────────
 
   /// Upload a photo to Supabase Storage and return the storage path.
@@ -548,12 +587,17 @@ class SupabaseService {
   }
 
   /// Count posts newer than [since] across all channels.
-  static Future<int> countNewPosts(DateTime since) async {
-    final data = await client
+  /// Optionally exclude posts from [excludeUserIds] (blocked users).
+  static Future<int> countNewPosts(DateTime since, {Set<String> excludeUserIds = const {}}) async {
+    var query = client
         .from('community_posts')
         .select('id')
         .eq('is_hidden', false)
         .gt('created_at', since.toUtc().toIso8601String());
+    if (excludeUserIds.isNotEmpty) {
+      query = query.not('user_id', 'in', '(${excludeUserIds.join(",")})');
+    }
+    final data = await query;
     return (data as List).length;
   }
 
@@ -779,20 +823,33 @@ class SupabaseService {
   static Future<Map<String, dynamic>> pullAll() async {
     final uid = userId;
     if (uid == null) return {};
-    final tanks = await fetchTanks();
-    final dismissed = await fetchDismissedTasks();
-    final activeTasks = await fetchActiveTasks();
+    // Fetch tanks, dismissed tasks, and active tasks in parallel
+    final results = await Future.wait([
+      fetchTanks(),
+      fetchDismissedTasks(),
+      fetchActiveTasks(),
+    ]);
+    final tanks = results[0] as List<Map<String, dynamic>>;
+    final dismissed = results[1] as Set<String>;
+    final activeTasks = results[2] as List<Map<String, dynamic>>;
     final allInhabitants = <String, List<Map<String, dynamic>>>{};
     final allPlants = <String, List<Map<String, dynamic>>>{};
     final allLogs = <String, List<Map<String, dynamic>>>{};
     final allJournal = <String, List<Map<String, dynamic>>>{};
-    for (final tank in tanks) {
+    // Fetch all per-tank data in parallel
+    await Future.wait(tanks.map((tank) async {
       final id = tank['id'] as String;
-      allInhabitants[id] = await fetchInhabitants(id);
-      allPlants[id] = await fetchPlants(id);
-      allLogs[id] = await fetchLogs(id);
-      allJournal[id] = await fetchJournalEntries(id);
-    }
+      final perTank = await Future.wait([
+        fetchInhabitants(id),
+        fetchPlants(id),
+        fetchLogs(id),
+        fetchJournalEntries(id),
+      ]);
+      allInhabitants[id] = perTank[0] as List<Map<String, dynamic>>;
+      allPlants[id] = perTank[1] as List<Map<String, dynamic>>;
+      allLogs[id] = perTank[2] as List<Map<String, dynamic>>;
+      allJournal[id] = perTank[3] as List<Map<String, dynamic>>;
+    }));
     return {
       'tanks': tanks,
       'inhabitants': allInhabitants,

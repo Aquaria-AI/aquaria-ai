@@ -110,33 +110,45 @@ class TankStore {
         // Logs — upsert cloud into local (insert or update content + cloud ID)
         final cloudLogMap = (data['logs'] as Map?) ?? {};
         final cloudLogs = (cloudLogMap[tankId] as List?) ?? [];
+        final cloudLogIds = <int>{};
         for (final l in cloudLogs) {
           final lm = l as Map<String, dynamic>;
+          final cid = lm['id'] as int?;
+          if (cid != null) cloudLogIds.add(cid);
           await _db.upsertLogByTimestamp(
             tankId,
             DateTime.parse(lm['created_at'] as String),
             lm['raw_text'] as String,
             lm['parsed_json'] as String?,
-            cloudId: lm['id'] as int?,
+            cloudId: cid,
           );
         }
         debugPrint('[CloudSync] Tank $tankId: upserted ${cloudLogs.length} cloud logs');
         await _db.deduplicateLogsForTank(tankId);
+        // Remove local logs deleted from cloud
+        final removedLogs = await _db.removeLogsNotInCloud(tankId, cloudLogIds);
+        if (removedLogs > 0) debugPrint('[CloudSync] Tank $tankId: removed $removedLogs stale local logs');
 
         // Journal entries — upsert by (tankId, date, category)
         final cloudJournalMap = (data['journal'] as Map?) ?? {};
         final cloudJournal = (cloudJournalMap[tankId] as List?) ?? [];
+        final cloudJournalIds = <int>{};
         for (final j in cloudJournal) {
           final jm = j as Map<String, dynamic>;
+          final cid = jm['id'] as int?;
+          if (cid != null) cloudJournalIds.add(cid);
           await _db.upsertJournalEntry(
             tankId: tankId,
             date: jm['date'] as String,
             category: jm['category'] as String,
             data: jm['data'] as String,
-            cloudId: jm['id'] as int?,
+            cloudId: cid,
           );
         }
         debugPrint('[CloudSync] Tank $tankId: upserted ${cloudJournal.length} journal entries');
+        // Remove local journal entries deleted from cloud
+        final removedJournal = await _db.removeJournalNotInCloud(tankId, cloudJournalIds);
+        if (removedJournal > 0) debugPrint('[CloudSync] Tank $tankId: removed $removedJournal stale journal entries');
       }
 
       // Dismissed tasks (legacy)

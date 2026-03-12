@@ -82,7 +82,7 @@ void _showTopSnack(BuildContext context, String message, {Color? backgroundColor
       backgroundColor: backgroundColor,
       behavior: SnackBarBehavior.floating,
       margin: EdgeInsets.only(
-        bottom: MediaQuery.of(context).size.height - 150,
+        bottom: MediaQuery.of(context).size.height - MediaQuery.of(context).padding.top - 130,
         left: 20,
         right: 20,
       ),
@@ -205,8 +205,13 @@ class _CommunityBadgeIconState extends State<_CommunityBadgeIcon> {
 
   Future<void> _refresh() async {
     try {
-      final since = await _communityLastSeen();
-      final count = await SupabaseService.countNewPosts(since);
+      final results = await Future.wait([
+        _communityLastSeen(),
+        SupabaseService.fetchBlockedUserIds(),
+      ]);
+      final since = results[0] as DateTime;
+      final blocked = results[1] as Set<String>;
+      final count = await SupabaseService.countNewPosts(since, excludeUserIds: blocked);
       if (mounted) setState(() => _count = count);
     } catch (_) {}
   }
@@ -4073,14 +4078,14 @@ class _TankListScreenState extends State<TankListScreen> {
         await TankStore.instance.pullFromCloud();
       }
       await TankStore.instance.load();
-      await _loadAllTasks();
-      await _loadAllInhabitantTypes();
-      if (SupabaseService.isLoggedIn) {
-        try {
-          final count = await SupabaseService.countMyReactions();
-          if (mounted) setState(() => _communityReactionCount = count);
-        } catch (_) {}
-      }
+      await Future.wait([
+        _loadAllTasks(),
+        _loadAllInhabitantTypes(),
+        if (SupabaseService.isLoggedIn)
+          SupabaseService.countMyReactions().then((count) {
+            if (mounted) setState(() => _communityReactionCount = count);
+          }).catchError((_) {}),
+      ]);
     } catch (e) {
       _error = e.toString();
     }
@@ -4177,7 +4182,7 @@ class _TankListScreenState extends State<TankListScreen> {
   Future<void> _showAddNoteDialog(TankModel tank) async {
     await Future.delayed(Duration.zero);
     if (!mounted) return;
-    final noteText = await showModalBottomSheet<String>(
+    final noteResult = await showModalBottomSheet<({String text, String date})>(
       context: context,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
@@ -4185,7 +4190,21 @@ class _TankListScreenState extends State<TankListScreen> {
       ),
       builder: (_) => _AddNoteSheet(tankName: tank.name),
     );
-    if (noteText != null && noteText.isNotEmpty && mounted) {
+    if (noteResult != null && noteResult.text.isNotEmpty && mounted) {
+      final noteText = noteResult.text;
+      final date = noteResult.date;
+      // Merge with existing journal notes for the selected date
+      final existing = await TankStore.instance.journalForDate(tank.id, date);
+      final notesEntry = existing.where((e) => e.category == 'notes').toList();
+      List<String> notes = [];
+      if (notesEntry.isNotEmpty) {
+        try { notes = List<String>.from(jsonDecode(notesEntry.first.data) as List); } catch (_) {}
+      }
+      if (!notes.contains(noteText)) notes.add(noteText);
+      await TankStore.instance.upsertJournal(
+        tankId: tank.id, date: date, category: 'notes', data: jsonEncode(notes),
+      );
+      // Also save to logs (audit trail)
       await TankStore.instance.addLog(
         tankId: tank.id,
         rawText: noteText,
@@ -4295,7 +4314,7 @@ class _TankListScreenState extends State<TankListScreen> {
   Future<void> _showAddMeasurementDialog(TankModel tank) async {
     await Future.delayed(Duration.zero);
     if (!mounted) return;
-    final result = await showModalBottomSheet<Map<String, dynamic>>(
+    final result = await showModalBottomSheet<({Map<String, dynamic> measurements, String date})>(
       context: context,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
@@ -4303,14 +4322,27 @@ class _TankListScreenState extends State<TankListScreen> {
       ),
       builder: (_) => _AddMeasurementSheet(tankName: tank.name),
     );
-    if (result != null && result.isNotEmpty && mounted) {
+    if (result != null && result.measurements.isNotEmpty && mounted) {
+      final date = result.date;
+      // Merge with existing journal measurements for the selected date
+      final existing = await TankStore.instance.journalForDate(tank.id, date);
+      final measEntry = existing.where((e) => e.category == 'measurements').toList();
+      Map<String, dynamic> measurements = {};
+      if (measEntry.isNotEmpty) {
+        try { measurements = Map<String, dynamic>.from(jsonDecode(measEntry.first.data) as Map); } catch (_) {}
+      }
+      measurements.addAll(result.measurements);
+      await TankStore.instance.upsertJournal(
+        tankId: tank.id, date: date, category: 'measurements', data: jsonEncode(measurements),
+      );
+      // Also save to logs (audit trail)
       final parsedJson = jsonEncode({
-        'measurements': result,
+        'measurements': result.measurements,
         'actions': <String>[],
         'notes': <String>[],
         'tasks': <dynamic>[],
       });
-      final parts = result.entries.map((e) => '${_paramShortLabel(e.key)}: ${e.value}').join(', ');
+      final parts = result.measurements.entries.map((e) => '${_paramShortLabel(e.key)}: ${e.value}').join(', ');
       await TankStore.instance.addLog(
         tankId: tank.id,
         rawText: parts,
@@ -5411,11 +5443,24 @@ class _AddNoteSheet extends StatefulWidget {
 
 class _AddNoteSheetState extends State<_AddNoteSheet> {
   final _ctrl = TextEditingController();
+  late DateTime _selectedDate = DateTime.now();
+
+  String _dateKey(DateTime d) => '${d.year}-${d.month.toString().padLeft(2,'0')}-${d.day.toString().padLeft(2,'0')}';
 
   @override
   void dispose() {
     _ctrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _pickDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDate,
+      firstDate: DateTime(2020),
+      lastDate: DateTime.now(),
+    );
+    if (picked != null) setState(() => _selectedDate = picked);
   }
 
   @override
@@ -5444,13 +5489,32 @@ class _AddNoteSheetState extends State<_AddNoteSheet> {
                 onPressed: () {
                   FocusScope.of(context).unfocus();
                   final text = _ctrl.text.trim();
-                  if (text.isNotEmpty) Navigator.pop(context, text);
+                  if (text.isNotEmpty) Navigator.pop(context, (text: text, date: _dateKey(_selectedDate)));
                 },
                 style: FilledButton.styleFrom(backgroundColor: _cMid),
                 child: const Text('Save'),
               ),
             ]),
             const Divider(height: 24),
+            GestureDetector(
+              onTap: _pickDate,
+              child: Row(children: [
+                const Icon(Icons.calendar_today, size: 16, color: Colors.black54),
+                const SizedBox(width: 8),
+                Text(
+                  '${_selectedDate.month.toString().padLeft(2,'0')}/${_selectedDate.day.toString().padLeft(2,'0')}/${_selectedDate.year}',
+                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+                ),
+                const SizedBox(width: 4),
+                const Icon(Icons.arrow_drop_down, size: 20, color: Colors.black54),
+                if (_dateKey(_selectedDate) == _dateKey(DateTime.now()))
+                  const Padding(
+                    padding: EdgeInsets.only(left: 6),
+                    child: Text('Today', style: TextStyle(fontSize: 12, color: Colors.black45)),
+                  ),
+              ]),
+            ),
+            const SizedBox(height: 12),
             TextField(
               controller: _ctrl,
               maxLines: 5,
@@ -6490,7 +6554,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
   Future<void> _showAddNoteDialog() async {
     await Future.delayed(Duration.zero);
     if (!mounted) return;
-    final noteText = await showModalBottomSheet<String>(
+    final noteResult = await showModalBottomSheet<({String text, String date})>(
       context: context,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
@@ -6498,7 +6562,21 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
       ),
       builder: (_) => _AddNoteSheet(tankName: _tank.name),
     );
-    if (noteText != null && noteText.isNotEmpty && mounted) {
+    if (noteResult != null && noteResult.text.isNotEmpty && mounted) {
+      final noteText = noteResult.text;
+      final date = noteResult.date;
+      // Merge with existing journal notes for the selected date
+      final existing = await TankStore.instance.journalForDate(_tank.id, date);
+      final notesEntry = existing.where((e) => e.category == 'notes').toList();
+      List<String> notes = [];
+      if (notesEntry.isNotEmpty) {
+        try { notes = List<String>.from(jsonDecode(notesEntry.first.data) as List); } catch (_) {}
+      }
+      if (!notes.contains(noteText)) notes.add(noteText);
+      await TankStore.instance.upsertJournal(
+        tankId: _tank.id, date: date, category: 'notes', data: jsonEncode(notes),
+      );
+      // Also save to logs (audit trail)
       await TankStore.instance.addLog(
         tankId: _tank.id,
         rawText: noteText,
@@ -6608,7 +6686,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
   Future<void> _showAddMeasurementDialog() async {
     await Future.delayed(Duration.zero);
     if (!mounted) return;
-    final result = await showModalBottomSheet<Map<String, dynamic>>(
+    final result = await showModalBottomSheet<({Map<String, dynamic> measurements, String date})>(
       context: context,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
@@ -6616,14 +6694,27 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
       ),
       builder: (_) => _AddMeasurementSheet(tankName: _tank.name),
     );
-    if (result != null && result.isNotEmpty && mounted) {
+    if (result != null && result.measurements.isNotEmpty && mounted) {
+      final date = result.date;
+      // Merge with existing journal measurements for the selected date
+      final existing = await TankStore.instance.journalForDate(_tank.id, date);
+      final measEntry = existing.where((e) => e.category == 'measurements').toList();
+      Map<String, dynamic> measurements = {};
+      if (measEntry.isNotEmpty) {
+        try { measurements = Map<String, dynamic>.from(jsonDecode(measEntry.first.data) as Map); } catch (_) {}
+      }
+      measurements.addAll(result.measurements);
+      await TankStore.instance.upsertJournal(
+        tankId: _tank.id, date: date, category: 'measurements', data: jsonEncode(measurements),
+      );
+      // Also save to logs (audit trail)
       final parsedJson = jsonEncode({
-        'measurements': result,
+        'measurements': result.measurements,
         'actions': <String>[],
         'notes': <String>[],
         'tasks': <dynamic>[],
       });
-      final parts = result.entries.map((e) => '${_paramShortLabel(e.key)}: ${e.value}').join(', ');
+      final parts = result.measurements.entries.map((e) => '${_paramShortLabel(e.key)}: ${e.value}').join(', ');
       await TankStore.instance.addLog(
         tankId: _tank.id,
         rawText: parts,
@@ -8842,16 +8933,29 @@ class _AddMeasurementSheetState extends State<_AddMeasurementSheet> {
     ('ph', TextEditingController()),
   ];
   bool _saving = false;
+  late DateTime _selectedDate = DateTime.now();
 
   static const _knownParamKeys = [
     'ph', 'kh', 'gh', 'calcium', 'magnesium', 'ammonia', 'nitrite', 'nitrate',
     'potassium', 'salinity', 'temp', 'phosphate', 'co2', 'iron', 'copper', 'tds',
   ];
 
+  String _dateKey(DateTime d) => '${d.year}-${d.month.toString().padLeft(2,'0')}-${d.day.toString().padLeft(2,'0')}';
+
   @override
   void dispose() {
     for (final e in _measurements) e.$2.dispose();
     super.dispose();
+  }
+
+  Future<void> _pickDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDate,
+      firstDate: DateTime(2020),
+      lastDate: DateTime.now(),
+    );
+    if (picked != null) setState(() => _selectedDate = picked);
   }
 
   void _save() {
@@ -8863,7 +8967,7 @@ class _AddMeasurementSheetState extends State<_AddMeasurementSheet> {
       if (k.isEmpty || v.isEmpty) continue;
       measurements[k] = double.tryParse(v) ?? v;
     }
-    Navigator.pop(context, measurements);
+    Navigator.pop(context, (measurements: measurements, date: _dateKey(_selectedDate)));
   }
 
   Widget _sectionHeader(String title, IconData icon) => Row(children: [
@@ -8903,6 +9007,26 @@ class _AddMeasurementSheetState extends State<_AddMeasurementSheet> {
                 ),
               ]),
               const Divider(height: 24),
+
+            GestureDetector(
+              onTap: _pickDate,
+              child: Row(children: [
+                const Icon(Icons.calendar_today, size: 16, color: Colors.black54),
+                const SizedBox(width: 8),
+                Text(
+                  '${_selectedDate.month.toString().padLeft(2,'0')}/${_selectedDate.day.toString().padLeft(2,'0')}/${_selectedDate.year}',
+                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+                ),
+                const SizedBox(width: 4),
+                const Icon(Icons.arrow_drop_down, size: 20, color: Colors.black54),
+                if (_dateKey(_selectedDate) == _dateKey(DateTime.now()))
+                  const Padding(
+                    padding: EdgeInsets.only(left: 6),
+                    child: Text('Today', style: TextStyle(fontSize: 12, color: Colors.black45)),
+                  ),
+              ]),
+            ),
+            const SizedBox(height: 12),
 
             _sectionHeader('Measurements', Icons.straighten),
             const SizedBox(height: 8),
@@ -11504,7 +11628,7 @@ class _DailyLogsScreenState extends State<DailyLogsScreen> {
   Future<void> _showAddNoteDialog() async {
     await Future.delayed(Duration.zero);
     if (!mounted) return;
-    final noteText = await showModalBottomSheet<String>(
+    final noteResult = await showModalBottomSheet<({String text, String date})>(
       context: context,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
@@ -11512,9 +11636,10 @@ class _DailyLogsScreenState extends State<DailyLogsScreen> {
       ),
       builder: (_) => _AddNoteSheet(tankName: widget.tank.name),
     );
-    if (noteText != null && noteText.isNotEmpty && mounted) {
-      final date = _todayKey();
-      // Merge with existing notes for today
+    if (noteResult != null && noteResult.text.isNotEmpty && mounted) {
+      final noteText = noteResult.text;
+      final date = noteResult.date;
+      // Merge with existing notes for the selected date
       final existing = await TankStore.instance.journalForDate(widget.tank.id, date);
       final noteEntry = existing.where((e) => e.category == 'notes').toList();
       List<String> notes = [];
@@ -11540,7 +11665,7 @@ class _DailyLogsScreenState extends State<DailyLogsScreen> {
   }
 
   Future<void> _showAddMeasurementDialog() async {
-    final result = await showModalBottomSheet<Map<String, dynamic>>(
+    final result = await showModalBottomSheet<({Map<String, dynamic> measurements, String date})>(
       context: context,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
@@ -11548,16 +11673,16 @@ class _DailyLogsScreenState extends State<DailyLogsScreen> {
       ),
       builder: (_) => _AddMeasurementSheet(tankName: widget.tank.name),
     );
-    if (result != null && result.isNotEmpty && mounted) {
-      final date = _todayKey();
-      // Merge with existing measurements for today
+    if (result != null && result.measurements.isNotEmpty && mounted) {
+      final date = result.date;
+      // Merge with existing measurements for the selected date
       final existing = await TankStore.instance.journalForDate(widget.tank.id, date);
       final measEntry = existing.where((e) => e.category == 'measurements').toList();
       Map<String, dynamic> measurements = {};
       if (measEntry.isNotEmpty) {
         try { measurements = Map<String, dynamic>.from(jsonDecode(measEntry.first.data) as Map); } catch (_) {}
       }
-      measurements.addAll(result);
+      measurements.addAll(result.measurements);
       await TankStore.instance.upsertJournal(
         tankId: widget.tank.id,
         date: date,
@@ -11565,12 +11690,12 @@ class _DailyLogsScreenState extends State<DailyLogsScreen> {
         data: jsonEncode(measurements),
       );
       // Also save to logs (audit trail)
-      final parts = result.entries.map((e) => '${_paramShortLabel(e.key)}: ${e.value}').join(', ');
+      final parts = result.measurements.entries.map((e) => '${_paramShortLabel(e.key)}: ${e.value}').join(', ');
       await TankStore.instance.addLog(
         tankId: widget.tank.id,
         rawText: parts,
         parsedJson: jsonEncode({
-          'measurements': result,
+          'measurements': result.measurements,
           'actions': <String>[],
           'notes': <String>[],
           'tasks': <dynamic>[],
@@ -13525,21 +13650,33 @@ class _CommunityScreenState extends State<_CommunityScreen> {
   late String _channel = widget.initialChannel;
   List<Map<String, dynamic>> _posts = [];
   Map<int, List<Map<String, dynamic>>> _reactions = {};
+  Set<String> _blockedUserIds = {};
   bool _loading = true;
 
   @override
   void initState() {
     super.initState();
+    _loadBlockedThenPosts();
+  }
+
+  Future<void> _loadBlockedThenPosts() async {
+    try {
+      _blockedUserIds = await SupabaseService.fetchBlockedUserIds();
+    } catch (_) {}
     _load();
   }
 
   Future<void> _load() async {
     try {
-      final posts = _channel == 'flagged'
+      var posts = _channel == 'flagged'
           ? await SupabaseService.fetchFlaggedPosts()
           : _channel == 'mine'
           ? await SupabaseService.fetchMyPosts()
           : await SupabaseService.fetchPosts(channel: _channel);
+      // Filter out posts from blocked users (keep own posts and admin view)
+      if (_blockedUserIds.isNotEmpty && _channel != 'mine' && _channel != 'flagged') {
+        posts = posts.where((p) => !_blockedUserIds.contains(p['user_id'] as String)).toList();
+      }
       // Batch-sign all photo URLs in one call
       final paths = posts.map((p) => p['photo_url'] as String).toList();
       final signedUrls = await SupabaseService.getCommunityPhotoUrls(paths);
@@ -14008,36 +14145,73 @@ class _CommunityScreenState extends State<_CommunityScreen> {
                                           },
                                         ),
                                       if (!isAuthor)
-                                        IconButton(
-                                          icon: const Icon(Icons.flag_outlined, size: 18),
-                                          color: Colors.grey,
+                                        PopupMenuButton<String>(
+                                          icon: const Icon(Icons.more_vert, size: 18, color: Colors.grey),
                                           padding: EdgeInsets.zero,
                                           constraints: const BoxConstraints(),
-                                          tooltip: 'Report',
-                                          onPressed: () async {
-                                            final ok = await showDialog<bool>(
-                                              context: context,
-                                              builder: (ctx) => AlertDialog(
-                                                title: const Text('Report this post?'),
-                                                content: const Text('Flag this post as inappropriate. Posts flagged by multiple users will be hidden and reviewed.'),
-                                                actions: [
-                                                  TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-                                                  TextButton(
-                                                    onPressed: () => Navigator.pop(ctx, true),
-                                                    style: TextButton.styleFrom(foregroundColor: Colors.red),
-                                                    child: const Text('Report'),
-                                                  ),
-                                                ],
-                                              ),
-                                            );
-                                            if (ok == true) {
-                                              final flagged = await SupabaseService.flagPost(postId);
-                                              if (mounted) {
-                                                _showTopSnack(context, flagged ? 'Post reported. Thank you.' : 'You have already reported this post.');
-                                                _load();
+                                          onSelected: (value) async {
+                                            if (value == 'report') {
+                                              final ok = await showDialog<bool>(
+                                                context: context,
+                                                builder: (ctx) => AlertDialog(
+                                                  title: const Text('Report this post?'),
+                                                  content: const Text('Flag this post as inappropriate. Posts flagged by multiple users will be hidden and reviewed.'),
+                                                  actions: [
+                                                    TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+                                                    TextButton(
+                                                      onPressed: () => Navigator.pop(ctx, true),
+                                                      style: TextButton.styleFrom(foregroundColor: Colors.red),
+                                                      child: const Text('Report'),
+                                                    ),
+                                                  ],
+                                                ),
+                                              );
+                                              if (ok == true) {
+                                                final flagged = await SupabaseService.flagPost(postId);
+                                                if (mounted) {
+                                                  _showTopSnack(context, flagged ? 'Post reported. Thank you.' : 'You have already reported this post.');
+                                                  _load();
+                                                }
+                                              }
+                                            } else if (value == 'block') {
+                                              final authorName = _authorName(post);
+                                              final ok = await showDialog<bool>(
+                                                context: context,
+                                                builder: (ctx) => AlertDialog(
+                                                  title: const Text('Block this user?'),
+                                                  content: Text('You will no longer see posts from $authorName. You can unblock them from your profile.'),
+                                                  actions: [
+                                                    TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+                                                    TextButton(
+                                                      onPressed: () => Navigator.pop(ctx, true),
+                                                      style: TextButton.styleFrom(foregroundColor: Colors.red),
+                                                      child: const Text('Block'),
+                                                    ),
+                                                  ],
+                                                ),
+                                              );
+                                              if (ok == true) {
+                                                final blocked = await SupabaseService.blockUser(post['user_id'] as String);
+                                                if (mounted) {
+                                                  if (blocked) {
+                                                    _blockedUserIds.add(post['user_id'] as String);
+                                                    _showTopSnack(context, '$authorName blocked.');
+                                                  } else {
+                                                    _showTopSnack(context, 'User already blocked.');
+                                                  }
+                                                  _load();
+                                                }
                                               }
                                             }
                                           },
+                                          itemBuilder: (_) => const [
+                                            PopupMenuItem(value: 'report', child: Row(children: [
+                                              Icon(Icons.flag_outlined, size: 18), SizedBox(width: 8), Text('Report'),
+                                            ])),
+                                            PopupMenuItem(value: 'block', child: Row(children: [
+                                              Icon(Icons.block, size: 18), SizedBox(width: 8), Text('Block User'),
+                                            ])),
+                                          ],
                                         ),
                                     ],
                                   ),
@@ -14083,6 +14257,7 @@ class _ProfileScreenState extends State<_ProfileScreen> {
   String? _usernameError;
   String? _originalUsername;
   DateTime? _createdAt;
+  List<Map<String, dynamic>> _blockedUsers = [];
 
   static final _usernameRe = RegExp(r'^[a-z0-9_]{3,20}$');
 
@@ -14100,7 +14275,11 @@ class _ProfileScreenState extends State<_ProfileScreen> {
   }
 
   Future<void> _load() async {
-    final profile = await SupabaseService.fetchProfile();
+    final results = await Future.wait([
+      SupabaseService.fetchProfile(),
+      _loadBlockedUsers(),
+    ]);
+    final profile = results[0] as Map<String, dynamic>?;
     if (!mounted) return;
     setState(() {
       _displayNameCtrl.text = (profile?['display_name'] as String?) ?? '';
@@ -14110,6 +14289,24 @@ class _ProfileScreenState extends State<_ProfileScreen> {
       _createdAt = raw != null ? DateTime.tryParse(raw) : null;
       _loading = false;
     });
+  }
+
+  Future<List<Map<String, dynamic>>> _loadBlockedUsers() async {
+    try {
+      final uid = SupabaseService.userId;
+      if (uid == null) return [];
+      final data = await SupabaseService.client
+          .from('blocked_users')
+          .select('blocked_user_id, created_at, profiles:blocked_user_id(display_name, username)')
+          .eq('user_id', uid)
+          .order('created_at', ascending: false);
+      final list = List<Map<String, dynamic>>.from(data);
+      if (mounted) setState(() => _blockedUsers = list);
+      return list;
+    } catch (e) {
+      debugPrint('[Profile] Failed to load blocked users: $e');
+      return [];
+    }
   }
 
   String? _validateUsername(String value) {
@@ -14283,7 +14480,49 @@ class _ProfileScreenState extends State<_ProfileScreen> {
                   Text('Tanks', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.grey[600])),
                   const SizedBox(height: 4),
                   Text('${TankStore.instance.tanks.length}', style: const TextStyle(fontSize: 15)),
-                  const SizedBox(height: 32),
+                  const SizedBox(height: 24),
+                  // Blocked users
+                  if (_blockedUsers.isNotEmpty) ...[
+                    Text('Blocked Users', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.grey[600])),
+                    const SizedBox(height: 8),
+                    ..._blockedUsers.map((b) {
+                      final profile = b['profiles'] as Map<String, dynamic>?;
+                      final display = profile?['display_name'] as String?;
+                      final username = profile?['username'] as String?;
+                      final name = (display != null && display.isNotEmpty && !display.contains('@'))
+                          ? display
+                          : (username != null && username.isNotEmpty)
+                              ? '@$username'
+                              : 'Unknown user';
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.block, size: 16, color: Colors.red),
+                            const SizedBox(width: 8),
+                            Expanded(child: Text(name, style: const TextStyle(fontSize: 14))),
+                            TextButton(
+                              onPressed: () async {
+                                await SupabaseService.unblockUser(b['blocked_user_id'] as String);
+                                if (mounted) {
+                                  _showTopSnack(context, '$name unblocked.');
+                                  _loadBlockedUsers();
+                                }
+                              },
+                              style: TextButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(horizontal: 8),
+                                minimumSize: Size.zero,
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              ),
+                              child: const Text('Unblock', style: TextStyle(fontSize: 12)),
+                            ),
+                          ],
+                        ),
+                      );
+                    }),
+                    const SizedBox(height: 8),
+                  ],
+                  const SizedBox(height: 8),
                   // Save button
                   SizedBox(
                     width: double.infinity,
