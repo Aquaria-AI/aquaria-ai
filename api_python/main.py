@@ -857,11 +857,11 @@ Rules:
     iron (Fe): ~0.1 ppm target (trace level). Higher can fuel hair algae.
     potassium (K): 15–25 ppm ideal. Higher can cause nutrient uptake lockout.
     calcium (Ca): Do NOT evaluate using raw ppm. Always assess using the Ca:Mg ratio. If Ca:Mg is 3:1–4:1, calcium is in range regardless of the absolute number. If the ratio is ABOVE 4:1, magnesium is too low — recommend a magnesium supplement (e.g. Seachem Equilibrium, Epsom salt). If the ratio is BELOW 3:1, calcium is too low relative to magnesium.
-    magnesium (Mg): Derived from GH and Ca. Do NOT evaluate using raw ppm. Always assess using the Ca:Mg ratio. If Ca:Mg is 3:1–4:1, magnesium is in range regardless of the absolute number. If the ratio is ABOVE 4:1, magnesium is deficient — always flag this and recommend supplementation.
+    magnesium (Mg): NOT directly tested — it is calculated from GH and Ca. The app computes Mg automatically when both GH and Ca are logged for the same day. Do NOT ask the user to "test magnesium" or "retest Mg" — instead ask them to test GH and Ca, which is how Mg is derived. Do NOT evaluate using raw ppm. Always assess using the Ca:Mg ratio. If Ca:Mg is 3:1–4:1, magnesium is in range. If the ratio is ABOVE 4:1, magnesium is low — flag this and recommend supplementation.
     temperature: 74–80°F / 23–27°C normal
 
   PLANTED TANK NUTRIENT ANALYSIS:
-  Magnesium calculation requires both GH and Ca measured on the same day.
+  Magnesium is NOT directly testable in a standard freshwater kit — it is calculated from GH and Ca measured on the same day.
   Mg (ppm) ≈ (GH in ppm CaCO₃ − Ca in ppm × 2.5) / 4.12
   If the calculated Mg is zero or negative, note a potential testing inconsistency.
   CRITICAL: Always evaluate Ca and Mg using the Ca:Mg RATIO, never the raw numbers alone.
@@ -1023,7 +1023,8 @@ Rules:
 - Do NOT wrap in markdown, code fences, or any other formatting. Just the raw JSON array.
 - If there are NO measurements in the data, return: ["Add your latest test results so I can evaluate your water quality."]
 - Focus on what the user should DO next — not what's already been done.
-- IMPORTANT: When notes or actions mention corrective measures taken AFTER the measurements (e.g., "added epsom salt", "dosed magnesium", "did a water change after testing"), factor these in. Do NOT suggest correcting a parameter the user has already addressed. For example, if measurements show low magnesium but a note says "added epsom salt after testing", do not suggest adding magnesium — instead suggest retesting to confirm the correction worked.
+- IMPORTANT: When notes or actions mention corrective measures taken AFTER the measurements (e.g., "added epsom salt", "dosed magnesium", "did a water change after testing"), factor these in. Do NOT suggest correcting a parameter the user has already addressed. For example, if measurements show low magnesium but a note says "added epsom salt after testing", do not suggest adding magnesium — instead suggest testing GH and Ca to confirm the correction worked.
+- NEVER suggest "testing magnesium" or "retesting Mg" — Mg is not directly testable. It is calculated from GH and Ca. Instead suggest testing GH and Ca together.
 - Use moderate, calm language. Do NOT use intense or alarming words like "extremely", "severely", "massively", "dangerously", "critically", or "immediately".
 - Prioritize safety: flag dangerous parameters (ammonia/nitrite > 0, extreme pH, temperature issues) first.
 - Suggest water changes when nitrate is high or time since last change is long.
@@ -1222,7 +1223,7 @@ Use these reference ranges as GUIDELINES when assessing whether a parameter is l
     iron (Fe): ~0.1 ppm target (trace level). Higher can fuel hair algae.
     potassium (K): 15–25 ppm ideal. Higher can cause nutrient uptake lockout.
     calcium (Ca): Do NOT evaluate using raw ppm. Always assess using the Ca:Mg ratio. If Ca:Mg is 3:1–4:1, calcium is in range regardless of the absolute number. If the ratio is ABOVE 4:1, magnesium is too low — recommend a magnesium supplement (e.g. Seachem Equilibrium, Epsom salt). If the ratio is BELOW 3:1, calcium is too low relative to magnesium.
-    magnesium (Mg): Derived from GH and Ca. Mg (ppm) ≈ (GH in ppm CaCO₃ − Ca in ppm × 2.5) / 4.12. Do NOT evaluate using raw ppm. Always assess using the Ca:Mg ratio. If Ca:Mg is 3:1–4:1, magnesium is in range. If the ratio is ABOVE 4:1, magnesium is deficient — always flag this and recommend supplementation.
+    magnesium (Mg): NOT directly tested — it is calculated from GH and Ca. The app computes Mg automatically when both GH and Ca are logged for the same day. Do NOT ask the user to "test magnesium" or "retest Mg" — instead ask them to test GH and Ca, which is how Mg is derived. Do NOT evaluate using raw ppm. Always assess using the Ca:Mg ratio. If Ca:Mg is 3:1–4:1, magnesium is in range. If the ratio is ABOVE 4:1, magnesium is low — flag this and recommend supplementation.
     temperature: 74–80°F / 23–27°C normal
 
   SALTWATER / REEF (mixed reef):
@@ -1273,7 +1274,8 @@ PLANTED TANK DIAGNOSTICS — apply whenever the tank is planted or has live plan
 
 GH / Calcium / Magnesium relationship:
 - GH measures TOTAL calcium + magnesium hardness combined. 1 dGH ≈ 17.85 ppm CaCO₃.
-- If you have both GH and Ca readings, you can estimate Mg: Mg (ppm) ≈ (GH in ppm CaCO₃ - Ca in ppm × 2.5) / 4.12
+- Magnesium is NOT directly testable with standard freshwater kits. It is calculated from GH and Ca: Mg (ppm) ≈ (GH in ppm CaCO₃ - Ca in ppm × 2.5) / 4.12. The app calculates Mg automatically when both GH and Ca are logged for the same day.
+- NEVER suggest "testing magnesium" or "retesting Mg". Instead, advise the user to test GH and Ca at the same time and log both results — the app will calculate Mg and the Ca:Mg ratio automatically.
 - If the calculated Mg is zero or negative, flag a potential testing inconsistency.
 - CRITICAL: Always evaluate Ca and Mg using the Ca:Mg RATIO, never raw numbers alone.
   - Ratio 3:1–4:1 → GOOD. Both Ca and Mg are in range. Do NOT flag either as low or high.
@@ -1286,8 +1288,8 @@ When a user reports plant health issues, use your training knowledge to identify
 Nutrient lockout:
 - Very low or absent Mg can lock out Ca uptake even when Ca is present.
 - Very high GH (>14 dGH) can inhibit micronutrient absorption.
-- Elevated potassium (>30 ppm) can cause nutrient lockout, blocking uptake of Ca and Mg.
-- LOCKOUT THRESHOLD: When the Ca:Mg ratio is >6:1 or <1:1, proactively raise a lockout warning. Example: Ca 80 ppm, Mg 10 ppm = 8:1 ratio — flag this as a lockout risk and recommend immediate Mg supplementation.
+- Elevated potassium (>30 ppm) can cause nutrient lockout, blocking PLANT UPTAKE of Ca and Mg. IMPORTANT: High potassium does NOT affect water column measurements of Ca, Mg, GH, or the Ca:Mg ratio. It only affects absorption at the plant level. Never suggest that high K explains an out-of-balance Ca:Mg ratio — those are independent.
+- LOCKOUT THRESHOLD: When the Ca:Mg ratio is >6:1 or <1:1, proactively raise a lockout warning. Example: Ca 80 ppm, Mg 10 ppm = 8:1 ratio — flag this as a lockout risk and recommend Mg supplementation.
 - If you detect potential lockout conditions from the logged parameters, explain what lockout means and suggest corrective action.
 
 GENERAL RULES:
