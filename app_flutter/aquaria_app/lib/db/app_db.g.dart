@@ -96,6 +96,17 @@ class $TanksTable extends Tanks with TableInfo<$TanksTable, Tank> {
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _equipmentJsonMeta = const VerificationMeta(
+    'equipmentJson',
+  );
+  @override
+  late final GeneratedColumn<String> equipmentJson = GeneratedColumn<String>(
+    'equipment_json',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -106,6 +117,7 @@ class $TanksTable extends Tanks with TableInfo<$TanksTable, Tank> {
     isArchived,
     archivedAt,
     tapWaterJson,
+    equipmentJson,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -177,6 +189,15 @@ class $TanksTable extends Tanks with TableInfo<$TanksTable, Tank> {
         ),
       );
     }
+    if (data.containsKey('equipment_json')) {
+      context.handle(
+        _equipmentJsonMeta,
+        equipmentJson.isAcceptableOrUnknown(
+          data['equipment_json']!,
+          _equipmentJsonMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -218,6 +239,10 @@ class $TanksTable extends Tanks with TableInfo<$TanksTable, Tank> {
         DriftSqlType.string,
         data['${effectivePrefix}tap_water_json'],
       ),
+      equipmentJson: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}equipment_json'],
+      ),
     );
   }
 
@@ -236,6 +261,7 @@ class Tank extends DataClass implements Insertable<Tank> {
   final bool isArchived;
   final DateTime? archivedAt;
   final String? tapWaterJson;
+  final String? equipmentJson;
   const Tank({
     required this.id,
     required this.name,
@@ -245,6 +271,7 @@ class Tank extends DataClass implements Insertable<Tank> {
     required this.isArchived,
     this.archivedAt,
     this.tapWaterJson,
+    this.equipmentJson,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -260,6 +287,9 @@ class Tank extends DataClass implements Insertable<Tank> {
     }
     if (!nullToAbsent || tapWaterJson != null) {
       map['tap_water_json'] = Variable<String>(tapWaterJson);
+    }
+    if (!nullToAbsent || equipmentJson != null) {
+      map['equipment_json'] = Variable<String>(equipmentJson);
     }
     return map;
   }
@@ -278,6 +308,9 @@ class Tank extends DataClass implements Insertable<Tank> {
       tapWaterJson: tapWaterJson == null && nullToAbsent
           ? const Value.absent()
           : Value(tapWaterJson),
+      equipmentJson: equipmentJson == null && nullToAbsent
+          ? const Value.absent()
+          : Value(equipmentJson),
     );
   }
 
@@ -295,6 +328,7 @@ class Tank extends DataClass implements Insertable<Tank> {
       isArchived: serializer.fromJson<bool>(json['isArchived']),
       archivedAt: serializer.fromJson<DateTime?>(json['archivedAt']),
       tapWaterJson: serializer.fromJson<String?>(json['tapWaterJson']),
+      equipmentJson: serializer.fromJson<String?>(json['equipmentJson']),
     );
   }
   @override
@@ -309,6 +343,7 @@ class Tank extends DataClass implements Insertable<Tank> {
       'isArchived': serializer.toJson<bool>(isArchived),
       'archivedAt': serializer.toJson<DateTime?>(archivedAt),
       'tapWaterJson': serializer.toJson<String?>(tapWaterJson),
+      'equipmentJson': serializer.toJson<String?>(equipmentJson),
     };
   }
 
@@ -321,6 +356,7 @@ class Tank extends DataClass implements Insertable<Tank> {
     bool? isArchived,
     Value<DateTime?> archivedAt = const Value.absent(),
     Value<String?> tapWaterJson = const Value.absent(),
+    Value<String?> equipmentJson = const Value.absent(),
   }) => Tank(
     id: id ?? this.id,
     name: name ?? this.name,
@@ -330,6 +366,9 @@ class Tank extends DataClass implements Insertable<Tank> {
     isArchived: isArchived ?? this.isArchived,
     archivedAt: archivedAt.present ? archivedAt.value : this.archivedAt,
     tapWaterJson: tapWaterJson.present ? tapWaterJson.value : this.tapWaterJson,
+    equipmentJson: equipmentJson.present
+        ? equipmentJson.value
+        : this.equipmentJson,
   );
   Tank copyWithCompanion(TanksCompanion data) {
     return Tank(
@@ -347,6 +386,9 @@ class Tank extends DataClass implements Insertable<Tank> {
       tapWaterJson: data.tapWaterJson.present
           ? data.tapWaterJson.value
           : this.tapWaterJson,
+      equipmentJson: data.equipmentJson.present
+          ? data.equipmentJson.value
+          : this.equipmentJson,
     );
   }
 
@@ -360,7 +402,8 @@ class Tank extends DataClass implements Insertable<Tank> {
           ..write('createdAt: $createdAt, ')
           ..write('isArchived: $isArchived, ')
           ..write('archivedAt: $archivedAt, ')
-          ..write('tapWaterJson: $tapWaterJson')
+          ..write('tapWaterJson: $tapWaterJson, ')
+          ..write('equipmentJson: $equipmentJson')
           ..write(')'))
         .toString();
   }
@@ -375,6 +418,7 @@ class Tank extends DataClass implements Insertable<Tank> {
     isArchived,
     archivedAt,
     tapWaterJson,
+    equipmentJson,
   );
   @override
   bool operator ==(Object other) =>
@@ -387,7 +431,8 @@ class Tank extends DataClass implements Insertable<Tank> {
           other.createdAt == this.createdAt &&
           other.isArchived == this.isArchived &&
           other.archivedAt == this.archivedAt &&
-          other.tapWaterJson == this.tapWaterJson);
+          other.tapWaterJson == this.tapWaterJson &&
+          other.equipmentJson == this.equipmentJson);
 }
 
 class TanksCompanion extends UpdateCompanion<Tank> {
@@ -399,6 +444,7 @@ class TanksCompanion extends UpdateCompanion<Tank> {
   final Value<bool> isArchived;
   final Value<DateTime?> archivedAt;
   final Value<String?> tapWaterJson;
+  final Value<String?> equipmentJson;
   final Value<int> rowid;
   const TanksCompanion({
     this.id = const Value.absent(),
@@ -409,6 +455,7 @@ class TanksCompanion extends UpdateCompanion<Tank> {
     this.isArchived = const Value.absent(),
     this.archivedAt = const Value.absent(),
     this.tapWaterJson = const Value.absent(),
+    this.equipmentJson = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   TanksCompanion.insert({
@@ -420,6 +467,7 @@ class TanksCompanion extends UpdateCompanion<Tank> {
     this.isArchived = const Value.absent(),
     this.archivedAt = const Value.absent(),
     this.tapWaterJson = const Value.absent(),
+    this.equipmentJson = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        name = Value(name),
@@ -435,6 +483,7 @@ class TanksCompanion extends UpdateCompanion<Tank> {
     Expression<bool>? isArchived,
     Expression<DateTime>? archivedAt,
     Expression<String>? tapWaterJson,
+    Expression<String>? equipmentJson,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -446,6 +495,7 @@ class TanksCompanion extends UpdateCompanion<Tank> {
       if (isArchived != null) 'is_archived': isArchived,
       if (archivedAt != null) 'archived_at': archivedAt,
       if (tapWaterJson != null) 'tap_water_json': tapWaterJson,
+      if (equipmentJson != null) 'equipment_json': equipmentJson,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -459,6 +509,7 @@ class TanksCompanion extends UpdateCompanion<Tank> {
     Value<bool>? isArchived,
     Value<DateTime?>? archivedAt,
     Value<String?>? tapWaterJson,
+    Value<String?>? equipmentJson,
     Value<int>? rowid,
   }) {
     return TanksCompanion(
@@ -470,6 +521,7 @@ class TanksCompanion extends UpdateCompanion<Tank> {
       isArchived: isArchived ?? this.isArchived,
       archivedAt: archivedAt ?? this.archivedAt,
       tapWaterJson: tapWaterJson ?? this.tapWaterJson,
+      equipmentJson: equipmentJson ?? this.equipmentJson,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -501,6 +553,9 @@ class TanksCompanion extends UpdateCompanion<Tank> {
     if (tapWaterJson.present) {
       map['tap_water_json'] = Variable<String>(tapWaterJson.value);
     }
+    if (equipmentJson.present) {
+      map['equipment_json'] = Variable<String>(equipmentJson.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -518,6 +573,7 @@ class TanksCompanion extends UpdateCompanion<Tank> {
           ..write('isArchived: $isArchived, ')
           ..write('archivedAt: $archivedAt, ')
           ..write('tapWaterJson: $tapWaterJson, ')
+          ..write('equipmentJson: $equipmentJson, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -3534,6 +3590,7 @@ typedef $$TanksTableCreateCompanionBuilder =
       Value<bool> isArchived,
       Value<DateTime?> archivedAt,
       Value<String?> tapWaterJson,
+      Value<String?> equipmentJson,
       Value<int> rowid,
     });
 typedef $$TanksTableUpdateCompanionBuilder =
@@ -3546,6 +3603,7 @@ typedef $$TanksTableUpdateCompanionBuilder =
       Value<bool> isArchived,
       Value<DateTime?> archivedAt,
       Value<String?> tapWaterJson,
+      Value<String?> equipmentJson,
       Value<int> rowid,
     });
 
@@ -3594,6 +3652,11 @@ class $$TanksTableFilterComposer extends Composer<_$AppDb, $TanksTable> {
 
   ColumnFilters<String> get tapWaterJson => $composableBuilder(
     column: $table.tapWaterJson,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get equipmentJson => $composableBuilder(
+    column: $table.equipmentJson,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -3645,6 +3708,11 @@ class $$TanksTableOrderingComposer extends Composer<_$AppDb, $TanksTable> {
     column: $table.tapWaterJson,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<String> get equipmentJson => $composableBuilder(
+    column: $table.equipmentJson,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$TanksTableAnnotationComposer extends Composer<_$AppDb, $TanksTable> {
@@ -3682,6 +3750,11 @@ class $$TanksTableAnnotationComposer extends Composer<_$AppDb, $TanksTable> {
 
   GeneratedColumn<String> get tapWaterJson => $composableBuilder(
     column: $table.tapWaterJson,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get equipmentJson => $composableBuilder(
+    column: $table.equipmentJson,
     builder: (column) => column,
   );
 }
@@ -3722,6 +3795,7 @@ class $$TanksTableTableManager
                 Value<bool> isArchived = const Value.absent(),
                 Value<DateTime?> archivedAt = const Value.absent(),
                 Value<String?> tapWaterJson = const Value.absent(),
+                Value<String?> equipmentJson = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => TanksCompanion(
                 id: id,
@@ -3732,6 +3806,7 @@ class $$TanksTableTableManager
                 isArchived: isArchived,
                 archivedAt: archivedAt,
                 tapWaterJson: tapWaterJson,
+                equipmentJson: equipmentJson,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -3744,6 +3819,7 @@ class $$TanksTableTableManager
                 Value<bool> isArchived = const Value.absent(),
                 Value<DateTime?> archivedAt = const Value.absent(),
                 Value<String?> tapWaterJson = const Value.absent(),
+                Value<String?> equipmentJson = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => TanksCompanion.insert(
                 id: id,
@@ -3754,6 +3830,7 @@ class $$TanksTableTableManager
                 isArchived: isArchived,
                 archivedAt: archivedAt,
                 tapWaterJson: tapWaterJson,
+                equipmentJson: equipmentJson,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0

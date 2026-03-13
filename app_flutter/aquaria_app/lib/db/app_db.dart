@@ -17,6 +17,8 @@ class Tanks extends Table {
   DateTimeColumn get archivedAt => dateTime().nullable()();
   // JSON object: {"gh":8,"kh":4,"ph":7.2,"ammonia":0,"nitrite":0,"nitrate":5,"tds":200}
   TextColumn get tapWaterJson => text().nullable()();
+  // JSON object for equipment config (filter, lighting, substrate, etc.)
+  TextColumn get equipmentJson => text().nullable()();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -138,7 +140,7 @@ class AppDb extends _$AppDb {
   AppDb() : super(_openConnection());
 
   @override
-  int get schemaVersion => 17;
+  int get schemaVersion => 18;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -220,6 +222,9 @@ class AppDb extends _$AppDb {
           if (from <= 16) {
             await migrator.createTable(journalEntries);
           }
+          if (from <= 17) {
+            await migrator.addColumn(tanks, tanks.equipmentJson);
+          }
         },
       );
 
@@ -260,6 +265,12 @@ class AppDb extends _$AppDb {
   Future<void> updateTapWater(String id, String? tapWaterJson) async {
     await (update(tanks)..where((t) => t.id.equals(id))).write(
       TanksCompanion(tapWaterJson: Value(tapWaterJson)),
+    );
+  }
+
+  Future<void> updateEquipment(String id, String? equipmentJson) async {
+    await (update(tanks)..where((t) => t.id.equals(id))).write(
+      TanksCompanion(equipmentJson: Value(equipmentJson)),
     );
   }
 

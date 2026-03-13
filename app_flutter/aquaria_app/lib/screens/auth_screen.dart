@@ -85,6 +85,14 @@ class _AuthScreenState extends State<AuthScreen> {
         final res = await SupabaseService.signUpWithEmail(email, pass);
         // If no session returned, email confirmation is required
         if (res.session == null) {
+          // If identities is empty, the email is already registered (e.g. via Google)
+          if (res.user?.identities?.isEmpty ?? false) {
+            setState(() {
+              _error = 'An account with this email already exists. Try signing in or use Google.';
+              _loading = false;
+            });
+            return;
+          }
           setState(() { _showConfirmation = true; _loading = false; });
           return;
         }

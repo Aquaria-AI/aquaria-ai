@@ -216,6 +216,10 @@ class SupabaseService {
     await client.from('tanks').update({'tap_water_json': tapWaterJson}).eq('id', tankId);
   }
 
+  static Future<void> updateEquipment(String tankId, String? equipmentJson) async {
+    await client.from('tanks').update({'equipment_json': equipmentJson}).eq('id', tankId);
+  }
+
   // ── Inhabitants CRUD ─────────────────────────────────────────────────────
 
   static Future<void> replaceInhabitants(String tankId, List<Map<String, dynamic>> inhabitants) async {

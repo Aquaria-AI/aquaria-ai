@@ -217,6 +217,7 @@ class SummaryRequest(BaseModel):
     logs: List[Dict[str, Any]]
     water_type: Optional[str] = None  # 'freshwater', 'saltwater', 'reef', etc.
     gallons: Optional[int] = None
+    equipment: Optional[Dict[str, Any]] = None
 
 
 class ChatRequest(BaseModel):
@@ -801,6 +802,55 @@ def summarize_tank_logs(req: SummaryRequest):
             if req.gallons:
                 system_prompt += f" ({req.gallons} gallons)"
             system_prompt += ". Use the corresponding reference ranges above to evaluate parameters."
+        if req.equipment and isinstance(req.equipment, dict):
+            eq_parts = []
+            # Substrate (now a list)
+            substrate = req.equipment.get("substrate")
+            if substrate:
+                if isinstance(substrate, list):
+                    sub_names = [s.replace("_", " ").title() for s in substrate if s != "other"]
+                    other = req.equipment.get("substrate_other")
+                    if other and isinstance(other, str) and other.strip():
+                        sub_names.append(other.strip())
+                    if sub_names:
+                        eq_parts.append(f"Substrate: {', '.join(sub_names)}")
+                elif isinstance(substrate, str):
+                    eq_parts.append(f"Substrate: {substrate.replace('_', ' ').title()}")
+            label_map = {
+                "lighting_type": "Lighting", "filter_type": "Filter",
+                "photoperiod_hours": "Photoperiod", "target_temp": "Target temp",
+                "wc_frequency": "Water change frequency", "wc_percent": "Water change amount",
+            }
+            bool_labels = {
+                "has_heater": "Heater", "has_air_pump": "Air pump", "has_co2": "CO2 injection",
+                "has_protein_skimmer": "Protein skimmer",
+                "has_calcium_reactor": "Calcium reactor", "has_wavemaker": "Wavemaker/powerhead",
+                "has_ato": "Auto top-off (ATO)", "has_dosing_pump": "Dosing pump",
+                "has_refugium": "Refugium/sump", "has_uv_sterilizer": "UV sterilizer",
+                "has_live_rock": "Live rock",
+            }
+            for k, lbl in label_map.items():
+                v = req.equipment.get(k)
+                if v is not None and v != "":
+                    display = str(v).replace("_", " ").title() if isinstance(v, str) else str(v)
+                    if k == "photoperiod_hours":
+                        display += " hrs"
+                    elif k == "target_temp":
+                        display += "°F"
+                    elif k == "wc_percent":
+                        display += "%"
+                    eq_parts.append(f"{lbl}: {display}")
+            for k, lbl in bool_labels.items():
+                if req.equipment.get(k) is True:
+                    eq_parts.append(lbl)
+            media = req.equipment.get("filter_media")
+            if media and isinstance(media, list):
+                eq_parts.append(f"Filter media: {', '.join(m.replace('_', ' ').title() for m in media)}")
+            if eq_parts:
+                system_prompt += f"\nEquipment: {', '.join(eq_parts)}."
+            notes = req.equipment.get("notes")
+            if notes and isinstance(notes, str) and notes.strip():
+                system_prompt += f"\nEquipment notes: {notes.strip()}"
         response = _chat(client,
             model=_pick_model(water_type=req.water_type or ""),
             max_tokens=256,
@@ -1398,6 +1448,58 @@ def chat_tank(req: ChatRequest):
         if tw_parts:
             tank_context += f"Tap water profile: {', '.join(tw_parts)}.\n"
 
+    # Equipment profile
+    equipment = tank.get("equipment")
+    if equipment and isinstance(equipment, dict):
+        eq_parts = []
+        # Substrate (now a list)
+        substrate = equipment.get("substrate")
+        if substrate:
+            if isinstance(substrate, list):
+                sub_names = [s.replace("_", " ").title() for s in substrate if s != "other"]
+                other = equipment.get("substrate_other")
+                if other and isinstance(other, str) and other.strip():
+                    sub_names.append(other.strip())
+                if sub_names:
+                    eq_parts.append(f"Substrate: {', '.join(sub_names)}")
+            elif isinstance(substrate, str):
+                eq_parts.append(f"Substrate: {substrate.replace('_', ' ').title()}")
+        label_map = {
+            "lighting_type": "Lighting", "filter_type": "Filter",
+            "photoperiod_hours": "Photoperiod", "target_temp": "Target temp",
+            "wc_frequency": "Water change frequency", "wc_percent": "Water change amount",
+        }
+        bool_labels = {
+            "has_heater": "Heater", "has_air_pump": "Air pump", "has_co2": "CO2 injection",
+            "has_protein_skimmer": "Protein skimmer",
+            "has_calcium_reactor": "Calcium reactor", "has_wavemaker": "Wavemaker/powerhead",
+            "has_ato": "Auto top-off (ATO)", "has_dosing_pump": "Dosing pump",
+            "has_refugium": "Refugium/sump", "has_uv_sterilizer": "UV sterilizer",
+            "has_live_rock": "Live rock",
+        }
+        for k, lbl in label_map.items():
+            v = equipment.get(k)
+            if v is not None and v != "":
+                display = str(v).replace("_", " ").title() if isinstance(v, str) else str(v)
+                if k == "photoperiod_hours":
+                    display += " hrs"
+                elif k == "target_temp":
+                    display += "°F"
+                elif k == "wc_percent":
+                    display += "%"
+                eq_parts.append(f"{lbl}: {display}")
+        for k, lbl in bool_labels.items():
+            if equipment.get(k) is True:
+                eq_parts.append(lbl)
+        media = equipment.get("filter_media")
+        if media and isinstance(media, list):
+            eq_parts.append(f"Filter media: {', '.join(m.replace('_', ' ').title() for m in media)}")
+        if eq_parts:
+            tank_context += f"Equipment: {', '.join(eq_parts)}.\n"
+        notes = equipment.get("notes")
+        if notes and isinstance(notes, str) and notes.strip():
+            tank_context += f"Equipment notes: {notes.strip()}\n"
+
     if req.recent_logs:
         recent = "\n".join(f"- {l}" for l in req.recent_logs[:10])
         tank_context += f"Recent log entries (last 2 weeks):\n{recent}\n"
@@ -1410,9 +1512,10 @@ def chat_tank(req: ChatRequest):
         "2. INHABITANTS: Which specific fish, invertebrates, corals are in the tank. Tailor advice to their needs and sensitivities.\n"
         "3. PLANTS: Whether the tank has live plants and which species. Planted tanks have different parameter priorities.\n"
         "4. TAP WATER PROFILE: If provided, factor tap water parameters into all water chemistry advice. Every water change moves tank values toward tap water, not toward zero.\n"
-        "5. RECENT MEASUREMENTS & OBSERVATIONS: Any log entries from the last 2 weeks. Reference specific values when relevant.\n"
-        "6. USER EXPERIENCE LEVEL: Beginner, intermediate, or advanced — adjust depth and tone accordingly.\n"
-        "7. INHABITANT PLAUSIBILITY: If the user mentions an animal or plant that does NOT match the tank's water type "
+        "5. EQUIPMENT: What filtration, lighting, CO2, protein skimmer, heater, etc. the tank has. Equipment determines what advice is practical — don't suggest adjustments to equipment the user doesn't have.\n"
+        "6. RECENT MEASUREMENTS & OBSERVATIONS: Any log entries from the last 2 weeks. Reference specific values when relevant.\n"
+        "7. USER EXPERIENCE LEVEL: Beginner, intermediate, or advanced — adjust depth and tone accordingly.\n"
+        "8. INHABITANT PLAUSIBILITY: If the user mentions an animal or plant that does NOT match the tank's water type "
         "(e.g. an octopus in a freshwater tank, a discus in a saltwater tank, a coral in a freshwater tank), "
         "do NOT assume they have it. Instead, gently ask for clarification — e.g. "
         "\"Octopuses are saltwater animals — could you mean a different creature, or has your setup changed?\" "

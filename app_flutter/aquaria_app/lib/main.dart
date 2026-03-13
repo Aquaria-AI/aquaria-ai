@@ -1217,7 +1217,7 @@ class OnboardingScreen extends StatefulWidget {
 class _OnboardingScreenState extends State<OnboardingScreen> {
   final _pageCtrl = PageController();
   int _page = 0;
-  static const _totalPages = 7;
+  static const _totalPages = 8;
 
   String _experience = '';
   final _tankNameCtrl = TextEditingController(text: 'New Tank');
@@ -1225,6 +1225,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   WaterType _waterType = WaterType.freshwater;
   List<({String name, String type, int count})> _inhabitants = [];
   List<String> _plants = [];
+  Map<String, dynamic> _equipment = {};
   bool _finishing = false;
   final List<Map<String, dynamic>> _pendingTasks = [];
   String? _pendingCsvContent;
@@ -1322,6 +1323,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             .toList(),
         plants: _plants,
       );
+      // Save equipment if configured
+      if (_equipment.isNotEmpty) {
+        await TankStore.instance.saveEquipment(tank.id, jsonEncode(_equipment));
+      }
       // Save any reminder tasks collected during the water quality chat
       if (_pendingTasks.isNotEmpty) {
         for (final task in _pendingTasks) {
@@ -1380,6 +1385,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     onWaterTypeChanged: (v) => setState(() => _waterType = v),
                     onNext: _goNext,
                   ),
+                  _ObEquipmentPage(
+                    waterType: _waterType,
+                    equipment: _equipment,
+                    onChanged: (eq) => setState(() => _equipment = eq),
+                    onNext: _goNext,
+                  ),
                   _ObInhabitantsPage(
                     initialInhabitants: _inhabitants,
                     waterType: _waterType,
@@ -1402,7 +1413,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     onReminderTask: (t) => _pendingTasks.add(t),
                     onCsvPending: (content) => _pendingCsvContent = content,
                     experience: _experience,
-                    isActive: _page == 5,
+                    isActive: _page == 6,
                   ),
                   _ObCongratsPage(
                     experience: _experience,
@@ -1863,6 +1874,354 @@ class _ObExpCard extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+// Page 3b — Equipment (optional, skippable)
+class _ObEquipmentPage extends StatelessWidget {
+  final WaterType waterType;
+  final Map<String, dynamic> equipment;
+  final ValueChanged<Map<String, dynamic>> onChanged;
+  final VoidCallback onNext;
+  final bool showSkip;
+
+  const _ObEquipmentPage({
+    required this.waterType,
+    required this.equipment,
+    required this.onChanged,
+    required this.onNext,
+    this.showSkip = true,
+  });
+
+  bool get _isSaltwater => [WaterType.saltwater, WaterType.reef].contains(waterType);
+
+  void _set(String key, dynamic value) {
+    final updated = Map<String, dynamic>.from(equipment);
+    updated[key] = value;
+    onChanged(updated);
+  }
+
+  Widget _chipRow(String label, String key, List<String> options, List<String> labels) {
+    final current = equipment[key] as String?;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: 6),
+          child: Text(label, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+        ),
+        Wrap(
+          spacing: 8,
+          runSpacing: 6,
+          children: List.generate(options.length, (i) {
+            final selected = current == options[i];
+            return ChoiceChip(
+              label: Text(labels[i]),
+              selected: selected,
+              showCheckmark: false,
+              selectedColor: const Color(0xFF1FA2A8),
+              labelStyle: TextStyle(color: selected ? Colors.white : Colors.black87, fontSize: 13),
+              onSelected: (_) => _set(key, options[i]),
+            );
+          }),
+        ),
+        const SizedBox(height: 14),
+      ],
+    );
+  }
+
+  Widget _multiChipRow(String label, String key, List<String> options, List<String> labels) {
+    final current = List<String>.from((equipment[key] as List?) ?? []);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: 6),
+          child: Text(label, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+        ),
+        Wrap(
+          spacing: 8,
+          runSpacing: 6,
+          children: List.generate(options.length, (i) {
+            final selected = current.contains(options[i]);
+            return FilterChip(
+              label: Text(labels[i]),
+              selected: selected,
+              showCheckmark: true,
+              selectedColor: const Color(0xFFD9F7F0),
+              checkmarkColor: const Color(0xFF0E5A66),
+              labelStyle: TextStyle(color: selected ? const Color(0xFF0E5A66) : Colors.black87, fontSize: 13),
+              onSelected: (on) {
+                if (on) { current.add(options[i]); } else { current.remove(options[i]); }
+                _set(key, current);
+              },
+            );
+          }),
+        ),
+        const SizedBox(height: 14),
+      ],
+    );
+  }
+
+  Widget _multiDropdownRow(BuildContext context, String label, String key, List<String> options, List<String> labels) {
+    final current = List<String>.from((equipment[key] as List?) ?? []);
+    final displayText = current.isEmpty
+        ? 'Select'
+        : current.map((v) {
+            final idx = options.indexOf(v);
+            return idx >= 0 ? labels[idx] : v.replaceAll('_', ' ');
+          }).join(', ');
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: 6),
+          child: Text(label, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+        ),
+        GestureDetector(
+          onTap: () {
+            showDialog(
+              context: context,
+              builder: (ctx) {
+                var selected = List<String>.from(current);
+                return StatefulBuilder(
+                  builder: (ctx, setDialogState) => AlertDialog(
+                    title: Text(label),
+                    content: SingleChildScrollView(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: List.generate(options.length, (i) =>
+                          CheckboxListTile(
+                            title: Text(labels[i], style: const TextStyle(fontSize: 14)),
+                            value: selected.contains(options[i]),
+                            activeColor: const Color(0xFF1FA2A8),
+                            dense: true,
+                            controlAffinity: ListTileControlAffinity.leading,
+                            onChanged: (v) {
+                              setDialogState(() {
+                                if (v == true) { selected.add(options[i]); } else { selected.remove(options[i]); }
+                              });
+                            },
+                          ),
+                        ),
+                      ),
+                    ),
+                    actions: [
+                      TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+                      TextButton(
+                        onPressed: () { _set(key, selected); Navigator.pop(ctx); },
+                        child: const Text('Done'),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            );
+          },
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            decoration: BoxDecoration(
+              border: Border.all(color: Colors.grey.shade400),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    displayText,
+                    style: TextStyle(fontSize: 14, color: current.isEmpty ? Colors.grey.shade500 : Colors.black87),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                Icon(Icons.arrow_drop_down, color: Colors.grey.shade600),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 14),
+      ],
+    );
+  }
+
+  Widget _dropdownRow(BuildContext context, String label, String key, List<String> options, List<String> labels) {
+    final current = equipment[key] as String?;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: 6),
+          child: Text(label, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+        ),
+        DropdownButtonFormField<String>(
+          value: options.contains(current) ? current : null,
+          decoration: InputDecoration(
+            isDense: true,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+          ),
+          hint: const Text('Select', style: TextStyle(fontSize: 14)),
+          items: List.generate(options.length, (i) =>
+            DropdownMenuItem(value: options[i], child: Text(labels[i], style: const TextStyle(fontSize: 14))),
+          ),
+          onChanged: (v) { if (v != null) _set(key, v); },
+        ),
+        const SizedBox(height: 14),
+      ],
+    );
+  }
+
+  Widget _toggle(String label, String key) {
+    return SwitchListTile(
+      title: Text(label, style: const TextStyle(fontSize: 14)),
+      value: equipment[key] == true,
+      activeColor: const Color(0xFF1FA2A8),
+      contentPadding: EdgeInsets.zero,
+      dense: true,
+      onChanged: (v) => _set(key, v),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final freshFilterTypes = ['canister', 'hob', 'sponge', 'internal', 'undergravel'];
+    final freshFilterLabels = ['Canister', 'Hanging', 'Sponge', 'Internal', 'Undergravel'];
+    final saltFilterTypes = ['sump', 'canister', 'hob'];
+    final saltFilterLabels = ['Sump', 'Canister', 'Hanging'];
+
+    return Column(
+      children: [
+        Expanded(
+          child: CustomScrollView(
+            slivers: [
+              const SliverToBoxAdapter(child: _ObLogoBar()),
+              const SliverToBoxAdapter(child: SizedBox(height: 16)),
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 28),
+                  child: Column(
+                    children: [
+                      const Text('Equipment', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF0E5A66))),
+                      const SizedBox(height: 8),
+                      Text('Tell us about your setup so Ariel can give better advice.',
+                          style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
+                          textAlign: TextAlign.center),
+                    ],
+                  ),
+                ),
+              ),
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(28, 16, 28, 0),
+                sliver: SliverList(
+                  delegate: SliverChildListDelegate([
+                    _multiChipRow('Substrate', 'substrate',
+                      _isSaltwater
+                        ? ['sand', 'gravel', 'bare_bottom', 'crushed_coral', 'other']
+                        : ['sand', 'gravel', 'bare_bottom', 'soil', 'crushed_coral', 'other'],
+                      _isSaltwater
+                        ? ['Sand', 'Gravel', 'Bare', 'Crushed Coral', 'Other']
+                        : ['Sand', 'Gravel', 'Bare', 'Aqua Soil', 'Crushed Coral', 'Other'],
+                    ),
+                    if ((equipment['substrate'] as List?)?.contains('other') ?? false)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 14),
+                        child: TextFormField(
+                          initialValue: equipment['substrate_other'] as String? ?? '',
+                          decoration: InputDecoration(
+                            hintText: 'Enter substrate name',
+                            isDense: true,
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                          ),
+                          onChanged: (v) => _set('substrate_other', v),
+                        ),
+                      ),
+                    _dropdownRow(context, 'Filter Type', 'filter_type',
+                      _isSaltwater ? saltFilterTypes : freshFilterTypes,
+                      _isSaltwater ? saltFilterLabels : freshFilterLabels,
+                    ),
+                    _multiDropdownRow(context, 'Filter Media', 'filter_media',
+                      _isSaltwater
+                        ? ['carbon', 'gfo', 'aragonite', 'bio_media', 'filter_floss', 'ceramic_rings', 'zeolite', 'ion_exchange_resin']
+                        : ['carbon', 'phosphate_pad', 'aragonite', 'bio_media', 'sponge', 'filter_floss', 'ceramic_rings', 'zeolite', 'ion_exchange_resin'],
+                      _isSaltwater
+                        ? ['Carbon', 'GFO', 'Aragonite', 'Bio Media', 'Filter Floss', 'Ceramic Rings', 'Zeolite', 'Ion Exchange Resin']
+                        : ['Carbon', 'Phosphate Pad', 'Aragonite', 'Bio Media', 'Sponge', 'Filter Floss', 'Ceramic Rings', 'Zeolite', 'Ion Exchange Resin'],
+                    ),
+                    _chipRow('Lighting', 'lighting_type',
+                      ['led', 't5', 'metal_halide', 'none'],
+                      ['LED', 'T5', 'Metal Halide', 'None'],
+                    ),
+                    _toggle('Heater', 'has_heater'),
+                    _toggle('Air pump / Bubbler', 'has_air_pump'),
+                    if (!_isSaltwater) ...[
+                      _toggle('CO2 Injection', 'has_co2'),
+                    ],
+                    if (_isSaltwater) ...[
+                      _toggle('Protein Skimmer', 'has_protein_skimmer'),
+                      _toggle('ATO (Auto Top-Off)', 'has_ato'),
+                      _toggle('Dosing Pump', 'has_dosing_pump'),
+                      _toggle('Live Rock', 'has_live_rock'),
+                      _toggle('Calcium Reactor', 'has_calcium_reactor'),
+                    ],
+                    const SizedBox(height: 20),
+                    Row(
+                      children: [
+                        const Text('Additional Details', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+                        const SizedBox(width: 4),
+                        GestureDetector(
+                          onTap: () {
+                            showDialog(
+                              context: context,
+                              builder: (_) => AlertDialog(
+                                title: const Text('Additional Details'),
+                                content: const Text(
+                                  'Include any extra info that helps Ariel give better advice:\n\n'
+                                  '• Equipment brand & model (e.g. Fluval 307, AI Prime 16HD)\n'
+                                  '• Filter capacity or flow rate\n'
+                                  '• Tank dimensions or shape\n'
+                                  '• Dosing schedule or products used\n'
+                                  '• Substrate depth\n'
+                                  '• Stocking notes or plans\n'
+                                  '• Any known issues or concerns',
+                                ),
+                                actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK'))],
+                              ),
+                            );
+                          },
+                          child: const Icon(Icons.info_outline, size: 16, color: Color(0xFF1FA2A8)),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    TextFormField(
+                      initialValue: equipment['notes'] as String? ?? '',
+                      maxLines: 4,
+                      decoration: InputDecoration(
+                        hintText: 'e.g. Fluval 307 canister, AI Prime 16HD light, 3" sand bed...',
+                        hintStyle: TextStyle(fontSize: 13, color: Colors.grey.shade400),
+                        isDense: true,
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                      onChanged: (v) => _set('notes', v),
+                    ),
+                    const SizedBox(height: 16),
+                  ]),
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (showSkip)
+          TextButton(
+            onPressed: onNext,
+            child: const Text('Skip for now', style: TextStyle(color: Colors.grey)),
+          ),
+        _obNextButton(label: showSkip ? 'Continue' : 'Done', onPressed: onNext),
+        const SizedBox(height: 8),
+      ],
     );
   }
 }
@@ -4310,18 +4669,20 @@ class _TankListScreenState extends State<TankListScreen> {
           repeatDays: result.repeatDays,
         );
       }
-      // Save action to journal
-      final date = result.dueDate ?? '${DateTime.now().year}-${DateTime.now().month.toString().padLeft(2, '0')}-${DateTime.now().day.toString().padLeft(2, '0')}';
-      final existing = await TankStore.instance.journalForDate(tank.id, date);
-      final actEntry = existing.where((e) => e.category == 'actions').toList();
-      List<String> actions = [];
-      if (actEntry.isNotEmpty) {
-        try { actions = (jsonDecode(actEntry.first.data) as List).cast<String>(); } catch (_) {}
+      // Only log to journal if marked complete at creation
+      if (result.markComplete) {
+        final date = result.dueDate ?? '${DateTime.now().year}-${DateTime.now().month.toString().padLeft(2, '0')}-${DateTime.now().day.toString().padLeft(2, '0')}';
+        final existing = await TankStore.instance.journalForDate(tank.id, date);
+        final actEntry = existing.where((e) => e.category == 'actions').toList();
+        List<String> actions = [];
+        if (actEntry.isNotEmpty) {
+          try { actions = (jsonDecode(actEntry.first.data) as List).cast<String>(); } catch (_) {}
+        }
+        if (!actions.contains(result.desc)) actions.add(result.desc);
+        await TankStore.instance.upsertJournal(
+          tankId: tank.id, date: date, category: 'actions', data: jsonEncode(actions),
+        );
       }
-      if (!actions.contains(result.desc)) actions.add(result.desc);
-      await TankStore.instance.upsertJournal(
-        tankId: tank.id, date: date, category: 'actions', data: jsonEncode(actions),
-      );
       await _refresh();
       _showTopSnack(context, result.markComplete ? 'Task completed & logged' : 'Task added');
     }
@@ -4673,12 +5034,28 @@ class _TankListScreenState extends State<TankListScreen> {
                                   tanksWithoutLogs: _tanksWithoutLogs,
                                   lastLogDate: _lastLogDate,
                                 ),
-                                const Expanded(
+                                Expanded(
                                   child: Center(
-                                    child: Text(
-                                      'No tanks yet.\nTap + to add one.',
-                                      textAlign: TextAlign.center,
-                                      style: TextStyle(fontSize: 18),
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        const Text(
+                                          'No tanks yet.',
+                                          textAlign: TextAlign.center,
+                                          style: TextStyle(fontSize: 18),
+                                        ),
+                                        const SizedBox(height: 16),
+                                        FilledButton.icon(
+                                          style: FilledButton.styleFrom(
+                                            backgroundColor: _cDark,
+                                            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                          ),
+                                          onPressed: _openOnboarding,
+                                          icon: const Icon(Icons.add, size: 20),
+                                          label: const Text('Set Up Your First Tank', style: TextStyle(fontSize: 15)),
+                                        ),
+                                      ],
                                     ),
                                   ),
                                 ),
@@ -4895,7 +5272,10 @@ class _TankListScreenState extends State<TankListScreen> {
                                         onSelected: (value) async {
                                           switch (value) {
                                             case 'edit':
-                                              await _openEditFromList(t);
+                                              await Navigator.of(context).push(
+                                                MaterialPageRoute(builder: (_) => _TankAttributesScreen(tank: t)),
+                                              );
+                                              _refresh();
                                               break;
                                             case 'archive':
                                               await _archiveTank(t.id);
@@ -4905,7 +5285,7 @@ class _TankListScreenState extends State<TankListScreen> {
                                         itemBuilder: (context) => const [
                                           PopupMenuItem<String>(
                                             value: 'edit',
-                                            child: Text('Edit'),
+                                            child: Text('Tank Details'),
                                           ),
                                           PopupMenuItem<String>(
                                             value: 'archive',
@@ -4989,6 +5369,18 @@ class _TankListScreenState extends State<TankListScreen> {
                                         onTap: () => Navigator.of(context).push(
                                           MaterialPageRoute(builder: (_) => TankGalleryScreen(tank: t)),
                                         ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      _NavIconButton(
+                                        child: const _TuneSearchIcon(),
+                                        tooltip: 'Attributes',
+                                        color: const Color(0xFF607D8B),
+                                        onTap: () async {
+                                          await Navigator.of(context).push(
+                                            MaterialPageRoute(builder: (_) => _TankAttributesScreen(tank: t)),
+                                          );
+                                          _refresh();
+                                        },
                                       ),
                                     ],
                                   ),
@@ -6111,28 +6503,33 @@ class _HintStep extends StatelessWidget {
 /// Fish + plant composite icon used for the Inhabitants button.
 class _FishPlantIcon extends StatelessWidget {
   final double size;
-  const _FishPlantIcon({this.size = 28});
+  const _FishPlantIcon({this.size = 32});
 
   @override
   Widget build(BuildContext context) {
-    final fishSize = size * 0.72;
-    final plantSize = size * 0.54;
-    return SizedBox(
-      width: size,
-      height: size,
+    return ColorFiltered(
+      colorFilter: const ColorFilter.mode(Colors.black, BlendMode.srcIn),
+      child: Text('🐟', style: TextStyle(fontSize: size * 0.7)),
+    );
+  }
+}
+
+class _TuneSearchIcon extends StatelessWidget {
+  const _TuneSearchIcon();
+
+  @override
+  Widget build(BuildContext context) {
+    return const SizedBox(
+      width: 24,
+      height: 24,
       child: Stack(
-        alignment: Alignment.center,
         clipBehavior: Clip.none,
         children: [
+          Icon(Icons.tune, size: 22, color: Color(0xFF607D8B)),
           Positioned(
-            left: 1,
-            top: (size - fishSize) / 2 - 1,
-            child: Image.asset('assets/images/fish.jpg', width: fishSize, height: fishSize),
-          ),
-          Positioned(
-            right: 0,
-            bottom: 0,
-            child: Icon(Icons.eco, size: plantSize, color: const Color(0xFF5B8C5A)),
+            right: -2,
+            bottom: -2,
+            child: Icon(Icons.search, size: 14, color: Color(0xFF607D8B)),
           ),
         ],
       ),
@@ -6209,13 +6606,14 @@ class AddTankFlowScreen extends StatefulWidget {
 class _AddTankFlowScreenState extends State<AddTankFlowScreen> {
   final _pageCtrl = PageController();
   int _page = 0;
-  static const _totalPages = 4;
+  static const _totalPages = 5;
 
   final _tankNameCtrl = TextEditingController(text: 'New Tank');
   double _gallons = 30;
   WaterType _waterType = WaterType.freshwater;
   List<({String name, String type, int count})> _inhabitants = [];
   List<String> _plants = [];
+  Map<String, dynamic> _equipment = {};
   bool _finishing = false;
 
   @override
@@ -6243,6 +6641,9 @@ class _AddTankFlowScreenState extends State<AddTankFlowScreen> {
             .toList(),
         plants: _plants,
       );
+      if (_equipment.isNotEmpty) {
+        await TankStore.instance.saveEquipment(tank.id, jsonEncode(_equipment));
+      }
       await TankStore.instance.load();
       if (!mounted) return;
       // Navigate to the newly created tank's journal, replacing this screen
@@ -6286,6 +6687,12 @@ class _AddTankFlowScreenState extends State<AddTankFlowScreen> {
                     waterType: _waterType,
                     onGallonsChanged: (v) => setState(() => _gallons = v),
                     onWaterTypeChanged: (v) => setState(() => _waterType = v),
+                    onNext: _goNext,
+                  ),
+                  _ObEquipmentPage(
+                    waterType: _waterType,
+                    equipment: _equipment,
+                    onChanged: (eq) => setState(() => _equipment = eq),
                     onNext: _goNext,
                   ),
                   _ObInhabitantsPage(
@@ -6563,6 +6970,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
   bool _summaryLoading = false;
   bool _summaryExpanded = false;
   String _experience = 'beginner';
+  String? _equipmentJson;
 
   @override
   void initState() {
@@ -6705,18 +7113,20 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
           repeatDays: result.repeatDays,
         );
       }
-      // Save action to journal
-      final date = result.dueDate ?? '${DateTime.now().year}-${DateTime.now().month.toString().padLeft(2, '0')}-${DateTime.now().day.toString().padLeft(2, '0')}';
-      final existing = await TankStore.instance.journalForDate(_tank.id, date);
-      final actEntry = existing.where((e) => e.category == 'actions').toList();
-      List<String> actions = [];
-      if (actEntry.isNotEmpty) {
-        try { actions = (jsonDecode(actEntry.first.data) as List).cast<String>(); } catch (_) {}
+      // Only log to journal if marked complete at creation
+      if (result.markComplete) {
+        final date = result.dueDate ?? '${DateTime.now().year}-${DateTime.now().month.toString().padLeft(2, '0')}-${DateTime.now().day.toString().padLeft(2, '0')}';
+        final existing = await TankStore.instance.journalForDate(_tank.id, date);
+        final actEntry = existing.where((e) => e.category == 'actions').toList();
+        List<String> actions = [];
+        if (actEntry.isNotEmpty) {
+          try { actions = (jsonDecode(actEntry.first.data) as List).cast<String>(); } catch (_) {}
+        }
+        if (!actions.contains(result.desc)) actions.add(result.desc);
+        await TankStore.instance.upsertJournal(
+          tankId: _tank.id, date: date, category: 'actions', data: jsonEncode(actions),
+        );
       }
-      if (!actions.contains(result.desc)) actions.add(result.desc);
-      await TankStore.instance.upsertJournal(
-        tankId: _tank.id, date: date, category: 'actions', data: jsonEncode(actions),
-      );
       await _load();
       _showTopSnack(context, result.markComplete ? 'Task completed & logged' : 'Task added');
     }
@@ -6771,6 +7181,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
     final inhabitants = await TankStore.instance.inhabitantsFor(_tank.id);
     final plants = await TankStore.instance.plantsFor(_tank.id);
     final tasks = await TankStore.instance.tasksForTank(_tank.id);
+    final eqJson = await TankStore.instance.equipmentJsonFor(_tank.id);
     // Refresh tank model in case name/settings changed
     final updatedTank = TankStore.instance.tanks.cast<TankModel?>().firstWhere(
       (t) => t!.id == _tank.id,
@@ -6784,6 +7195,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
       _inhabitants = inhabitants;
       _plants = plants;
       _tasks = tasks;
+      _equipmentJson = eqJson;
     });
     _loadSummary();
   }
@@ -6834,6 +7246,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
               'logs': logsData,
               'water_type': _tank.waterType.label,
               'gallons': _tank.gallons,
+              if (_equipmentJson != null) 'equipment': jsonDecode(_equipmentJson!),
             }),
           )
           .timeout(const Duration(seconds: 15));
@@ -7300,12 +7713,17 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
                   onSelected: (value) {
                     if (value == 'edit_tank') {
                       Navigator.of(context).push(MaterialPageRoute(
-                        builder: (_) => EditTankFlowScreen(tank: _tank),
+                        builder: (_) => _TankAttributesScreen(tank: _tank),
                       )).then((_) => _load());
                     }
                     if (value == 'tap_water') {
                       Navigator.of(context).push(MaterialPageRoute(
                         builder: (_) => TapWaterProfileScreen(tank: _tank),
+                      )).then((_) => _load());
+                    }
+                    if (value == 'equipment') {
+                      Navigator.of(context).push(MaterialPageRoute(
+                        builder: (_) => _EquipmentScreen(tank: _tank),
                       )).then((_) => _load());
                     }
                     if (value == 'import_csv') {
@@ -7320,9 +7738,10 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
                     }
                   },
                   itemBuilder: (_) => const [
-                    PopupMenuItem(value: 'edit_tank', child: Text('Edit Tank')),
+                    PopupMenuItem(value: 'edit_tank', child: Text('Tank Details')),
                     PopupMenuItem(value: 'manage_recurring', child: Text('Recurring Tasks')),
                     PopupMenuItem(value: 'tap_water', child: Text('Tap Water Profile')),
+                    PopupMenuItem(value: 'equipment', child: Text('Equipment')),
                     PopupMenuItem(value: 'import_csv', child: Text('Import Data')),
                   ],
                   icon: const Icon(Icons.more_vert, size: 20),
@@ -7387,6 +7806,11 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
                 _NavIconButton(icon: Icons.photo_library_outlined, tooltip: 'Photos', color: const Color(0xFF8B5DAF), onTap: () {
                   Navigator.of(context).push(MaterialPageRoute(builder: (_) => TankGalleryScreen(tank: _tank)));
                 }),
+                const SizedBox(width: 8),
+                _NavIconButton(child: const _TuneSearchIcon(), tooltip: 'Attributes', color: const Color(0xFF607D8B), onTap: () async {
+                  await Navigator.of(context).push(MaterialPageRoute(builder: (_) => _TankAttributesScreen(tank: _tank)));
+                  await _load();
+                }),
               ],
             ),
           ),
@@ -7448,9 +7872,9 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
                         return due.isAfter(today);
                       })();
                       return Padding(
-                        padding: const EdgeInsets.fromLTRB(14, 6, 4, 6),
+                        padding: const EdgeInsets.fromLTRB(14, 2, 4, 2),
                         child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                          crossAxisAlignment: CrossAxisAlignment.center,
                           children: [
                             if (isRecurring)
                               const Padding(
@@ -7475,9 +7899,9 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
                               ),
                             ),
                             IconButton(
-                              onPressed: () {
-                                TankStore.instance.completeTaskById(task.id);
-                                _load();
+                              onPressed: () async {
+                                await TankStore.instance.completeTaskById(task.id);
+                                await _load();
                               },
                               icon: const Icon(Icons.check_circle_outline, size: 18, color: Color(0xFF4CAF50)),
                               iconSize: 18,
@@ -7504,10 +7928,10 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
                                       ),
                                     ],
                                   ),
-                                ).then((dismiss) {
+                                ).then((dismiss) async {
                                   if (dismiss == true) {
-                                    TankStore.instance.dismissTaskById(task.id);
-                                    _load();
+                                    await TankStore.instance.dismissTaskById(task.id);
+                                    await _load();
                                   }
                                 });
                               },
@@ -7853,6 +8277,7 @@ class _ChatSheetState extends State<_ChatSheet> {
   List<db.Log> _allLogs = [];
   List<db.JournalEntry> _allJournal = [];
   String? _tapWaterJson;
+  String? _equipmentJson;
   bool _hasCsvImports = false;
   List<Map<String, dynamic>> _pendingTasks = [];
   List<String> _sessionSummaries = [];
@@ -7885,6 +8310,7 @@ class _ChatSheetState extends State<_ChatSheet> {
     final logs = await TankStore.instance.logsFor(tank.id);
     final journal = await TankStore.instance.journalFor(tank.id);
     final tapWaterJson = await TankStore.instance.tapWaterJsonFor(tank.id);
+    final equipmentJson = await TankStore.instance.equipmentJsonFor(tank.id);
     final sessions = await TankStore.instance.recentSessions(tank.id);
     if (mounted) {
       setState(() {
@@ -7924,6 +8350,7 @@ class _ChatSheetState extends State<_ChatSheet> {
         }
 
         _tapWaterJson = tapWaterJson;
+        _equipmentJson = equipmentJson;
         _hasCsvImports = logs.any((l) => l.rawText == 'CSV import');
         _sessionSummaries = sessions.map((s) => s.summary).toList();
       });
@@ -8454,6 +8881,7 @@ class _ChatSheetState extends State<_ChatSheet> {
                   'inhabitants': _inhabitants.map((i) => '${i.count != null ? "${i.count}x " : ""}${i.name}').toList(),
                   'plants': _plants.map((p) => p.name).toList(),
                   if (_tapWaterJson != null) 'tap_water': jsonDecode(_tapWaterJson!),
+                  if (_equipmentJson != null) 'equipment': jsonDecode(_equipmentJson!),
                   if (_hasCsvImports) 'has_csv_imports': true,
                 } : null,
                 'available_tanks': _allTanks.map((t) => t.name).toList(),
@@ -12070,6 +12498,282 @@ class _TankGalleryScreenState extends State<TankGalleryScreen> {
   }
 }
 
+// ── Tank Attributes Screen ───────────────────────────────────────────────
+
+class _TankAttributesScreen extends StatefulWidget {
+  final TankModel tank;
+  const _TankAttributesScreen({required this.tank});
+  @override
+  State<_TankAttributesScreen> createState() => _TankAttributesScreenState();
+}
+
+class _TankAttributesScreenState extends State<_TankAttributesScreen> {
+  Map<String, dynamic> _equipment = {};
+  List<db.Inhabitant> _inhabitants = [];
+  List<db.Plant> _plants = [];
+  bool _loading = true;
+  late TankModel _tank;
+
+  @override
+  void initState() {
+    super.initState();
+    _tank = widget.tank;
+    _load();
+  }
+
+  Future<void> _load() async {
+    final json = await TankStore.instance.equipmentJsonFor(_tank.id);
+    final inhabitants = await TankStore.instance.inhabitantsFor(_tank.id);
+    final plants = await TankStore.instance.plantsFor(_tank.id);
+    final updated = TankStore.instance.tanks.cast<TankModel?>().firstWhere((t) => t!.id == _tank.id, orElse: () => null);
+    if (json != null) {
+      try { _equipment = Map<String, dynamic>.from(jsonDecode(json) as Map); } catch (_) {}
+    }
+    if (mounted) setState(() {
+      if (updated != null) _tank = updated;
+      _inhabitants = inhabitants;
+      _plants = plants;
+      _loading = false;
+    });
+  }
+
+  Widget _attrRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 120,
+            child: Text(label, style: TextStyle(fontSize: 13, color: Colors.grey.shade600)),
+          ),
+          Expanded(child: Text(value, style: const TextStyle(fontSize: 14))),
+        ],
+      ),
+    );
+  }
+
+  Widget _sectionTitle(String title) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 20, bottom: 8),
+      child: Text(title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _cDark, letterSpacing: 0.3)),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const Scaffold(backgroundColor: Colors.white, body: Center(child: CircularProgressIndicator()));
+    }
+
+    final isSaltwater = [WaterType.saltwater, WaterType.reef].contains(_tank.waterType);
+
+    // Build equipment items
+    final eqItems = <Widget>[];
+
+    // Substrate
+    final substrate = _equipment['substrate'];
+    if (substrate != null) {
+      List<String> names;
+      if (substrate is List) {
+        names = substrate.where((s) => s != 'other').map<String>((s) => (s as String).replaceAll('_', ' ')).toList();
+        final other = _equipment['substrate_other'] as String?;
+        if (other != null && other.trim().isNotEmpty) names.add(other.trim());
+      } else {
+        names = [(substrate as String).replaceAll('_', ' ')];
+      }
+      if (names.isNotEmpty) eqItems.add(_attrRow('Substrate', names.map((n) => n[0].toUpperCase() + n.substring(1)).join(', ')));
+    }
+
+    // Filter type
+    final filterType = _equipment['filter_type'] as String?;
+    if (filterType != null) eqItems.add(_attrRow('Filter Type', filterType.replaceAll('_', ' ').split(' ').map((w) => w[0].toUpperCase() + w.substring(1)).join(' ')));
+
+    // Filter media
+    final media = _equipment['filter_media'];
+    if (media is List && media.isNotEmpty) {
+      eqItems.add(_attrRow('Filter Media', media.map<String>((m) => (m as String).replaceAll('_', ' ').split(' ').map((w) => w[0].toUpperCase() + w.substring(1)).join(' ')).join(', ')));
+    }
+
+    // Lighting
+    final lighting = _equipment['lighting_type'] as String?;
+    if (lighting != null) eqItems.add(_attrRow('Lighting', lighting.replaceAll('_', ' ').split(' ').map((w) => w[0].toUpperCase() + w.substring(1)).join(' ')));
+
+    // Bool toggles
+    final boolItems = <String, String>{
+      'has_heater': 'Heater',
+      'has_air_pump': 'Air Pump',
+      'has_co2': 'CO2 Injection',
+      'has_protein_skimmer': 'Protein Skimmer',
+      'has_calcium_reactor': 'Calcium Reactor',
+      'has_ato': 'Auto Top-Off',
+      'has_dosing_pump': 'Dosing Pump',
+      'has_live_rock': 'Live Rock',
+    };
+    final activeEquip = <String>[];
+    for (final e in boolItems.entries) {
+      if (_equipment[e.key] == true) activeEquip.add(e.value);
+    }
+    if (activeEquip.isNotEmpty) eqItems.add(_attrRow('Equipment', activeEquip.join(', ')));
+
+    // Notes
+    final notes = _equipment['notes'] as String?;
+    if (notes != null && notes.trim().isNotEmpty) eqItems.add(_attrRow('Additional Details', notes.trim()));
+
+    return Scaffold(
+      backgroundColor: Colors.white,
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: _cDark),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        title: Text(_tank.name, style: const TextStyle(color: _cDark, fontWeight: FontWeight.w600, fontSize: 17)),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
+        children: [
+          // Tank info
+          _sectionTitle('Tank'),
+          _attrRow('Size', '${_tank.gallons} gal'),
+          _attrRow('Water Type', switch (_tank.waterType) {
+            WaterType.planted => 'Freshwater - Planted',
+            WaterType.reef => 'Saltwater - Reef',
+            _ => _tank.waterType.label,
+          }),
+
+          // Inhabitants
+          if (_inhabitants.isNotEmpty) ...[
+            _sectionTitle('Inhabitants'),
+            ..._inhabitants.map((i) => _attrRow(
+              i.type != null ? '${i.type![0].toUpperCase()}${i.type!.substring(1)}' : 'Fish',
+              '${i.count != null && i.count! > 1 ? "${i.count}x " : ""}${i.name}',
+            )),
+          ],
+
+          // Plants
+          if (_plants.isNotEmpty) ...[
+            _sectionTitle('Plants'),
+            ..._plants.map((p) => _attrRow('Plant', p.name)),
+          ],
+
+          // Equipment
+          if (eqItems.isNotEmpty) ...[
+            _sectionTitle('Equipment'),
+            ...eqItems,
+          ],
+
+          const SizedBox(height: 24),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: _cDark,
+                side: const BorderSide(color: Color(0xFF1FA2A8)),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              onPressed: () async {
+                await Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => EditTankFlowScreen(tank: _tank)),
+                );
+                _load();
+              },
+              icon: const Icon(Icons.edit_outlined, size: 18),
+              label: const Text('Edit Tank', style: TextStyle(fontSize: 15)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Equipment Screen ─────────────────────────────────────────────────────
+
+class _EquipmentScreen extends StatefulWidget {
+  final TankModel tank;
+  final WaterType? waterTypeOverride;
+  const _EquipmentScreen({required this.tank, this.waterTypeOverride});
+  @override
+  State<_EquipmentScreen> createState() => _EquipmentScreenState();
+}
+
+class _EquipmentScreenState extends State<_EquipmentScreen> {
+  Map<String, dynamic> _equipment = {};
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final json = await TankStore.instance.equipmentJsonFor(widget.tank.id);
+    if (json != null) {
+      try { _equipment = Map<String, dynamic>.from(jsonDecode(json) as Map); } catch (_) {}
+    }
+    if (mounted) setState(() => _loading = false);
+  }
+
+  Future<void> _save() async {
+    await TankStore.instance.saveEquipment(widget.tank.id, jsonEncode(_equipment));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const Scaffold(
+        backgroundColor: Colors.white,
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+    return Scaffold(
+      backgroundColor: Colors.white,
+      body: SafeArea(
+        child: _ObEquipmentPage(
+          waterType: widget.waterTypeOverride ?? widget.tank.waterType,
+          equipment: _equipment,
+          showSkip: false,
+          onChanged: (updated) {
+            setState(() => _equipment = updated);
+            _save();
+          },
+          onNext: () => Navigator.of(context).pop(),
+        ),
+      ),
+    );
+  }
+}
+
+class _FullScreenNetworkImage extends StatelessWidget {
+  final String url;
+  const _FullScreenNetworkImage({required this.url});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+        elevation: 0,
+      ),
+      body: InteractiveViewer(
+        child: Center(
+          child: Image.network(
+            url,
+            fit: BoxFit.contain,
+            errorBuilder: (_, __, ___) => const Icon(Icons.broken_image, color: Colors.grey, size: 64),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _PhotoDetailScreen extends StatefulWidget {
   final db.TankPhoto photo;
   final VoidCallback onDelete;
@@ -13185,6 +13889,26 @@ class _EditTankScreenState extends State<EditTankScreen> {
                           : _SaltwaterFollowUp(selected: _saltFeatures, onToggle: (f) { setState(() { _saltFeatures.contains(f) ? _saltFeatures.remove(f) : _saltFeatures.add(f); }); _pushWaterType(); }),
                     ),
             ),
+            const SizedBox(height: 24),
+            // Equipment
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: _cDark,
+                  side: const BorderSide(color: Color(0xFF1FA2A8)),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => _EquipmentScreen(tank: widget.tank, waterTypeOverride: _waterType)),
+                  );
+                },
+                icon: const Icon(Icons.build_outlined, size: 18),
+                label: const Text('Equipment', style: TextStyle(fontSize: 15)),
+              ),
+            ),
           ],
         ),
       ),
@@ -13954,6 +14678,12 @@ class _CommunityScreenState extends State<_CommunityScreen> {
     );
   }
 
+  void _openFullScreenImage(String url) {
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => _FullScreenNetworkImage(url: url),
+    ));
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -13968,9 +14698,22 @@ class _CommunityScreenState extends State<_CommunityScreen> {
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Padding(
-            padding: EdgeInsets.fromLTRB(16, 12, 16, 4),
-            child: Text('Community', style: TextStyle(color: _cDark, fontWeight: FontWeight.bold, fontSize: 20)),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+            child: Row(
+              children: [
+                const Text('Community', style: TextStyle(color: _cDark, fontWeight: FontWeight.bold, fontSize: 20)),
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1FA2A8),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Text('New', style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600)),
+                ),
+              ],
+            ),
           ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -14127,15 +14870,18 @@ class _CommunityScreenState extends State<_CommunityScreen> {
                                 ),
                             ],
                             // Photo
-                            Image.network(
-                              post['_signed_url'] as String,
-                              width: double.infinity,
-                              height: 260,
-                              fit: BoxFit.cover,
-                              errorBuilder: (_, __, ___) => Container(
+                            GestureDetector(
+                              onTap: () => _openFullScreenImage(post['_signed_url'] as String),
+                              child: Image.network(
+                                post['_signed_url'] as String,
+                                width: double.infinity,
                                 height: 260,
-                                color: Colors.grey.shade200,
-                                child: const Center(child: Icon(Icons.broken_image, size: 48, color: Colors.grey)),
+                                fit: BoxFit.cover,
+                                errorBuilder: (_, __, ___) => Container(
+                                  height: 260,
+                                  color: Colors.grey.shade200,
+                                  child: const Center(child: Icon(Icons.broken_image, size: 48, color: Colors.grey)),
+                                ),
                               ),
                             ),
                             Padding(

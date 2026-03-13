@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
@@ -73,6 +75,9 @@ class TankStore {
         ));
         if (m['tap_water_json'] != null) {
           await _db.updateTapWater(m['id'] as String, m['tap_water_json'] as String);
+        }
+        if (m['equipment_json'] != null) {
+          await _db.updateEquipment(m['id'] as String, m['equipment_json'] as String);
         }
 
         final tankId = m['id'] as String;
@@ -222,6 +227,11 @@ class TankStore {
         final tapJson = await tapWaterJsonFor(tank.id);
         if (tapJson != null) {
           await SupabaseService.updateTapWater(tank.id, tapJson);
+        }
+
+        final eqJson = await equipmentJsonFor(tank.id);
+        if (eqJson != null) {
+          await SupabaseService.updateEquipment(tank.id, eqJson);
         }
 
         final inhs = await _db.inhabitantsForTank(tank.id);
@@ -581,6 +591,18 @@ class TankStore {
       parsedJson: parsedJson,
       date: now,
     );
+
+    // Write to journal actions
+    final dateKey = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+    final existing = await journalForDate(task.tankId, dateKey);
+    final actEntry = existing.where((e) => e.category == 'actions').toList();
+    List<String> actions = [];
+    if (actEntry.isNotEmpty) {
+      try { actions = (jsonDecode(actEntry.first.data) as List).cast<String>(); } catch (_) {}
+    }
+    if (!actions.contains(task.description)) actions.add(task.description);
+    await upsertJournal(tankId: task.tankId, date: dateKey, category: 'actions', data: jsonEncode(actions));
+
     invalidateSummary(task.tankId);
 
     // Cloud sync
@@ -683,6 +705,16 @@ class TankStore {
   Future<void> saveTapWater(String tankId, String? tapWaterJson) async {
     await _db.updateTapWater(tankId, tapWaterJson);
     _cloudSync(() => SupabaseService.updateTapWater(tankId, tapWaterJson));
+  }
+
+  Future<String?> equipmentJsonFor(String tankId) async {
+    final rows = await ((_db.select(_db.tanks))..where((t) => t.id.equals(tankId))).get();
+    return rows.isEmpty ? null : rows.first.equipmentJson;
+  }
+
+  Future<void> saveEquipment(String tankId, String? equipmentJson) async {
+    await _db.updateEquipment(tankId, equipmentJson);
+    _cloudSync(() => SupabaseService.updateEquipment(tankId, equipmentJson));
   }
 
   Future<void> addInhabitant({
