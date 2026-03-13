@@ -6452,8 +6452,9 @@ class _TipCardState extends State<_TipCard> {
       padding: const EdgeInsets.only(top: 8),
       child: Container(
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: const Color(0xFFF3ECFA),
           borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: const Color(0xFFD7C4ED), width: 1),
           boxShadow: [
             BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 6, offset: const Offset(0, 2)),
           ],
@@ -7027,6 +7028,8 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
   String? _summary;
   bool _summaryLoading = false;
   bool _summaryExpanded = false;
+  List<String> _suggestions = [];
+  bool _suggestionsLoading = false;
   bool _actionsExpanded = false;
   String _experience = 'beginner';
   String? _equipmentJson;
@@ -7258,6 +7261,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
     });
     _persistCalculatedParams();
     _loadSummary();
+    _loadSuggestions();
   }
 
   /// Persist calculated Mg and Ca:Mg ratio to journal so they appear in entries
@@ -7385,6 +7389,79 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
       debugPrint('[Summary] error loading summary: $e');
     }
     if (mounted) setState(() => _summaryLoading = false);
+  }
+
+  Future<void> _loadSuggestions() async {
+    setState(() => _suggestionsLoading = true);
+    try {
+      final twoWeeksAgo = DateTime.now().subtract(const Duration(days: 14));
+      final twoWeeksKey = '${twoWeeksAgo.year}-${twoWeeksAgo.month.toString().padLeft(2,'0')}-${twoWeeksAgo.day.toString().padLeft(2,'0')}';
+
+      // Check if there are any measurements in the last 2 weeks
+      final hasRecentMeasurements = _journal.any((j) =>
+          j.category == 'measurements' && j.date.compareTo(twoWeeksKey) >= 0);
+
+      if (!hasRecentMeasurements) {
+        if (mounted) setState(() {
+          _suggestions = ['Add your latest test results so Ariel can evaluate your water quality.'];
+          _suggestionsLoading = false;
+        });
+        return;
+      }
+
+      // Build the same data as summary
+      final byDate = <String, List<db.JournalEntry>>{};
+      for (final j in _journal) {
+        if (j.category == 'measurements' && j.date.compareTo(twoWeeksKey) < 0) continue;
+        byDate.putIfAbsent(j.date, () => []).add(j);
+      }
+      final sortedDates = byDate.keys.toList()..sort((a, b) => b.compareTo(a));
+      final logsData = sortedDates.take(10).map((date) {
+        final entries = byDate[date]!;
+        final parts = <String>[];
+        parts.add('Date: $date');
+        for (final e in entries) {
+          try {
+            if (e.category == 'measurements') {
+              final m = (jsonDecode(e.data) as Map).cast<String, dynamic>();
+              parts.add('Measurements: ${m.entries.map((kv) => '${kv.key}=${kv.value}').join(', ')}');
+            } else if (e.category == 'actions') {
+              final a = (jsonDecode(e.data) as List).cast<String>();
+              if (a.isNotEmpty) parts.add('Actions: ${a.join('; ')}');
+            } else if (e.category == 'notes') {
+              final n = (jsonDecode(e.data) as List).cast<String>();
+              if (n.isNotEmpty) parts.add('Notes: ${n.join('; ')}');
+            }
+          } catch (_) {}
+        }
+        return <String, dynamic>{'text': parts.join(' | ')};
+      }).toList();
+
+      final resp = await http
+          .post(
+            Uri.parse('$_baseUrl/suggestions/tank'),
+            headers: _apiHeaders(),
+            body: jsonEncode({
+              'logs': logsData,
+              'water_type': _tank.waterType.label,
+              'gallons': _tank.gallons,
+              if (_equipmentJson != null) 'equipment': jsonDecode(_equipmentJson!),
+              if (_inhabitants.isNotEmpty) 'inhabitants': _inhabitants.map((i) => i.name).toList(),
+              if (_plants.isNotEmpty) 'plants': _plants.map((p) => p.name).toList(),
+            }),
+          )
+          .timeout(const Duration(seconds: 15));
+      if (resp.statusCode == 200 && mounted) {
+        final data = jsonDecode(resp.body) as Map<String, dynamic>;
+        final raw = data['suggestions'] as List<dynamic>?;
+        if (raw != null) {
+          setState(() => _suggestions = raw.map((s) => s.toString()).toList());
+        }
+      }
+    } catch (e) {
+      debugPrint('[Suggestions] error: $e');
+    }
+    if (mounted) setState(() => _suggestionsLoading = false);
   }
 
   /// Most recent value + date for each known parameter from journal entries.
@@ -7807,22 +7884,6 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
                     style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: _cDark),
                   ),
                 ),
-                PopupMenuButton<String>(
-                  tooltip: 'Add',
-                  onSelected: (value) {
-                    if (value == 'add_task') _showAddTaskDialog();
-                    if (value == 'add_measurement') _showAddMeasurementDialog();
-                    if (value == 'add_note') _showAddNoteDialog();
-                    if (value == 'add_photo') pickPhotoFlow(context, tankId: _tank.id);
-                  },
-                  itemBuilder: (_) => const [
-                    PopupMenuItem(value: 'add_task', child: Text('Add Task')),
-                    PopupMenuItem(value: 'add_measurement', child: Text('Add Measurement')),
-                    PopupMenuItem(value: 'add_note', child: Text('Add Note')),
-                    PopupMenuItem(value: 'add_photo', child: Text('Add Photo')),
-                  ],
-                  icon: const Icon(Icons.add, size: 22, color: _cDark),
-                ),
                 _buildTankNotificationBell(),
                 PopupMenuButton<String>(
                   tooltip: 'More options',
@@ -7928,6 +7989,23 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
                   await Navigator.of(context).push(MaterialPageRoute(builder: (_) => _TankAttributesScreen(tank: _tank)));
                   await _load();
                 }),
+                const Spacer(),
+                PopupMenuButton<String>(
+                  tooltip: 'Add',
+                  onSelected: (value) {
+                    if (value == 'add_task') _showAddTaskDialog();
+                    if (value == 'add_measurement') _showAddMeasurementDialog();
+                    if (value == 'add_note') _showAddNoteDialog();
+                    if (value == 'add_photo') pickPhotoFlow(context, tankId: _tank.id);
+                  },
+                  itemBuilder: (_) => const [
+                    PopupMenuItem(value: 'add_task', child: Text('Add Task')),
+                    PopupMenuItem(value: 'add_measurement', child: Text('Add Measurement')),
+                    PopupMenuItem(value: 'add_note', child: Text('Add Note')),
+                    PopupMenuItem(value: 'add_photo', child: Text('Add Photo')),
+                  ],
+                  icon: const Icon(Icons.add, size: 22, color: _cDark),
+                ),
               ],
             ),
           ),
@@ -8131,10 +8209,72 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
               ),
             ),
           ),
+          // AI Suggestions card
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+            child: Card(
+              elevation: 0,
+              color: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+                side: const BorderSide(color: _cLight, width: 1),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Row(
+                      children: [
+                        Icon(Icons.lightbulb_outline, size: 15, color: Colors.black87),
+                        SizedBox(width: 4),
+                        Text('AI SUGGESTIONS', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
+                            color: Colors.black, letterSpacing: 0.8)),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    if (_suggestionsLoading)
+                      const Row(
+                        children: [
+                          SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2)),
+                          SizedBox(width: 8),
+                          Text('Thinking…', style: TextStyle(fontSize: 12, color: Colors.black54)),
+                        ],
+                      )
+                    else if (_suggestions.isNotEmpty)
+                      ..._suggestions.map((s) => Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('•  ', style: TextStyle(fontSize: 13, color: _cMid, fontWeight: FontWeight.bold)),
+                            Expanded(
+                              child: Text(s, style: const TextStyle(fontSize: 13, color: Colors.black87, height: 1.4)),
+                            ),
+                          ],
+                        ),
+                      ))
+                    else
+                      const Text('No suggestions right now.', style: TextStyle(fontSize: 12, color: Colors.black54)),
+                    const SizedBox(height: 6),
+                    const Text(
+                      'AI-generated content may be inaccurate. Always consult a professional.',
+                      style: TextStyle(fontSize: 10, color: Colors.black38),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
           // Latest water parameters card
           Builder(builder: (context) {
             final params = _latestMeasurements();
-            return Padding(
+            return GestureDetector(
+              onTap: () async {
+                await Navigator.of(context).push(MaterialPageRoute(builder: (_) => DailyLogsScreen(tank: _tank, logs: _logs)));
+                await _load();
+              },
+              child: Padding(
               padding: const EdgeInsets.fromLTRB(12, 10, 12, 16),
               child: Card(
                 elevation: 0,
@@ -8148,19 +8288,24 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Row(
+                      Row(
                         children: [
-                          Icon(Icons.science_outlined, size: 15, color: Colors.black87),
-                          SizedBox(width: 4),
-                          Text('WATER PARAMETERS — LAST 2 WEEKS',
+                          const Icon(Icons.science_outlined, size: 15, color: Colors.black87),
+                          const SizedBox(width: 4),
+                          const Text('WATER PARAMETERS — LAST 2 WEEKS',
                               style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
                                   color: Colors.black, letterSpacing: 0.8)),
+                          const Spacer(),
+                          GestureDetector(
+                            onTap: _showAddMeasurementDialog,
+                            child: const Icon(Icons.add, size: 18, color: _cDark),
+                          ),
                         ],
                       ),
                       const SizedBox(height: 10),
                       if (params.isEmpty)
                         const Text(
-                          'Log any test results so Ariel can help you in the future. At a minimum it\'s important to test nitrate, nitrite, and ammonia to ensure your aquarium friends stay safe.',
+                          'Log recent test results so Ariel can help you in the future. At a minimum it\'s important to test nitrate, nitrite, and ammonia to ensure your aquarium friends stay safe.',
                           style: TextStyle(fontSize: 13, color: Colors.black54),
                         )
                       else ...() {
@@ -8267,6 +8412,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
                   ),
                 ),
               ),
+            ),
             );
           }),
           // Actions last two weeks card
@@ -8293,7 +8439,12 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
             const int _kCollapsedCount = 3;
             final bool canExpand = recentActions.length > _kCollapsedCount;
             final displayed = _actionsExpanded ? recentActions : recentActions.take(_kCollapsedCount).toList();
-            return Padding(
+            return GestureDetector(
+              onTap: () async {
+                await Navigator.of(context).push(MaterialPageRoute(builder: (_) => DailyLogsScreen(tank: _tank, logs: _logs)));
+                await _load();
+              },
+              child: Padding(
               padding: const EdgeInsets.fromLTRB(12, 10, 12, 16),
               child: Card(
                 elevation: 0,
@@ -8307,13 +8458,18 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Row(
+                      Row(
                         children: [
-                          Icon(Icons.checklist, size: 15, color: Colors.black87),
-                          SizedBox(width: 4),
-                          Text('ACTIONS — LAST 2 WEEKS',
+                          const Icon(Icons.checklist, size: 15, color: Colors.black87),
+                          const SizedBox(width: 4),
+                          const Text('ACTIONS — LAST 2 WEEKS',
                               style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
                                   color: Colors.black, letterSpacing: 0.8)),
+                          const Spacer(),
+                          GestureDetector(
+                            onTap: _showAddTaskDialog,
+                            child: const Icon(Icons.add, size: 18, color: _cDark),
+                          ),
                         ],
                       ),
                       const SizedBox(height: 8),
@@ -8359,6 +8515,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
                   ),
                 ),
               ),
+            ),
             );
           }),
           const SizedBox(height: 100),

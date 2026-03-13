@@ -1015,6 +1015,112 @@ def summarize_tank_logs(request: Request, req: SummaryRequest, user_id: str = De
         return {"summary": None}
 
 
+_SUGGESTIONS_SYSTEM_PROMPT = """You are a concise aquarium assistant. Given recent tank journal entries, generate 2-4 short, actionable suggestions for the user. Each suggestion should be a single sentence — practical, specific, and relevant to this tank's current state.
+
+Rules:
+- Return ONLY a JSON array of strings. Example: ["Test ammonia and nitrite levels.", "Consider a 25% water change — nitrate is climbing."]
+- Do NOT wrap in markdown, code fences, or any other formatting. Just the raw JSON array.
+- If there are NO measurements in the data, return: ["Add your latest test results so I can evaluate your water quality."]
+- Focus on what the user should DO next — not what's already been done.
+- Prioritize safety: flag dangerous parameters (ammonia/nitrite > 0, extreme pH, temperature issues) first.
+- Suggest water changes when nitrate is high or time since last change is long.
+- Suggest testing when readings are stale (>7 days old) or key parameters are missing.
+- For planted tanks, suggest fertilization or CO2 adjustments when relevant.
+- For saltwater/reef, suggest dosing or parameter checks when relevant.
+- Do NOT repeat information from the summary. Suggestions should be forward-looking actions.
+- Do NOT ask questions. Do NOT describe yourself.
+- Keep each suggestion under 100 characters.
+- Default to American English spelling.
+- Use these reference ranges (same as the summary endpoint):
+
+  FRESHWATER: ammonia 0, nitrite 0, nitrate 0-20 ppm, pH 6.5-8.2, KH 4-8, GH 4-12, temp 74-80°F
+  PLANTED: CO2 25-35 ppm, nitrate 5-15, phosphate 0.5-2, GH 4-7, KH 1-4, Ca:Mg ratio 3:1-4:1
+  SALTWATER/REEF: salinity 1.024-1.026, KH 8-9, Ca 400-450, Mg 1280-1400, nitrate 1-10, PO4 0.01-0.10
+"""
+
+
+@app.post("/suggestions/tank")
+@limiter.limit("20/minute")
+def tank_suggestions(request: Request, req: SummaryRequest, user_id: str = Depends(_get_user_id)):
+    if not req.logs:
+        return {"suggestions": ["Add your latest test results so I can evaluate your water quality."]}
+
+    lines = []
+    for log in req.logs[:10]:
+        text = log.get("text", "")
+        parsed_str = log.get("parsed", "")
+        if parsed_str and (not text or text.strip().lower() in ("csv import", "")):
+            try:
+                import json as _json
+                parsed = _json.loads(parsed_str) if isinstance(parsed_str, str) else parsed_str
+                parts = []
+                if parsed.get("date"):
+                    parts.append(f"Date: {parsed['date']}")
+                if parsed.get("measurements"):
+                    parts.append("Measurements: " + ", ".join(
+                        f"{k}={v}" for k, v in parsed["measurements"].items()
+                    ))
+                if parsed.get("notes"):
+                    parts.append("Notes: " + "; ".join(parsed["notes"]))
+                if parsed.get("actions"):
+                    parts.append("Actions: " + "; ".join(parsed["actions"]))
+                text = " | ".join(parts) if parts else ""
+            except Exception:
+                pass
+        if text:
+            lines.append(f"- {text}")
+    entries = "\n".join(lines)
+    if not entries.strip():
+        return {"suggestions": ["Add your latest test results so I can evaluate your water quality."]}
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return {"suggestions": []}
+
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        system_prompt = _SUGGESTIONS_SYSTEM_PROMPT
+        if req.water_type:
+            system_prompt += f"\n\nThis is a {req.water_type} tank"
+            if req.gallons:
+                system_prompt += f" ({req.gallons} gallons)"
+            system_prompt += "."
+        if req.inhabitants:
+            system_prompt += f"\nInhabitants: {', '.join(req.inhabitants)}."
+        if req.plants:
+            system_prompt += f"\nPlants: {', '.join(req.plants)}."
+        if req.equipment and isinstance(req.equipment, dict):
+            eq_parts = []
+            substrate = req.equipment.get("substrate")
+            if substrate:
+                if isinstance(substrate, list):
+                    sub_names = [s.replace("_", " ").title() for s in substrate if s != "other"]
+                    other = req.equipment.get("substrate_other")
+                    if other and isinstance(other, str) and other.strip():
+                        sub_names.append(other.strip())
+                    if sub_names:
+                        eq_parts.append(f"Substrate: {', '.join(sub_names)}")
+                elif isinstance(substrate, str):
+                    eq_parts.append(f"Substrate: {substrate.replace('_', ' ').title()}")
+            if eq_parts:
+                system_prompt += f"\nEquipment: {', '.join(eq_parts)}."
+        response = _chat(client,
+            model=_pick_model(water_type=req.water_type or ""),
+            max_tokens=256,
+            system=system_prompt,
+            messages=[{"role": "user", "content": entries}],
+        )
+        import json as _json
+        raw = response.content[0].text.strip()
+        suggestions = _json.loads(raw)
+        if isinstance(suggestions, list):
+            return {"suggestions": [str(s) for s in suggestions[:4]]}
+        return {"suggestions": []}
+    except Exception as e:
+        print(f"[Suggestions] error: {e}")
+        return {"suggestions": []}
+
+
 _CHAT_SYSTEM_PROMPT = """You are Ariel, a knowledgeable aquarium assistant embedded in a tank journal app. Your name is Ariel — use it naturally when introducing yourself, but do not repeat it unnecessarily in every reply. The user can log tank events (measurements, actions, observations) by typing in the chat, and you respond conversationally.
 
 LANGUAGE: Default to American English spelling (e.g. "summarizing" not "summarising", "color" not "colour"). If the user writes in a different language, respond in that language instead.
