@@ -1236,6 +1236,13 @@ CRITICAL: Never say "I've added it" after receiving only a clarifying answer —
 PLANT NAME CORRECTIONS:
 If a plant is already in the plants list and the user asks to correct or rename it (e.g. "actually it's called Water Sprite Lace Leaf", "rename that plant to...", "correct the name to..."), confirm the correction: "Done — I've updated [old name] to [new name] in your plant list."
 
+MEASUREMENT CORRECTIONS:
+If the user says they made a mistake with a measurement (e.g. "that was nitrate not nitrite", "I meant pH was 7.2 not 7.4", "oops, the ammonia should be 0"), you MUST:
+1. Confirm the correction: "Got it — I've updated your records: removed nitrite 5 and logged nitrate 5."
+2. Be specific about what was removed and what was added so the app can process the correction.
+3. If the user says a parameter was wrong but doesn't give the correct value, ask for it before confirming.
+4. The phrase "I've corrected" or "I've updated your records" triggers the correction — always use one of these phrases.
+
 TANK CREATION:
 You CAN and SHOULD create new tank profiles from ANY context — even when you are already viewing or discussing an existing tank. Never tell the user you are unable to create a new tank.
 When the user wants to add or set up a new tank (e.g. "add a tank", "I have a new tank", "setting up a tank", "create a tank"), guide them conversationally. Ask ONE question at a time in this order, skipping any already answered:
@@ -1381,6 +1388,19 @@ Rules:
 - old_name: the name currently in the plant list that should be changed.
 - new_name: the corrected name the user wants. Use Title Case.
 - If the conversation does not involve renaming or correcting a plant name, return {"old_name": "", "new_name": ""}"""
+
+_MEASUREMENT_CORRECTION_PROMPT = """Based on this conversation, extract the measurement correction the user requested.
+
+Return ONLY valid JSON — no markdown, no explanation:
+{"date": "2026-03-13", "remove": {"nitrite": 5}, "add": {"nitrate": 5}}
+
+Rules:
+- date: the date of the measurement to correct. Use the most recent date from the conversation context. Format: YYYY-MM-DD.
+- remove: a dict of parameter names and values to DELETE from the journal for that date. Use lowercase parameter names (ammonia, nitrite, nitrate, ph, kh, gh, tds, temperature, salinity, calcium, magnesium, phosphate, alkalinity).
+- add: a dict of parameter names and new values to ADD/UPDATE in the journal for that date. Same naming convention.
+- If the user just wants to change a value (e.g. "pH was 7.2 not 7.4"), set remove={"ph": 7.4} and add={"ph": 7.2}.
+- If the user says "that was nitrate not nitrite" with a value, remove the wrong parameter and add the correct one with the same value.
+- If the conversation does not involve correcting a measurement, return {"date": "", "remove": {}, "add": {}}"""
 
 
 def _is_affirmation(text: str) -> bool:
@@ -2124,6 +2144,54 @@ def chat_tank(request: Request, req: ChatRequest, user_id: str = Depends(_get_us
             except Exception as e:
                 print(f"[Chat/PlantRename] error: {e}")
 
+        # Extract measurement correction — triggered when AI confirms a correction
+        measurement_correction = None
+
+        reply_confirms_correction = any(k in reply_lower for k in [
+            "i've corrected", "i have corrected", "i've updated your record",
+            "i have updated your record", "corrected your", "updated your record",
+            "removed nitri", "removed ammonia", "removed ph",
+            "changed it to", "fixed that", "i've fixed",
+        ])
+
+        user_requests_correction = bool(re.search(
+            r"\b(was|meant|should be|not|wrong|mistake|oops|actually|correct)\b.{0,40}"
+            r"\b(nitrite|nitrate|ammonia|ph|kh|gh|tds|temperature|salinity|calcium|magnesium|phosphate|alkalinity)\b"
+            r"|\b(nitrite|nitrate|ammonia|ph|kh|gh|tds|temperature|salinity|calcium|magnesium|phosphate|alkalinity)\b"
+            r".{0,40}\b(was|meant|should be|not|wrong|mistake|oops|actually|correct)\b",
+            req.message, re.IGNORECASE,
+        ))
+
+        should_extract_correction = reply_confirms_correction or user_requests_correction
+        print(f"[MeasCorrection] triggers: reply_confirms={reply_confirms_correction}, user_requests={user_requests_correction} → should_extract={should_extract_correction}")
+
+        if should_extract_correction:
+            convo = "\n".join(
+                f"{m['role'].upper()}: {m['content']}"
+                for m in (req.history or [])
+                if m.get("role") in ("user", "assistant")
+            )
+            convo += f"\nUSER: {req.message}\nASSISTANT: {reply}"
+            # Include recent logs so the LLM knows the date and values
+            if req.recent_logs:
+                convo += f"\n\nRecent logs:\n" + "\n".join(req.recent_logs[:5])
+            try:
+                corr_response = _chat(client,
+                    model="claude-haiku-4-5",
+                    max_tokens=256,
+                    system=_MEASUREMENT_CORRECTION_PROMPT,
+                    messages=[{"role": "user", "content": convo}],
+                )
+                raw = corr_response.content[0].text.strip()
+                raw = re.sub(r"^```(?:json)?\s*", "", raw)
+                raw = re.sub(r"\s*```$", "", raw).strip()
+                parsed = json.loads(raw)
+                if parsed.get("date") and (parsed.get("remove") or parsed.get("add")):
+                    measurement_correction = parsed
+                    print(f"[MeasCorrection] extracted: {measurement_correction}")
+            except Exception as e:
+                print(f"[Chat/MeasCorrection] error: {e}")
+
         return {
             "response": reply,
             "tasks": extracted_tasks,
@@ -2131,6 +2199,7 @@ def chat_tank(request: Request, req: ChatRequest, user_id: str = Depends(_get_us
             "new_inhabitant": new_inhabitant,
             "new_plants": new_plants,
             "rename_plant": rename_plant,
+            "measurement_correction": measurement_correction,
             "_debug": {
                 "should_extract": should_extract_tasks,
                 "reply_confirms": reply_confirms_task_set,

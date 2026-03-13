@@ -7027,6 +7027,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
   String? _summary;
   bool _summaryLoading = false;
   bool _summaryExpanded = false;
+  bool _actionsExpanded = false;
   String _experience = 'beginner';
   String? _equipmentJson;
 
@@ -8264,7 +8265,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
             );
           }),
           // Actions last two weeks card
-          Builder(builder: (context) {
+          StatefulBuilder(builder: (context, setLocalState) {
             final twoWeeksAgo = DateTime.now().subtract(const Duration(days: 14));
             final twoWeeksKey = '${twoWeeksAgo.year}-${twoWeeksAgo.month.toString().padLeft(2,'0')}-${twoWeeksAgo.day.toString().padLeft(2,'0')}';
             final recentActions = <({String action, DateTime date})>[];
@@ -8284,6 +8285,9 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
               } catch (_) {}
             }
             if (recentActions.isEmpty) return const SizedBox.shrink();
+            const int _kCollapsedCount = 3;
+            final bool canExpand = recentActions.length > _kCollapsedCount;
+            final displayed = _actionsExpanded ? recentActions : recentActions.take(_kCollapsedCount).toList();
             return Padding(
               padding: const EdgeInsets.fromLTRB(12, 10, 12, 16),
               child: Card(
@@ -8308,7 +8312,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
                         ],
                       ),
                       const SizedBox(height: 8),
-                      ...recentActions.map((item) {
+                      ...displayed.map((item) {
                         final label = item.action[0].toUpperCase() + item.action.substring(1);
                         final dateStr = _formatParamDate(DateTime(
                           item.date.toLocal().year,
@@ -8335,6 +8339,17 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
                           ),
                         );
                       }),
+                      if (canExpand)
+                        GestureDetector(
+                          onTap: () => setLocalState(() => _actionsExpanded = !_actionsExpanded),
+                          child: Padding(
+                            padding: const EdgeInsets.only(top: 6),
+                            child: Text(
+                              _actionsExpanded ? 'Less' : 'More...',
+                              style: const TextStyle(fontSize: 12, color: _cMid, fontWeight: FontWeight.w500),
+                            ),
+                          ),
+                        ),
                     ],
                   ),
                 ),
@@ -9149,6 +9164,51 @@ class _ChatSheetState extends State<_ChatSheet> {
               if (mounted) widget.onLogsChanged();
             }
           } catch (_) {}
+        }
+
+        // Apply measurement correction if AI confirmed one
+        if (data is Map && data['measurement_correction'] != null && _selectedTank != null) {
+          try {
+            final corr = data['measurement_correction'] as Map<String, dynamic>;
+            final corrDate = corr['date']?.toString() ?? '';
+            final remove = (corr['remove'] as Map?)?.cast<String, dynamic>() ?? {};
+            final add = (corr['add'] as Map?)?.cast<String, dynamic>() ?? {};
+            if (corrDate.isNotEmpty && (remove.isNotEmpty || add.isNotEmpty)) {
+              debugPrint('[Chat/MeasCorrection] date=$corrDate remove=$remove add=$add');
+              // Load existing measurements for this date
+              final existing = await TankStore.instance.journalFor(_selectedTank!.id);
+              final measEntry = existing.where((e) => e.category == 'measurements' && e.date == corrDate).toList();
+              Map<String, dynamic> measurements = {};
+              if (measEntry.isNotEmpty) {
+                try { measurements = Map<String, dynamic>.from(jsonDecode(measEntry.first.data) as Map); } catch (_) {}
+              }
+              // Remove specified keys
+              for (final key in remove.keys) {
+                measurements.remove(key);
+              }
+              // Add/update specified keys
+              for (final entry in add.entries) {
+                measurements[entry.key] = entry.value;
+              }
+              // Save back
+              if (measurements.isNotEmpty) {
+                await TankStore.instance.upsertJournal(
+                  tankId: _selectedTank!.id,
+                  date: corrDate,
+                  category: 'measurements',
+                  data: jsonEncode(measurements),
+                );
+              } else {
+                await TankStore.instance.deleteJournalByKey(_selectedTank!.id, corrDate, 'measurements');
+              }
+              TankStore.instance.invalidateSummary(_selectedTank!.id);
+              await _loadTankData(_selectedTank!);
+              if (mounted) widget.onLogsChanged();
+              debugPrint('[Chat/MeasCorrection] applied successfully');
+            }
+          } catch (e) {
+            debugPrint('[Chat/MeasCorrection] ERROR: $e');
+          }
         }
 
         // Save any tasks the AI confirmed scheduling
