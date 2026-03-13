@@ -855,14 +855,19 @@ Rules:
     KH: 1–4 dKH ideal. Low KH allows easier pH swings for CO2 efficiency.
     iron (Fe): ~0.1 ppm target (trace level). Higher can fuel hair algae.
     potassium (K): 15–25 ppm ideal. Higher can cause nutrient uptake lockout.
-    calcium (Ca): Do NOT evaluate using raw ppm. Always assess using the Ca:Mg ratio. If Ca:Mg is 3:1–4:1, calcium is in range regardless of the absolute number.
-    magnesium (Mg): Derived from GH and Ca. Do NOT evaluate using raw ppm. Always assess using the Ca:Mg ratio. If Ca:Mg is 3:1–4:1, magnesium is in range regardless of the absolute number.
+    calcium (Ca): Do NOT evaluate using raw ppm. Always assess using the Ca:Mg ratio. If Ca:Mg is 3:1–4:1, calcium is in range regardless of the absolute number. If the ratio is ABOVE 4:1, magnesium is too low — recommend a magnesium supplement (e.g. Seachem Equilibrium, Epsom salt). If the ratio is BELOW 3:1, calcium is too low relative to magnesium.
+    magnesium (Mg): Derived from GH and Ca. Do NOT evaluate using raw ppm. Always assess using the Ca:Mg ratio. If Ca:Mg is 3:1–4:1, magnesium is in range regardless of the absolute number. If the ratio is ABOVE 4:1, magnesium is deficient — always flag this and recommend supplementation.
     temperature: 74–80°F / 23–27°C normal
 
   PLANTED TANK NUTRIENT ANALYSIS:
   Magnesium calculation requires both GH and Ca measured on the same day.
+  Mg (ppm) ≈ (GH in ppm CaCO₃ − Ca in ppm × 2.5) / 4.12
   If the calculated Mg is zero or negative, note a potential testing inconsistency.
-  CRITICAL: Always evaluate Ca and Mg using the Ca:Mg RATIO, never the raw numbers alone. If the ratio is 3:1–4:1, both Ca and Mg are in range — do NOT flag either as low or high. Only flag an issue if the ratio is significantly outside this range or if Mg is zero/negative.
+  CRITICAL: Always evaluate Ca and Mg using the Ca:Mg RATIO, never the raw numbers alone.
+  - Ratio 3:1–4:1 → GOOD. Both Ca and Mg are in range. Do NOT flag either as low or high.
+  - Ratio ABOVE 4:1 → Mg is LOW. Flag this and recommend a magnesium supplement for optimal plant health. Example: Ca 70, Mg ~5 = 13:1 ratio — Mg is severely deficient.
+  - Ratio BELOW 3:1 → Ca is LOW relative to Mg. Flag this and suggest calcium supplementation.
+  - Ratio ABOVE 6:1 or BELOW 1:1 → LOCKOUT RISK. Proactively warn about nutrient lockout.
 
   SALTWATER / REEF (mixed reef):
     ammonia: 0 ppm ideal (any detectable amount is problematic)
@@ -1104,8 +1109,8 @@ Use these reference ranges as GUIDELINES when assessing whether a parameter is l
     KH: 1–4 dKH ideal. Low KH allows easier pH swings for CO2 efficiency.
     iron (Fe): ~0.1 ppm target (trace level). Higher can fuel hair algae.
     potassium (K): 15–25 ppm ideal. Higher can cause nutrient uptake lockout.
-    calcium (Ca): Do NOT evaluate using raw ppm. Always assess using the Ca:Mg ratio. If Ca:Mg is 3:1–4:1, calcium is in range regardless of the absolute number.
-    magnesium (Mg): Derived from GH and Ca. Do NOT evaluate using raw ppm. Always assess using the Ca:Mg ratio. If Ca:Mg is 3:1–4:1, magnesium is in range regardless of the absolute number.
+    calcium (Ca): Do NOT evaluate using raw ppm. Always assess using the Ca:Mg ratio. If Ca:Mg is 3:1–4:1, calcium is in range regardless of the absolute number. If the ratio is ABOVE 4:1, magnesium is too low — recommend a magnesium supplement (e.g. Seachem Equilibrium, Epsom salt). If the ratio is BELOW 3:1, calcium is too low relative to magnesium.
+    magnesium (Mg): Derived from GH and Ca. Mg (ppm) ≈ (GH in ppm CaCO₃ − Ca in ppm × 2.5) / 4.12. Do NOT evaluate using raw ppm. Always assess using the Ca:Mg ratio. If Ca:Mg is 3:1–4:1, magnesium is in range. If the ratio is ABOVE 4:1, magnesium is deficient — always flag this and recommend supplementation.
     temperature: 74–80°F / 23–27°C normal
 
   SALTWATER / REEF (mixed reef):
@@ -1158,7 +1163,11 @@ GH / Calcium / Magnesium relationship:
 - GH measures TOTAL calcium + magnesium hardness combined. 1 dGH ≈ 17.85 ppm CaCO₃.
 - If you have both GH and Ca readings, you can estimate Mg: Mg (ppm) ≈ (GH in ppm CaCO₃ - Ca in ppm × 2.5) / 4.12
 - If the calculated Mg is zero or negative, flag a potential testing inconsistency.
-- CRITICAL: Always evaluate Ca and Mg using the Ca:Mg RATIO, never raw numbers alone. If the ratio is 3:1–4:1, both are in range — do NOT flag either as low or high. Only flag an issue if the ratio is significantly outside this range or if Mg is zero/negative.
+- CRITICAL: Always evaluate Ca and Mg using the Ca:Mg RATIO, never raw numbers alone.
+  - Ratio 3:1–4:1 → GOOD. Both Ca and Mg are in range. Do NOT flag either as low or high.
+  - Ratio ABOVE 4:1 → Mg is LOW. Always flag this and recommend a magnesium supplement (e.g. Seachem Equilibrium, Epsom salt) for optimal plant health. Example: Ca 70, GH 11 dGH → Mg ≈ 5 ppm → ratio 13:1 — Mg is severely deficient, recommend supplementation.
+  - Ratio BELOW 3:1 → Ca is LOW relative to Mg. Flag and suggest calcium supplementation.
+  - If Mg is zero or negative, flag a potential testing inconsistency.
 
 When a user reports plant health issues, use your training knowledge to identify likely nutrient deficiencies from the symptoms described and recommend testing the most relevant parameters. Do NOT default to ammonia/nitrite/nitrate/pH — those are for fish health emergencies, not plant deficiency diagnosis.
 
@@ -1166,7 +1175,7 @@ Nutrient lockout:
 - Very low or absent Mg can lock out Ca uptake even when Ca is present.
 - Very high GH (>14 dGH) can inhibit micronutrient absorption.
 - Elevated potassium (>30 ppm) can cause nutrient lockout, blocking uptake of Ca and Mg.
-- LOCKOUT THRESHOLD: When the Ca:Mg ratio deviates by more than 2 from the ideal range (i.e. ratio >6:1 or <1:1), proactively raise a lockout warning. Example: Ca 80 ppm, Mg 10 ppm = 8:1 ratio — flag this as a lockout risk.
+- LOCKOUT THRESHOLD: When the Ca:Mg ratio is >6:1 or <1:1, proactively raise a lockout warning. Example: Ca 80 ppm, Mg 10 ppm = 8:1 ratio — flag this as a lockout risk and recommend immediate Mg supplementation.
 - If you detect potential lockout conditions from the logged parameters, explain what lockout means and suggest corrective action.
 
 GENERAL RULES:
