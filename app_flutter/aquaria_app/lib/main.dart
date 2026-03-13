@@ -72,6 +72,7 @@ const String _kBaseUrl = String.fromEnvironment(
 /// Build HTTP headers with Supabase JWT for authenticated API calls.
 Map<String, String> _apiHeaders() {
   final token = Supabase.instance.client.auth.currentSession?.accessToken;
+  debugPrint('[API] auth token present: ${token != null}');
   return {
     'Content-Type': 'application/json',
     if (token != null) 'Authorization': 'Bearer $token',
@@ -9011,6 +9012,7 @@ class _ChatSheetState extends State<_ChatSheet> {
                 if (_sessionSummaries.isNotEmpty) 'session_summaries': _sessionSummaries,
               }))
           .timeout(const Duration(seconds: 30));
+      debugPrint('[Chat] response status: ${resp.statusCode} body: ${resp.body.substring(0, resp.body.length.clamp(0, 200))}');
       if (resp.statusCode == 200 && mounted && !_cancelled) {
         final data = jsonDecode(resp.body);
         final reply = (data is Map ? data['response'] ?? data['message'] ?? data.toString() : resp.body) as String;

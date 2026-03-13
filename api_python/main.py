@@ -14,6 +14,8 @@ from email import encoders
 
 import anthropic
 import jwt
+import urllib.request
+from jwt import PyJWKClient
 from fastapi import Depends, FastAPI, Form, Header, HTTPException, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -27,6 +29,15 @@ from starlette.responses import JSONResponse
 # ---------------------------------------------------------------------------
 
 _SUPABASE_JWT_SECRET = os.environ.get("SUPABASE_JWT_SECRET", "")
+_SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://jdiwsvealnrzdxofomvz.supabase.co")
+_JWKS_URL = f"{_SUPABASE_URL}/auth/v1/.well-known/jwks.json"
+_jwks_client: PyJWKClient | None = None
+
+def _get_jwks_client() -> PyJWKClient:
+    global _jwks_client
+    if _jwks_client is None:
+        _jwks_client = PyJWKClient(_JWKS_URL, cache_keys=True)
+    return _jwks_client
 
 def _get_user_id(request: Request) -> str:
     """Extract and verify the Supabase JWT from the Authorization header.
@@ -35,23 +46,34 @@ def _get_user_id(request: Request) -> str:
     if not auth.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing authorization header")
     token = auth[7:]
-    if not _SUPABASE_JWT_SECRET:
-        raise HTTPException(status_code=500, detail="JWT secret not configured")
     try:
+        # Try RS256 (JWKS) first — Supabase's default for new projects
+        signing_key = _get_jwks_client().get_signing_key_from_jwt(token)
         payload = jwt.decode(
             token,
-            _SUPABASE_JWT_SECRET,
-            algorithms=["HS256"],
+            signing_key.key,
+            algorithms=["RS256"],
             audience="authenticated",
         )
-        user_id = payload.get("sub")
-        if not user_id:
-            raise HTTPException(status_code=401, detail="Invalid token: no sub claim")
-        return user_id
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token expired")
-    except jwt.InvalidTokenError as e:
-        raise HTTPException(status_code=401, detail=f"Invalid token: {e}")
+    except Exception:
+        # Fall back to HS256 with legacy JWT secret
+        if not _SUPABASE_JWT_SECRET:
+            raise HTTPException(status_code=401, detail="Token verification failed")
+        try:
+            payload = jwt.decode(
+                token,
+                _SUPABASE_JWT_SECRET,
+                algorithms=["HS256"],
+                audience="authenticated",
+            )
+        except jwt.ExpiredSignatureError:
+            raise HTTPException(status_code=401, detail="Token expired")
+        except jwt.InvalidTokenError as e:
+            raise HTTPException(status_code=401, detail=f"Invalid token: {e}")
+    user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid token: no sub claim")
+    return user_id
 
 # ---------------------------------------------------------------------------
 # Rate limiting
@@ -60,12 +82,14 @@ def _get_user_id(request: Request) -> str:
 def _rate_limit_key(request: Request) -> str:
     """Use authenticated user ID for rate-limit key, fall back to IP."""
     auth = request.headers.get("authorization", "")
-    if auth.startswith("Bearer ") and _SUPABASE_JWT_SECRET:
+    if auth.startswith("Bearer "):
         try:
-            payload = jwt.decode(
-                auth[7:], _SUPABASE_JWT_SECRET,
-                algorithms=["HS256"], audience="authenticated",
-            )
+            token = auth[7:]
+            try:
+                signing_key = _get_jwks_client().get_signing_key_from_jwt(token)
+                payload = jwt.decode(token, signing_key.key, algorithms=["RS256"], audience="authenticated")
+            except Exception:
+                payload = jwt.decode(token, _SUPABASE_JWT_SECRET, algorithms=["HS256"], audience="authenticated")
             return payload.get("sub", get_remote_address(request))
         except Exception:
             pass
