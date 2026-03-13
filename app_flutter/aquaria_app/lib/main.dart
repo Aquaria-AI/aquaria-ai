@@ -7321,12 +7321,14 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
 
     setState(() => _summaryLoading = true);
     try {
-      // Build summary data from journal entries (last 2 weeks only)
+      // Build summary data from journal entries
+      // Measurements: last 2 weeks only. Actions/notes: all time.
       final twoWeeksAgo = DateTime.now().subtract(const Duration(days: 14));
       final twoWeeksKey = '${twoWeeksAgo.year}-${twoWeeksAgo.month.toString().padLeft(2,'0')}-${twoWeeksAgo.day.toString().padLeft(2,'0')}';
       final byDate = <String, List<db.JournalEntry>>{};
       for (final j in _journal) {
-        if (j.date.compareTo(twoWeeksKey) < 0) continue;
+        // Skip old measurements, but keep all actions and notes
+        if (j.category == 'measurements' && j.date.compareTo(twoWeeksKey) < 0) continue;
         byDate.putIfAbsent(j.date, () => []).add(j);
       }
       final sortedDates = byDate.keys.toList()..sort((a, b) => b.compareTo(a));
@@ -8448,13 +8450,14 @@ class _ChatSheetState extends State<_ChatSheet> {
         _allLogs = logs;
         _allJournal = journal;
 
-        // Build recent_logs from journal entries (last 14 days)
+        // Build recent_logs from journal entries
+        // Measurements: last 2 weeks only. Actions/notes: all time.
         final twoWeeksAgo = DateTime.now().subtract(const Duration(days: 14));
         final twoWeeksKey = '${twoWeeksAgo.year}-${twoWeeksAgo.month.toString().padLeft(2,'0')}-${twoWeeksAgo.day.toString().padLeft(2,'0')}';
-        final recentJournal = journal.where((j) => j.date.compareTo(twoWeeksKey) >= 0).toList();
-        // Group by date and build summary strings
+        // Group by date, filtering out old measurements but keeping all actions/notes
         final byDate = <String, List<db.JournalEntry>>{};
-        for (final j in recentJournal) {
+        for (final j in journal) {
+          if (j.category == 'measurements' && j.date.compareTo(twoWeeksKey) < 0) continue;
           byDate.putIfAbsent(j.date, () => []).add(j);
         }
         _recentLogs = [];
