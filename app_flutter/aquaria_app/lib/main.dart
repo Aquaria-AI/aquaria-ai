@@ -7265,7 +7265,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
   }
 
   /// Persist calculated Mg and Ca:Mg ratio to journal so they appear in entries
-  /// and are available to the AI summary. Only writes if not already present.
+  /// and are available to the AI summary. Recalculates when GH or Ca changes.
   Future<void> _persistCalculatedParams() async {
     final isFreshwater = _tank.waterType == WaterType.freshwater ||
         _tank.waterType == WaterType.planted ||
@@ -7292,13 +7292,13 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
       final caVal = double.tryParse(caRaw.toString().replaceAll(RegExp(r'[^\d.]'), ''));
       if (ghVal == null || caVal == null) continue;
 
-      // Skip if already has calculated values
-      if (m.containsKey('magnesium_calc') && m.containsKey('ca_mg_ratio')) continue;
-
       final ghPpm = ghVal * 17.85;
       final mgPpm = (ghPpm - caVal * 2.5) / 4.12;
       final mgStr = mgPpm <= 0 ? '0' : mgPpm.toStringAsFixed(1);
       final ratioStr = mgPpm > 0 ? '${(caVal / mgPpm).toStringAsFixed(1)}:1' : 'N/A';
+
+      // Skip write if values haven't changed
+      if (m['magnesium_calc'] == mgStr && m['ca_mg_ratio'] == ratioStr) continue;
 
       final updated = Map<String, dynamic>.from(m);
       updated['magnesium_calc'] = mgStr;
