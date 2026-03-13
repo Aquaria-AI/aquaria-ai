@@ -16,6 +16,7 @@ import 'package:csv/csv.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'db/app_db.dart' as db;
 import 'models/tank.dart';
@@ -375,6 +376,8 @@ AppBar _buildAppBar(BuildContext context, String title, {List<Widget>? actions, 
               Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const OnboardingScreen()),
               );
+            } else if (value == 'donate') {
+              launchUrl(Uri.parse('https://buy.stripe.com/00wcN6a8f9TM5QKaxw2sM01'), mode: LaunchMode.externalApplication);
             } else if (value == 'sign_out') {
               await SupabaseService.signOut();
               await TankStore.instance.clearLocal();
@@ -414,6 +417,7 @@ AppBar _buildAppBar(BuildContext context, String title, {List<Widget>? actions, 
             const PopupMenuItem(value: 'invite', child: Text('Invite Friends')),
             const PopupMenuItem(value: 'onboarding', child: Text('Onboarding')),
             const PopupMenuItem(value: 'feedback', child: Text('Feedback')),
+            const PopupMenuItem(value: 'donate', child: Text('Support Aquaria')),
             if (SupabaseService.isLoggedIn)
               const PopupMenuItem(value: 'sign_out', child: Text('Sign Out')),
           ],
