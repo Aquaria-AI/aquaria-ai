@@ -148,6 +148,16 @@ def _init_knowledge_db() -> None:
             "INSERT INTO knowledge_entries (water_type, species_tags, parameter_tags, topic_tags, observation, resolution, is_seed) VALUES (?,?,?,?,?,?,1)",
             _SEED_ENTRIES,
         )
+    # Feedback table
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS feedback (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            message TEXT NOT NULL,
+            device TEXT,
+            attachment_name TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
     conn.commit()
     conn.close()
     print("[Knowledge] DB initialised")
@@ -2111,8 +2121,63 @@ def knowledge_ingest(req: KnowledgeIngestRequest):
         return {"status": "error", "message": str(e)}
 
 
+def _send_feedback_email(message: str, device: Optional[str], file_bytes: Optional[bytes], file_name: Optional[str]):
+    """Send feedback email in a background thread so the endpoint doesn't block."""
+    smtp_user = os.environ.get("SMTP_USER")
+    smtp_pass = os.environ.get("SMTP_PASS")
+    if not smtp_user or not smtp_pass:
+        return
+    try:
+        label = f"[{device}]" if device else ""
+        timestamp = datetime.now().isoformat(timespec="seconds")
+        msg = MIMEMultipart()
+        msg["From"] = smtp_user
+        msg["To"] = "info@aquaria-ai.com"
+        msg["Subject"] = f"Aquaria App Feedback {label}"
+        body = f"Timestamp: {timestamp}\nDevice: {device or 'unknown'}\n\n{message}"
+        msg.attach(MIMEText(body, "plain"))
+        if file_bytes and file_name:
+            part = MIMEBase("application", "octet-stream")
+            part.set_payload(file_bytes)
+            encoders.encode_base64(part)
+            part.add_header("Content-Disposition", f'attachment; filename="{file_name}"')
+            msg.attach(part)
+        with smtplib.SMTP("smtp.gmail.com", 587, timeout=10) as server:
+            server.starttls()
+            server.login(smtp_user, smtp_pass)
+            server.send_message(msg)
+        print("[Feedback] email sent", flush=True)
+    except Exception as e:
+        print(f"[Feedback] email error: {e}", flush=True)
+
+
+# JSON feedback endpoint (backwards-compatible with older app versions)
 @app.post("/feedback")
-async def submit_feedback(
+async def submit_feedback_json(req: FeedbackRequest):
+    timestamp = datetime.now().isoformat(timespec="seconds")
+    label = f"[{req.device}]" if req.device else ""
+    entry = f"[{timestamp}]{label} {req.message}\n"
+    try:
+        with open("feedback.log", "a", encoding="utf-8") as f:
+            f.write(entry)
+    except Exception as e:
+        print(f"[Feedback] could not write to file: {e}")
+    print(f"📩 FEEDBACK: {entry}", flush=True)
+    try:
+        conn = sqlite3.connect(_KNOWLEDGE_DB_PATH)
+        conn.execute("INSERT INTO feedback (message, device, attachment_name) VALUES (?, ?, ?)", (req.message, req.device, None))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[Feedback] DB error: {e}", flush=True)
+    import threading
+    threading.Thread(target=_send_feedback_email, args=(req.message, req.device, None, None), daemon=True).start()
+    return {"status": "ok"}
+
+
+# Multipart feedback endpoint (new app versions with file attachment)
+@app.post("/feedback/upload")
+async def submit_feedback_upload(
     message: str = Form(...),
     device: Optional[str] = Form(None),
     attachment: Optional[UploadFile] = File(None),
@@ -2127,36 +2192,20 @@ async def submit_feedback(
         print(f"[Feedback] could not write to file: {e}")
     print(f"📩 FEEDBACK: {entry}", flush=True)
 
-    # Read attachment bytes if present
     file_bytes = None
     file_name = None
     if attachment and attachment.filename:
         file_bytes = await attachment.read()
         file_name = attachment.filename
 
-    # Send email
-    smtp_user = os.environ.get("SMTP_USER")
-    smtp_pass = os.environ.get("SMTP_PASS")
-    if smtp_user and smtp_pass:
-        try:
-            msg = MIMEMultipart()
-            msg["From"] = smtp_user
-            msg["To"] = "info@aquaria-ai.com"
-            msg["Subject"] = f"Aquaria App Feedback {label}"
-            body = f"Timestamp: {timestamp}\nDevice: {device or 'unknown'}\n\n{message}"
-            msg.attach(MIMEText(body, "plain"))
-            if file_bytes and file_name:
-                part = MIMEBase("application", "octet-stream")
-                part.set_payload(file_bytes)
-                encoders.encode_base64(part)
-                part.add_header("Content-Disposition", f'attachment; filename="{file_name}"')
-                msg.attach(part)
-            with smtplib.SMTP("smtp.gmail.com", 587) as server:
-                server.starttls()
-                server.login(smtp_user, smtp_pass)
-                server.send_message(msg)
-            print("[Feedback] email sent", flush=True)
-        except Exception as e:
-            print(f"[Feedback] email error: {e}", flush=True)
+    try:
+        conn = sqlite3.connect(_KNOWLEDGE_DB_PATH)
+        conn.execute("INSERT INTO feedback (message, device, attachment_name) VALUES (?, ?, ?)", (message, device, file_name))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[Feedback] DB error: {e}", flush=True)
 
+    import threading
+    threading.Thread(target=_send_feedback_email, args=(message, device, file_bytes, file_name), daemon=True).start()
     return {"status": "ok"}

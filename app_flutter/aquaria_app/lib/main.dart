@@ -921,7 +921,7 @@ class _FeedbackSheetState extends State<_FeedbackSheet> {
     if (msg.isEmpty) return;
     setState(() { _sending = true; _error = null; });
     try {
-      final request = http.MultipartRequest('POST', Uri.parse('$_kBaseUrl/feedback'));
+      final request = http.MultipartRequest('POST', Uri.parse('$_kBaseUrl/feedback/upload'));
       request.fields['message'] = msg;
       if (_attachment != null && _attachment!.bytes != null) {
         request.files.add(http.MultipartFile.fromBytes(
