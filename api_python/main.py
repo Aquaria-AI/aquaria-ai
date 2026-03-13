@@ -6,8 +6,14 @@ import time
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
+
 import anthropic
-from fastapi import FastAPI
+from fastapi import FastAPI, Form, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -76,16 +82,16 @@ _SEED_ENTRIES = [
     ("any", "fish", "ich,white spots", "ich treatment",
      "White spots on fish (ich / white spot disease)", "Raise temperature gradually to 82-86°F over 48 hours to speed up the parasite lifecycle. Treat with ich medication — avoid copper if invertebrates are present. Continue for 2 weeks after spots disappear."),
     ("any", "fish", "velvet,gold dust", "velvet treatment",
-     "Gold or rust-colored dust on fish skin (velvet)", "Velvet is more dangerous than ich. Dim the lights immediately (parasite is photosensitive). Treat with a copper-based medication in a hospital tank if invertebrates are present."),
+     "Gold or rust-colored dust on fish skin (velvet)", "Velvet is more dangerous than ich. Dim the lights as soon as possible (the parasite is photosensitive). Treat with a copper-based medication in a hospital tank if invertebrates are present."),
     ("any", "fish", "fin rot,fin damage", "fin rot treatment",
      "Fins appear ragged, discolored, or deteriorating", "Often stress or bacterial infection. Improve water quality first — do a 25% water change. Add aquarium salt (1 tsp/gallon) for freshwater fish. If worsening, treat with an antibacterial medication."),
     ("any", "fish", "bloat,dropsy,pinecone scales", "dropsy treatment",
-     "Fish bloated with raised scales (pinecone appearance)", "Dropsy is usually organ failure — very difficult to treat. Isolate the fish immediately to reduce stress. Epsom salt (1 tbsp/5 gal) can reduce fluid retention. Antibiotics sometimes help if caught early."),
+     "Fish bloated with raised scales (pinecone appearance)", "Dropsy is usually organ failure — very difficult to treat. Isolating the fish can reduce stress. Epsom salt (1 tbsp/5 gal) can reduce fluid retention. Antibiotics sometimes help if caught early."),
     ("any", "fish", "swim bladder,floating,sinking", "swim bladder issue",
      "Fish floating upside-down or struggling to maintain depth", "Fast the fish for 2-3 days. If constipation is the cause, feeding a peeled, cooked pea often helps. Avoid overfeeding going forward."),
     # Compatibility
     ("freshwater", "betta", "aggression,fighting", "betta compatibility",
-     "Betta attacking or fin-nipping tank mates", "Bettas are territorial. Remove long-finned or brightly colored fish immediately. Bottom-dwellers and fast-moving schooling fish fare best. Only one male betta per tank."),
+     "Betta attacking or fin-nipping tank mates", "Bettas are territorial. Consider removing long-finned or brightly colored fish. Bottom-dwellers and fast-moving schooling fish fare best. Only one male betta per tank."),
     ("freshwater", "cichlid,oscar,convict", "aggression,fighting,hiding", "cichlid aggression",
      "Aggressive cichlid bullying or injuring other fish", "Add dense cover — rocks, caves, tall plants — to break sightlines. Rearrange decor to reset territories. Consider separating persistent aggressors."),
     ("freshwater", "shrimp,neocaridina,caridina,cherry shrimp", "dying,death,disappearing", "shrimp dying",
@@ -115,7 +121,7 @@ _SEED_ENTRIES = [
      "Strong sulfur or rotten egg smell from tank", "Hydrogen sulfide from anaerobic pockets in substrate or a dead animal. Gently vacuum the substrate in sections without disturbing it all at once. Check for any hidden dead fish or invertebrates. Increase surface agitation."),
     # Temperature
     ("any", "", "temperature,heater,heat", "heater failure",
-     "Temperature dropped suddenly or heater appears to have failed", "Replace the heater immediately. When reheating, do it slowly — no more than 2°F per hour. Cold shock stresses fish as much as heat shock does."),
+     "Temperature dropped suddenly or heater appears to have failed", "The heater should be replaced. When reheating, do it slowly — no more than 2°F per hour. Cold shock stresses fish as much as heat shock does."),
 ]
 
 
@@ -904,7 +910,7 @@ Safety rules:
 - NEVER suggest risky treatments, chemicals, or procedures. If the user reveals they are already using or considering a risky treatment, make them aware of the risks clearly and calmly — but do not tell them what to do. Present the information so they can decide.
 - When discussing any chemical, medication, or equipment, present a balanced view including potential downsides and common misconceptions. Avoid one-sided recommendations.
 - When unsure whether a recommendation is safe for the specific inhabitants, say so and recommend the most conservative approach.
-- Flag dangerous conditions immediately and clearly: ammonia or nitrite above 0, extreme pH swings, temperature shock, copper exposure to invertebrates, overstocking, mixing incompatible species.
+- Flag dangerous conditions clearly but calmly: ammonia or nitrite above 0, extreme pH swings, temperature shock, copper exposure to invertebrates, overstocking, mixing incompatible species. Avoid alarming language like "immediately", "urgent", "emergency", or "ASAP" — inform the user without creating panic.
 - When a user reports a concern (fish gasping, acting strange, looking sick), FIRST confirm the observation was logged (per the ABSOLUTE RULE above), THEN ask diagnostic questions before suggesting actions. Start by asking if they have tested water parameters recently (ammonia, nitrite, nitrate). Only after understanding the situation should you suggest possible actions — and frame them as options, not directives.
 - If the user has ALREADY shared recent test results in the conversation or logs showing dangerous levels (ammonia/nitrite > 0), then you may suggest a water change as one option — but still frame it gently ("a water change could help" not "do a water change now").
 - Only skip the diagnostic step for true emergencies where the user explicitly describes an immediate chemical spill or equipment failure — not for general symptoms like gasping or lethargy.
@@ -2106,14 +2112,51 @@ def knowledge_ingest(req: KnowledgeIngestRequest):
 
 
 @app.post("/feedback")
-def submit_feedback(req: FeedbackRequest):
+async def submit_feedback(
+    message: str = Form(...),
+    device: Optional[str] = Form(None),
+    attachment: Optional[UploadFile] = File(None),
+):
     timestamp = datetime.now().isoformat(timespec="seconds")
-    label = f"[{req.device}]" if req.device else ""
-    entry = f"[{timestamp}]{label} {req.message}\n"
+    label = f"[{device}]" if device else ""
+    entry = f"[{timestamp}]{label} {message}\n"
     try:
         with open("feedback.log", "a", encoding="utf-8") as f:
             f.write(entry)
     except Exception as e:
         print(f"[Feedback] could not write to file: {e}")
     print(f"📩 FEEDBACK: {entry}", flush=True)
+
+    # Read attachment bytes if present
+    file_bytes = None
+    file_name = None
+    if attachment and attachment.filename:
+        file_bytes = await attachment.read()
+        file_name = attachment.filename
+
+    # Send email
+    smtp_user = os.environ.get("SMTP_USER")
+    smtp_pass = os.environ.get("SMTP_PASS")
+    if smtp_user and smtp_pass:
+        try:
+            msg = MIMEMultipart()
+            msg["From"] = smtp_user
+            msg["To"] = "info@aquaria-ai.com"
+            msg["Subject"] = f"Aquaria App Feedback {label}"
+            body = f"Timestamp: {timestamp}\nDevice: {device or 'unknown'}\n\n{message}"
+            msg.attach(MIMEText(body, "plain"))
+            if file_bytes and file_name:
+                part = MIMEBase("application", "octet-stream")
+                part.set_payload(file_bytes)
+                encoders.encode_base64(part)
+                part.add_header("Content-Disposition", f'attachment; filename="{file_name}"')
+                msg.attach(part)
+            with smtplib.SMTP("smtp.gmail.com", 587) as server:
+                server.starttls()
+                server.login(smtp_user, smtp_pass)
+                server.send_message(msg)
+            print("[Feedback] email sent", flush=True)
+        except Exception as e:
+            print(f"[Feedback] email error: {e}", flush=True)
+
     return {"status": "ok"}

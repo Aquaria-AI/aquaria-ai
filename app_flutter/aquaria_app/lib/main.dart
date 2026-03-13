@@ -898,6 +898,7 @@ class _FeedbackSheetState extends State<_FeedbackSheet> {
   bool _sending = false;
   bool _sent = false;
   String? _error;
+  PlatformFile? _attachment;
 
   @override
   void dispose() {
@@ -905,21 +906,36 @@ class _FeedbackSheetState extends State<_FeedbackSheet> {
     super.dispose();
   }
 
+  Future<void> _pickFile() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.any,
+      withData: true,
+    );
+    if (result != null && result.files.isNotEmpty) {
+      setState(() => _attachment = result.files.first);
+    }
+  }
+
   Future<void> _submit() async {
     final msg = _controller.text.trim();
     if (msg.isEmpty) return;
     setState(() { _sending = true; _error = null; });
     try {
-      final res = await http.post(
-        Uri.parse('$_kBaseUrl/feedback'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'message': msg}),
-      ).timeout(const Duration(seconds: 10));
+      final request = http.MultipartRequest('POST', Uri.parse('$_kBaseUrl/feedback'));
+      request.fields['message'] = msg;
+      if (_attachment != null && _attachment!.bytes != null) {
+        request.files.add(http.MultipartFile.fromBytes(
+          'attachment',
+          _attachment!.bytes!,
+          filename: _attachment!.name,
+        ));
+      }
+      final streamed = await request.send().timeout(const Duration(seconds: 30));
       if (!mounted) return;
-      if (res.statusCode == 200) {
+      if (streamed.statusCode == 200) {
         setState(() { _sent = true; _sending = false; });
       } else {
-        setState(() { _error = 'Server error (${res.statusCode})'; _sending = false; });
+        setState(() { _error = 'Server error (${streamed.statusCode})'; _sending = false; });
       }
     } catch (e) {
       if (!mounted) return;
@@ -970,6 +986,28 @@ class _FeedbackSheetState extends State<_FeedbackSheet> {
                 ),
                 textInputAction: TextInputAction.newline,
               ),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: _pickFile,
+                icon: const Icon(Icons.attach_file, size: 18),
+                label: Text(
+                  _attachment != null ? _attachment!.name : 'Attach a file',
+                  overflow: TextOverflow.ellipsis,
+                ),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: _cDark,
+                  side: const BorderSide(color: _cMid),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+              if (_attachment != null)
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton(
+                    onPressed: () => setState(() => _attachment = null),
+                    child: const Text('Remove', style: TextStyle(color: Colors.red, fontSize: 12)),
+                  ),
+                ),
               if (_error != null) ...[
                 const SizedBox(height: 8),
                 Text(_error!, style: const TextStyle(color: Colors.red, fontSize: 13)),
@@ -3439,12 +3477,14 @@ class _ObWaterQualityPageState extends State<_ObWaterQualityPage> {
     (
       role: 'assistant',
       content: widget.experience == 'beginner'
-          ? "Hi! I'm Ariel 🐠 Before you finish, let's talk water quality — "
-            "it's one of the most important things you can do for your aquarium.\n\n"
-            "Is your tank already filled with water?"
-          : "Hey! I'm Ariel 🐠 I'll be tracking your water parameters and flagging "
-            "trends over time.\n\n"
-            "Have you tested your water recently? Drop your latest numbers here and I'll log them.",
+          ? "Hi! I'm Ariel 🐠 I'm here to help you with your aquarium journey. "
+            "You can ask me about tank setup, water testing, equipment, cycling — anything aquarium related.\n\n"
+            "Where would you like to start?\n\n"
+            "You can always find me by tapping the ✨ at the bottom of the screen."
+          : "Hey! I'm Ariel 🐠 I'll be here to help with water parameters, tank maintenance, "
+            "equipment questions, and anything else aquarium related.\n\n"
+            "Have you tested your water recently? Drop your latest numbers here and I'll log them.\n\n"
+            "You can always find me by tapping the ✨ at the bottom of the screen.",
     ),
   ];
 
@@ -7247,6 +7287,8 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
               'water_type': _tank.waterType.label,
               'gallons': _tank.gallons,
               if (_equipmentJson != null) 'equipment': jsonDecode(_equipmentJson!),
+              if (_inhabitants.isNotEmpty) 'inhabitants': _inhabitants.map((i) => i.name).toList(),
+              if (_plants.isNotEmpty) 'plants': _plants.map((p) => p.name).toList(),
             }),
           )
           .timeout(const Duration(seconds: 15));
@@ -7779,6 +7821,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
                   children: [
                     _NavIconButton(child: const _FishPlantIcon(), tooltip: 'Inhabitants', color: const Color(0xFF2E86AB), onTap: () async {
                       await Navigator.of(context).push(MaterialPageRoute(builder: (_) => InhabitantsScreen(tank: _tank)));
+                      TankStore.instance.invalidateSummary(_tank.id);
                       await _load();
                     }),
                     if (_compatibilityWarnings(
@@ -8980,6 +9023,7 @@ class _ChatSheetState extends State<_ChatSheet> {
               }
             }
             if (inhList.isNotEmpty) {
+              TankStore.instance.invalidateSummary(_selectedTank!.id);
               await _loadTankData(_selectedTank!);
               if (mounted) widget.onLogsChanged();
             }
@@ -9000,6 +9044,7 @@ class _ChatSheetState extends State<_ChatSheet> {
               }
             }
             if (plantList.isNotEmpty) {
+              TankStore.instance.invalidateSummary(_selectedTank!.id);
               await _loadTankData(_selectedTank!);
               if (mounted) widget.onLogsChanged();
             }
@@ -12642,21 +12687,6 @@ class _TankAttributesScreenState extends State<_TankAttributesScreen> {
             WaterType.reef => 'Saltwater - Reef',
             _ => _tank.waterType.label,
           }),
-
-          // Inhabitants
-          if (_inhabitants.isNotEmpty) ...[
-            _sectionTitle('Inhabitants'),
-            ..._inhabitants.map((i) => _attrRow(
-              i.type != null ? '${i.type![0].toUpperCase()}${i.type!.substring(1)}' : 'Fish',
-              '${i.count != null && i.count! > 1 ? "${i.count}x " : ""}${i.name}',
-            )),
-          ],
-
-          // Plants
-          if (_plants.isNotEmpty) ...[
-            _sectionTitle('Plants'),
-            ..._plants.map((p) => _attrRow('Plant', p.name)),
-          ],
 
           // Equipment
           if (eqItems.isNotEmpty) ...[
