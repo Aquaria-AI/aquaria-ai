@@ -7321,9 +7321,12 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
 
     setState(() => _summaryLoading = true);
     try {
-      // Build summary data from journal entries (grouped by date)
+      // Build summary data from journal entries (last 2 weeks only)
+      final twoWeeksAgo = DateTime.now().subtract(const Duration(days: 14));
+      final twoWeeksKey = '${twoWeeksAgo.year}-${twoWeeksAgo.month.toString().padLeft(2,'0')}-${twoWeeksAgo.day.toString().padLeft(2,'0')}';
       final byDate = <String, List<db.JournalEntry>>{};
       for (final j in _journal) {
+        if (j.date.compareTo(twoWeeksKey) < 0) continue;
         byDate.putIfAbsent(j.date, () => []).add(j);
       }
       final sortedDates = byDate.keys.toList()..sort((a, b) => b.compareTo(a));
