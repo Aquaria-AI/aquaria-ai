@@ -1245,12 +1245,14 @@ CRITICAL: Never say "I've added it" after receiving only a clarifying answer —
 PLANT NAME CORRECTIONS:
 If a plant is already in the plants list and the user asks to correct or rename it (e.g. "actually it's called Water Sprite Lace Leaf", "rename that plant to...", "correct the name to..."), confirm the correction: "Done — I've updated [old name] to [new name] in your plant list."
 
-MEASUREMENT CORRECTIONS:
-If the user says they made a mistake with a measurement (e.g. "that was nitrate not nitrite", "I meant pH was 7.2 not 7.4", "oops, the ammonia should be 0"), you MUST:
-1. Confirm the correction: "Got it — I've updated your records: removed nitrite 5 and logged nitrate 5."
-2. Be specific about what was removed and what was added so the app can process the correction.
+MEASUREMENT CORRECTIONS AND REMOVALS:
+If the user says they made a mistake with a measurement (e.g. "that was nitrate not nitrite", "I meant pH was 7.2 not 7.4", "oops, the ammonia should be 0") OR asks to remove/delete a measurement (e.g. "remove nitrite", "delete the ammonia reading"), you MUST:
+1. Confirm the action using one of these EXACT phrases: "I've removed", "I've corrected", or "I've updated your records". The app relies on these phrases to trigger the actual change.
+2. Be specific about what was removed/changed. Examples:
+   - "Done — I've removed nitrite from today's records."
+   - "Got it — I've corrected your records: removed nitrite 5 and logged nitrate 5."
 3. If the user says a parameter was wrong but doesn't give the correct value, ask for it before confirming.
-4. The phrase "I've corrected" or "I've updated your records" triggers the correction — always use one of these phrases.
+4. NEVER say you've made a change without using one of the trigger phrases above.
 
 TANK CREATION:
 You CAN and SHOULD create new tank profiles from ANY context — even when you are already viewing or discussing an existing tank. Never tell the user you are unable to create a new tank.
@@ -1398,18 +1400,22 @@ Rules:
 - new_name: the corrected name the user wants. Use Title Case.
 - If the conversation does not involve renaming or correcting a plant name, return {"old_name": "", "new_name": ""}"""
 
-_MEASUREMENT_CORRECTION_PROMPT = """Based on this conversation, extract the measurement correction the user requested.
+_MEASUREMENT_CORRECTION_PROMPT = """Based on this conversation, extract the measurement correction or removal the user requested.
 
-Return ONLY valid JSON — no markdown, no explanation:
-{"date": "2026-03-13", "remove": {"nitrite": 5}, "add": {"nitrate": 5}}
+Return ONLY valid JSON — no markdown, no explanation.
+
+Examples:
+- Swap parameter: {"date": "2026-03-13", "remove": {"nitrite": 5}, "add": {"nitrate": 5}}
+- Remove only: {"date": "2026-03-13", "remove": {"nitrite": 5}, "add": {}}
+- Change value: {"date": "2026-03-13", "remove": {"ph": 7.4}, "add": {"ph": 7.2}}
 
 Rules:
-- date: the date of the measurement to correct. Use the most recent date from the conversation context. Format: YYYY-MM-DD.
-- remove: a dict of parameter names and values to DELETE from the journal for that date. Use lowercase parameter names (ammonia, nitrite, nitrate, ph, kh, gh, tds, temperature, salinity, calcium, magnesium, phosphate, alkalinity).
-- add: a dict of parameter names and new values to ADD/UPDATE in the journal for that date. Same naming convention.
-- If the user just wants to change a value (e.g. "pH was 7.2 not 7.4"), set remove={"ph": 7.4} and add={"ph": 7.2}.
+- date: the date of the measurement to correct. Use the most recent date from the conversation context, or today's date if discussing current readings. Format: YYYY-MM-DD. Today is """ + date.today().isoformat() + """.
+- remove: a dict of parameter names and values to DELETE from the journal for that date. Use lowercase parameter names (ammonia, nitrite, nitrate, ph, kh, gh, tds, temperature, salinity, calcium, magnesium, phosphate, alkalinity, iron, potassium).
+- add: a dict of parameter names and new values to ADD/UPDATE in the journal for that date. Same naming convention. Can be empty {} if the user only wants to remove.
+- If the user just wants to remove a measurement (e.g. "remove nitrite", "delete the ammonia reading"), set remove with the parameter and its current value, and leave add empty.
 - If the user says "that was nitrate not nitrite" with a value, remove the wrong parameter and add the correct one with the same value.
-- If the conversation does not involve correcting a measurement, return {"date": "", "remove": {}, "add": {}}"""
+- If the conversation does not involve correcting or removing a measurement, return {"date": "", "remove": {}, "add": {}}"""
 
 
 def _is_affirmation(text: str) -> bool:
@@ -2159,15 +2165,21 @@ def chat_tank(request: Request, req: ChatRequest, user_id: str = Depends(_get_us
         reply_confirms_correction = any(k in reply_lower for k in [
             "i've corrected", "i have corrected", "i've updated your record",
             "i have updated your record", "corrected your", "updated your record",
-            "removed nitri", "removed ammonia", "removed ph",
-            "changed it to", "fixed that", "i've fixed",
+            "removed nitri", "removed ammonia", "removed ph", "removed the nitri",
+            "removed the ammonia", "removed the ph", "removed calcium", "removed magnesium",
+            "changed it to", "fixed that", "i've fixed", "i've removed",
+            "i have removed", "deleted the", "removed it from",
+            "updated today", "corrected today", "fixed your",
         ])
 
+        _meas_params = (r"nitrite|nitrate|ammonia|ph|kh|gh|tds|temperature|salinity"
+                        r"|calcium|magnesium|phosphate|alkalinity|iron|potassium")
         user_requests_correction = bool(re.search(
-            r"\b(was|meant|should be|not|wrong|mistake|oops|actually|correct)\b.{0,40}"
-            r"\b(nitrite|nitrate|ammonia|ph|kh|gh|tds|temperature|salinity|calcium|magnesium|phosphate|alkalinity)\b"
-            r"|\b(nitrite|nitrate|ammonia|ph|kh|gh|tds|temperature|salinity|calcium|magnesium|phosphate|alkalinity)\b"
-            r".{0,40}\b(was|meant|should be|not|wrong|mistake|oops|actually|correct)\b",
+            r"\b(was|meant|should be|not|wrong|mistake|oops|actually|correct|remove|delete)\b.{0,40}"
+            rf"\b({_meas_params})\b"
+            rf"|\b({_meas_params})\b"
+            r".{0,40}\b(was|meant|should be|not|wrong|mistake|oops|actually|correct|remove|delete)\b"
+            rf"|\b(remove|delete)\b.{0,20}\b({_meas_params})\b",
             req.message, re.IGNORECASE,
         ))
 
