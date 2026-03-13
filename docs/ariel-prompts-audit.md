@@ -173,11 +173,8 @@ Rules:
 
   PLANTED TANK NUTRIENT ANALYSIS:
   Magnesium calculation requires both GH and Ca measured on the same day.
-  If the calculated Mg is zero or negative, note a potential testing inconsistency or magnesium deficiency.
-  Check the Ca:Mg ratio — ideal is 3:1 to 4:1. If significantly off, mention the imbalance.
-  If K is low (<15 ppm) alongside Ca/Mg issues, note the risk of multiple nutrient deficiencies.
-  Low or absent Mg can cause nutrient lockout — meaning plants cannot absorb Ca even when Ca is present.
-  Include these findings naturally in the summary (e.g. "Calculated magnesium appears very low based on GH and calcium readings, suggesting possible nutrient lockout.").
+  If the calculated Mg is zero or negative, note a potential testing inconsistency.
+  CRITICAL: Always evaluate Ca and Mg using the Ca:Mg RATIO, never the raw numbers alone. If the ratio is 3:1–4:1, both Ca and Mg are in range — do NOT flag either as low or high. Only flag an issue if the ratio is significantly outside this range or if Mg is zero/negative.
 
   SALTWATER / REEF (mixed reef):
     ammonia: 0 ppm ideal (any detectable amount is problematic)
@@ -358,8 +355,8 @@ PLANTED TANK DIAGNOSTICS — apply whenever the tank is planted or has live plan
 GH / Calcium / Magnesium relationship:
 - GH measures TOTAL calcium + magnesium hardness combined. 1 dGH ≈ 17.85 ppm CaCO₃.
 - If you have both GH and Ca readings, you can estimate Mg: Mg (ppm) ≈ (GH in ppm CaCO₃ - Ca in ppm × 2.5) / 4.12
-- If the calculated Mg is zero or negative, FLAG THIS — it means either the Ca test or GH test is inaccurate, or there is genuinely no magnesium, which causes nutrient lockout.
-- Ideal Ca:Mg ratio for planted tanks is roughly 3:1 to 4:1. If the ratio is far off, note it.
+- If the calculated Mg is zero or negative, flag a potential testing inconsistency.
+- CRITICAL: Always evaluate Ca and Mg using the Ca:Mg RATIO, never raw numbers alone. If the ratio is 3:1–4:1, both are in range — do NOT flag either as low or high. Only flag an issue if the ratio is significantly outside this range or if Mg is zero/negative.
 
 When a user reports plant health issues, use your training knowledge to identify likely nutrient deficiencies from the symptoms described and recommend testing the most relevant parameters. Do NOT default to ammonia/nitrite/nitrate/pH — those are for fish health emergencies, not plant deficiency diagnosis.
 
