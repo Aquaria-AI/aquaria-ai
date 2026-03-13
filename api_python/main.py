@@ -752,8 +752,8 @@ Rules:
     KH: 1–4 dKH ideal. Low KH allows easier pH swings for CO2 efficiency.
     iron (Fe): ~0.1 ppm target (trace level). Higher can fuel hair algae.
     potassium (K): 15–25 ppm ideal. Higher can cause nutrient uptake lockout.
-    calcium (Ca): 30–50 ppm ideal. Do NOT evaluate Ca as high or low based on the raw number alone — always assess using the Ca:Mg ratio. If Ca:Mg is 3:1–4:1, both Ca and Mg are in range regardless of absolute values. Only flag Ca as problematic if the ratio is significantly off or if Mg data is unavailable.
-    magnesium (Mg): Derived from GH and Ca. Formula: Mg (ppm) ≈ (17.86 × GH_in_dGH) / (2.5 + (4.1 / R)), where R is the target Ca:Mg ratio (default R=3). Do NOT evaluate Mg as high or low based on the raw number alone — always assess using the Ca:Mg ratio. If Ca:Mg is 3:1–4:1, both are in range.
+    calcium (Ca): Do NOT evaluate using raw ppm. Always assess using the Ca:Mg ratio. If Ca:Mg is 3:1–4:1, calcium is in range regardless of the absolute number.
+    magnesium (Mg): Derived from GH and Ca. Do NOT evaluate using raw ppm. Always assess using the Ca:Mg ratio. If Ca:Mg is 3:1–4:1, magnesium is in range regardless of the absolute number.
     temperature: 74–80°F / 23–27°C normal
 
   PLANTED TANK NUTRIENT ANALYSIS:
@@ -1000,8 +1000,8 @@ Use these reference ranges as GUIDELINES when assessing whether a parameter is l
     KH: 1–4 dKH ideal. Low KH allows easier pH swings for CO2 efficiency.
     iron (Fe): ~0.1 ppm target (trace level). Higher can fuel hair algae.
     potassium (K): 15–25 ppm ideal. Higher can cause nutrient uptake lockout.
-    calcium (Ca): 30–50 ppm ideal. Do NOT evaluate Ca as high or low based on the raw number alone — always assess using the Ca:Mg ratio. If Ca:Mg is 3:1–4:1, both Ca and Mg are in range regardless of absolute values.
-    magnesium (Mg): Derived from GH and Ca. Formula: Mg (ppm) ≈ (17.86 × GH_in_dGH) / (2.5 + (4.1 / R)), where R is the target Ca:Mg ratio (default R=3). Always assess using the Ca:Mg ratio, not raw numbers.
+    calcium (Ca): Do NOT evaluate using raw ppm. Always assess using the Ca:Mg ratio. If Ca:Mg is 3:1–4:1, calcium is in range regardless of the absolute number.
+    magnesium (Mg): Derived from GH and Ca. Do NOT evaluate using raw ppm. Always assess using the Ca:Mg ratio. If Ca:Mg is 3:1–4:1, magnesium is in range regardless of the absolute number.
     temperature: 74–80°F / 23–27°C normal
 
   SALTWATER / REEF (mixed reef):
