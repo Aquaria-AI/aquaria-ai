@@ -13,17 +13,91 @@ from email.mime.base import MIMEBase
 from email import encoders
 
 import anthropic
-from fastapi import FastAPI, Form, UploadFile, File
+import jwt
+from fastapi import Depends, FastAPI, Form, Header, HTTPException, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from starlette.responses import JSONResponse
+
+# ---------------------------------------------------------------------------
+# Supabase JWT verification
+# ---------------------------------------------------------------------------
+
+_SUPABASE_JWT_SECRET = os.environ.get("SUPABASE_JWT_SECRET", "")
+
+def _get_user_id(request: Request) -> str:
+    """Extract and verify the Supabase JWT from the Authorization header.
+    Returns the user's sub (UUID). Raises 401 on any failure."""
+    auth = request.headers.get("authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing authorization header")
+    token = auth[7:]
+    if not _SUPABASE_JWT_SECRET:
+        raise HTTPException(status_code=500, detail="JWT secret not configured")
+    try:
+        payload = jwt.decode(
+            token,
+            _SUPABASE_JWT_SECRET,
+            algorithms=["HS256"],
+            audience="authenticated",
+        )
+        user_id = payload.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid token: no sub claim")
+        return user_id
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError as e:
+        raise HTTPException(status_code=401, detail=f"Invalid token: {e}")
+
+# ---------------------------------------------------------------------------
+# Rate limiting
+# ---------------------------------------------------------------------------
+
+def _rate_limit_key(request: Request) -> str:
+    """Use authenticated user ID for rate-limit key, fall back to IP."""
+    auth = request.headers.get("authorization", "")
+    if auth.startswith("Bearer ") and _SUPABASE_JWT_SECRET:
+        try:
+            payload = jwt.decode(
+                auth[7:], _SUPABASE_JWT_SECRET,
+                algorithms=["HS256"], audience="authenticated",
+            )
+            return payload.get("sub", get_remote_address(request))
+        except Exception:
+            pass
+    return get_remote_address(request)
+
+limiter = Limiter(key_func=_rate_limit_key)
+
+# ---------------------------------------------------------------------------
+# App setup
+# ---------------------------------------------------------------------------
 
 app = FastAPI()
+app.state.limiter = limiter
+
+@app.exception_handler(RateLimitExceeded)
+async def _rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(
+        status_code=429,
+        content={"detail": "Too many requests. Please slow down."},
+    )
+
+_ALLOWED_ORIGINS = [
+    "https://aquaria-ai.com",
+    "https://www.aquaria-ai.com",
+    "https://aquaria-ai-production.up.railway.app",
+]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
+    allow_methods=["POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 
@@ -417,7 +491,8 @@ def _parse_inhabitants_with_llm(text: str) -> Optional[List[Dict[str, Any]]]:
 # Routes
 # -------------------------
 @app.post("/parse/tank-note")
-def parse_tank_note(req: ParseRequest):
+@limiter.limit("30/minute")
+def parse_tank_note(request: Request, req: ParseRequest, user_id: str = Depends(_get_user_id)):
     text = (req.text or "").strip()
 
     # Try LLM parsing first for grouped/typed inhabitants
@@ -706,7 +781,8 @@ def _parse_with_regex(text: str) -> List[Dict[str, Any]]:
 
 
 @app.post("/parse/tank-log")
-def parse_tank_log(req: ParseRequest):
+@limiter.limit("30/minute")
+def parse_tank_log(request: Request, req: ParseRequest, user_id: str = Depends(_get_user_id)):
     text = (req.text or "").strip()
     today = date.today().isoformat()
     logs = _parse_with_llm(text, today)
@@ -793,7 +869,8 @@ Rules:
 
 
 @app.post("/summary/tank-logs")
-def summarize_tank_logs(req: SummaryRequest):
+@limiter.limit("20/minute")
+def summarize_tank_logs(request: Request, req: SummaryRequest, user_id: str = Depends(_get_user_id)):
     if not req.logs:
         return {"summary": None}
 
@@ -1261,8 +1338,9 @@ Return ONLY valid JSON — no markdown, no explanation:
 
 Rules:
 - Use the most specific common name mentioned (e.g. "Anubias Nana" not just "plant"). Capitalize properly using Title Case.
-- Only include plants the user explicitly said to add — not ones already in the tank profile.
+- Include plants the user explicitly asked to add, OR plants the user affirmed adding when the assistant offered (e.g. user said "yes" after assistant offered to add them).
 - Only include aquatic/aquarium plants. Ignore non-aquatic plants.
+- If the user listed plants they have (e.g. "I have java fern and anubias") and the assistant confirmed adding them, include those plants.
 - If the conversation is just a question or clarification with no clear plant to add, return {"plants": []}"""
 
 
@@ -1335,6 +1413,8 @@ def _history_has_inhabitant_add_offer(history: list) -> tuple[bool, str]:
                 "add it to your", "add them to your", "add to your tank profile",
                 "want me to add", "shall i add", "add your", "update your profile",
                 "log it as", "add it as",
+                "would you like me to add", "like me to log",
+                "want me to log", "shall i log",
             ]):
                 return True, content
             return False, ""
@@ -1352,6 +1432,8 @@ def _history_has_plant_add_offer(history: list) -> tuple[bool, str]:
                 "add to your plant list", "want me to add",
                 "shall i add", "add it as a plant",
                 "don't see", "not in your plant",
+                "would you like me to add", "like me to log",
+                "want me to log", "shall i log",
             ]):
                 return True, content
             return False, ""
@@ -1359,7 +1441,8 @@ def _history_has_plant_add_offer(history: list) -> tuple[bool, str]:
 
 
 @app.post("/chat/summarize")
-def chat_summarize(req: SummarizeSessionRequest):
+@limiter.limit("20/minute")
+def chat_summarize(request: Request, req: SummarizeSessionRequest, user_id: str = Depends(_get_user_id)):
     """Generate a 1-2 sentence summary of a chat session."""
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
@@ -1388,7 +1471,8 @@ def chat_summarize(req: SummarizeSessionRequest):
 
 
 @app.post("/chat/tank")
-def chat_tank(req: ChatRequest):
+@limiter.limit("20/minute")
+def chat_tank(request: Request, req: ChatRequest, user_id: str = Depends(_get_user_id)):
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         return {"response": "AI chat is unavailable (no API key configured).", "tasks": []}
@@ -1873,6 +1957,9 @@ def chat_tank(req: ChatRequest):
             "added to your", "i've added", "i have added", "added it to your",
             "added them to your", "added the otocinclus", "added the fish",
             "added to the tank", "adding to your",
+            "i've logged", "i have logged", "logged them to your",
+            "logged it to your", "now in your tank profile",
+            "updated your tank profile", "updated your inhabitant",
         ])
 
         user_explicit_add = bool(re.search(
@@ -1885,6 +1972,7 @@ def chat_tank(req: ChatRequest):
             or reply_confirms_added
             or user_explicit_add
         )
+        print(f"[InhabitantExtract] triggers: affirm={_is_affirmation(req.message)}, history_offer={_history_has_inhabitant_add_offer(req.history or [])[0]}, reply_confirms={reply_confirms_added}, user_explicit={user_explicit_add} → should_extract={should_extract}")
 
         if should_extract:
             convo = "\n".join(
@@ -1916,10 +2004,13 @@ def chat_tank(req: ChatRequest):
             "added to your plant", "i've added", "i have added",
             "added it to your plant", "added them to your plant",
             "added to the plant list", "adding to your plant",
+            "i've logged", "i have logged", "logged them to your",
+            "logged it to your", "now in your plant", "updated your plant",
+            "they're in your plant", "they are in your plant",
         ])
 
         user_explicit_plant_add = bool(re.search(
-            r"\badd\b.{0,50}(to (my|the) (plants|plant list))",
+            r"\b(add|log)\b.{0,50}(to (my|the) (plants|plant list))",
             req.message, re.IGNORECASE,
         ))
 
@@ -1928,6 +2019,7 @@ def chat_tank(req: ChatRequest):
             or reply_confirms_plant_added
             or user_explicit_plant_add
         )
+        print(f"[PlantExtract] triggers: affirm={_is_affirmation(req.message)}, history_offer={_history_has_plant_add_offer(req.history or [])[0]}, reply_confirms={reply_confirms_plant_added}, user_explicit={user_explicit_plant_add} → should_extract={should_extract_plants}")
 
         if should_extract_plants:
             convo = "\n".join(
@@ -2019,7 +2111,8 @@ def chat_tank(req: ChatRequest):
 
 
 @app.post("/advise/next-steps")
-def advise_next_steps(req: AdviseRequest):
+@limiter.limit("20/minute")
+def advise_next_steps(request: Request, req: AdviseRequest, user_id: str = Depends(_get_user_id)):
     """
     Advice endpoint (mock). We'll later replace this with real AI.
     """
@@ -2066,7 +2159,8 @@ The results array must be the same length as the input list, in the same order. 
 
 
 @app.post("/moderate/tasks")
-def moderate_tasks(req: ModerationRequest):
+@limiter.limit("30/minute")
+def moderate_tasks(request: Request, req: ModerationRequest, user_id: str = Depends(_get_user_id)):
     if not req.tasks:
         return {"results": []}
     api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -2099,7 +2193,8 @@ def moderate_tasks(req: ModerationRequest):
 
 
 @app.post("/knowledge/ingest")
-def knowledge_ingest(req: KnowledgeIngestRequest):
+@limiter.limit("10/minute")
+def knowledge_ingest(request: Request, req: KnowledgeIngestRequest, user_id: str = Depends(_get_user_id)):
     """Store an anonymized observation+resolution pair in the community knowledge base."""
     if not req.observation.strip() or not req.resolution.strip():
         return {"status": "error", "message": "observation and resolution are required"}
@@ -2150,7 +2245,8 @@ def _send_feedback_email(message: str, device: Optional[str], file_bytes: Option
 
 # JSON feedback endpoint (backwards-compatible with older app versions)
 @app.post("/feedback")
-async def submit_feedback_json(req: FeedbackRequest):
+@limiter.limit("5/minute")
+async def submit_feedback_json(request: Request, req: FeedbackRequest):
     timestamp = datetime.now().isoformat(timespec="seconds")
     label = f"[{req.device}]" if req.device else ""
     entry = f"[{timestamp}]{label} {req.message}\n"
@@ -2174,7 +2270,9 @@ async def submit_feedback_json(req: FeedbackRequest):
 
 # Multipart feedback endpoint (new app versions with file attachment)
 @app.post("/feedback/upload")
+@limiter.limit("5/minute")
 async def submit_feedback_upload(
+    request: Request,
     message: str = Form(...),
     device: Optional[str] = Form(None),
     attachment: Optional[UploadFile] = File(None),

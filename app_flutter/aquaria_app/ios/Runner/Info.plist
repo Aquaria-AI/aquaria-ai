@@ -97,6 +97,8 @@
     <string>Aquaria uses your camera to take photos of your aquarium.</string>
     <key>NSPhotoLibraryUsageDescription</key>
     <string>Aquaria needs access to your photo library to upload aquarium photos.</string>
+    <key>NSPhotoLibraryAddUsageDescription</key>
+    <string>Aquaria needs permission to save photos to your gallery.</string>
 
     <!-- Local notifications -->
     <key>UIBackgroundModes</key>

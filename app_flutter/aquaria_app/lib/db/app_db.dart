@@ -78,6 +78,7 @@ class TankPhotos extends Table {
   IntColumn get id => integer().autoIncrement()();
   TextColumn get tankId => text()();
   TextColumn get filePath => text()();
+  TextColumn get remotePath => text().nullable()();
   TextColumn get note => text().nullable()();
   DateTimeColumn get createdAt =>
       dateTime().withDefault(Constant(DateTime.now()))();
@@ -140,7 +141,7 @@ class AppDb extends _$AppDb {
   AppDb() : super(_openConnection());
 
   @override
-  int get schemaVersion => 18;
+  int get schemaVersion => 19;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -224,6 +225,9 @@ class AppDb extends _$AppDb {
           }
           if (from <= 17) {
             await migrator.addColumn(tanks, tanks.equipmentJson);
+          }
+          if (from <= 18) {
+            await migrator.addColumn(tankPhotos, tankPhotos.remotePath);
           }
         },
       );
@@ -575,6 +579,31 @@ class AppDb extends _$AppDb {
 
   Future<void> deletePhoto(int id) async {
     await (delete(tankPhotos)..where((r) => r.id.equals(id))).go();
+  }
+
+  Future<void> setPhotoRemotePath(int id, String remotePath) async {
+    await (update(tankPhotos)..where((r) => r.id.equals(id)))
+        .write(TankPhotosCompanion(remotePath: Value(remotePath)));
+  }
+
+  Future<List<TankPhoto>> photosWithoutRemotePath() {
+    return (select(tankPhotos)
+          ..where((r) => r.remotePath.isNull()))
+        .get();
+  }
+
+  Future<TankPhoto?> photoByRemotePath(String remotePath) {
+    return (select(tankPhotos)
+          ..where((r) => r.remotePath.equals(remotePath))
+          ..limit(1))
+        .getSingleOrNull();
+  }
+
+  Future<int> insertPhotoReturningId(TankPhotosCompanion entry) =>
+      into(tankPhotos).insert(entry);
+
+  Future<TankPhoto?> photoById(int id) {
+    return (select(tankPhotos)..where((r) => r.id.equals(id))).getSingleOrNull();
   }
 
   // ---------- Chat Sessions ----------

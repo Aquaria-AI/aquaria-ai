@@ -16,7 +16,9 @@ import 'package:csv/csv.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:gal/gal.dart';
 
 import 'db/app_db.dart' as db;
 import 'models/tank.dart';
@@ -66,6 +68,15 @@ const String _kBaseUrl = String.fromEnvironment(
   'API_BASE_URL',
   defaultValue: 'https://aquaria-ai-production.up.railway.app',
 );
+
+/// Build HTTP headers with Supabase JWT for authenticated API calls.
+Map<String, String> _apiHeaders() {
+  final token = Supabase.instance.client.auth.currentSession?.accessToken;
+  return {
+    'Content-Type': 'application/json',
+    if (token != null) 'Authorization': 'Bearer $token',
+  };
+}
 
 // Brand palette
 const _cDark    = Color(0xFF0E5A66);
@@ -415,7 +426,8 @@ AppBar _buildAppBar(BuildContext context, String title, {List<Widget>? actions, 
             if (SupabaseService.isLoggedIn)
               const PopupMenuItem(value: 'profile', child: Text('Profile')),
             const PopupMenuItem(value: 'invite', child: Text('Invite Friends')),
-            const PopupMenuItem(value: 'onboarding', child: Text('Onboarding')),
+            if (SupabaseService.userEmail == 'maugliera@gmail.com' || SupabaseService.isAdmin)
+              const PopupMenuItem(value: 'onboarding', child: Text('Onboarding')),
             const PopupMenuItem(value: 'feedback', child: Text('Feedback')),
             const PopupMenuItem(value: 'donate', child: Text('Support Aquaria')),
             if (SupabaseService.isLoggedIn)
@@ -926,6 +938,8 @@ class _FeedbackSheetState extends State<_FeedbackSheet> {
     setState(() { _sending = true; _error = null; });
     try {
       final request = http.MultipartRequest('POST', Uri.parse('$_kBaseUrl/feedback/upload'));
+      final token = Supabase.instance.client.auth.currentSession?.accessToken;
+      if (token != null) request.headers['Authorization'] = 'Bearer $token';
       request.fields['message'] = msg;
       if (_attachment != null && _attachment!.bytes != null) {
         request.files.add(http.MultipartFile.fromBytes(
@@ -3638,7 +3652,7 @@ class _ObWaterQualityPageState extends State<_ObWaterQualityPage> {
       final resp = await http
           .post(
             Uri.parse('$_baseUrl/chat/tank'),
-            headers: {'Content-Type': 'application/json'},
+            headers: _apiHeaders(),
             body: jsonEncode({
               'tank': tank,
               'available_tanks': <String>[],
@@ -4627,7 +4641,7 @@ class _TankListScreenState extends State<TankListScreen> {
     try {
       final resp = await http.post(
         Uri.parse('$_kBaseUrl/chat/tank'),
-        headers: {'Content-Type': 'application/json'},
+        headers: _apiHeaders(),
         body: jsonEncode({
           'tank': {
             'name': tank.name,
@@ -7071,7 +7085,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
     try {
       final resp = await http.post(
         Uri.parse('$_baseUrl/chat/tank'),
-        headers: {'Content-Type': 'application/json'},
+        headers: _apiHeaders(),
         body: jsonEncode({
           'tank': {
             'name': _tank.name,
@@ -7241,7 +7255,57 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
       _tasks = tasks;
       _equipmentJson = eqJson;
     });
+    _persistCalculatedParams();
     _loadSummary();
+  }
+
+  /// Persist calculated Mg and Ca:Mg ratio to journal so they appear in entries
+  /// and are available to the AI summary. Only writes if not already present.
+  Future<void> _persistCalculatedParams() async {
+    final isFreshwater = _tank.waterType == WaterType.freshwater ||
+        _tank.waterType == WaterType.planted ||
+        _tank.waterType == WaterType.pond;
+    if (!isFreshwater) return;
+
+    // Group measurements by date
+    final byDate = <String, Map<String, dynamic>>{};
+    for (final j in _journal.where((j) => j.category == 'measurements')) {
+      try {
+        final m = (jsonDecode(j.data) as Map).cast<String, dynamic>();
+        byDate[j.date] = m;
+      } catch (_) {}
+    }
+
+    for (final entry in byDate.entries) {
+      final date = entry.key;
+      final m = entry.value;
+      final ghRaw = m['gh'] ?? m['GH'];
+      final caRaw = m['calcium'] ?? m['ca'] ?? m['Ca'];
+      if (ghRaw == null || caRaw == null) continue;
+
+      final ghVal = double.tryParse(ghRaw.toString().replaceAll(RegExp(r'[^\d.]'), ''));
+      final caVal = double.tryParse(caRaw.toString().replaceAll(RegExp(r'[^\d.]'), ''));
+      if (ghVal == null || caVal == null) continue;
+
+      // Skip if already has calculated values
+      if (m.containsKey('magnesium_calc') && m.containsKey('ca_mg_ratio')) continue;
+
+      final ghPpm = ghVal * 17.85;
+      final mgPpm = (ghPpm - caVal * 2.5) / 4.12;
+      final mgStr = mgPpm <= 0 ? '0' : mgPpm.toStringAsFixed(1);
+      final ratioStr = mgPpm > 0 ? '${(caVal / mgPpm).toStringAsFixed(1)}:1' : 'N/A';
+
+      final updated = Map<String, dynamic>.from(m);
+      updated['magnesium_calc'] = mgStr;
+      updated['ca_mg_ratio'] = ratioStr;
+
+      await TankStore.instance.upsertJournal(
+        tankId: _tank.id,
+        date: date,
+        category: 'measurements',
+        data: jsonEncode(updated),
+      );
+    }
   }
 
   Future<void> _loadSummary() async {
@@ -7285,7 +7349,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
       final resp = await http
           .post(
             Uri.parse('$_baseUrl/summary/tank-logs'),
-            headers: {'Content-Type': 'application/json'},
+            headers: _apiHeaders(),
             body: jsonEncode({
               'logs': logsData,
               'water_type': _tank.waterType.label,
@@ -8450,7 +8514,7 @@ class _ChatSheetState extends State<_ChatSheet> {
     // Fire and forget — don't block dispose
     http.post(
       Uri.parse('$_baseUrl/chat/summarize'),
-      headers: {'Content-Type': 'application/json'},
+      headers: _apiHeaders(),
       body: jsonEncode({
         'messages': messages,
         'tank_name': tankName,
@@ -8736,7 +8800,7 @@ class _ChatSheetState extends State<_ChatSheet> {
         debugPrint('[ParseLog] Sending parse request for: "$text"');
         final resp = await http
             .post(Uri.parse('$_baseUrl/parse/tank-log'),
-                headers: {'Content-Type': 'application/json'},
+                headers: _apiHeaders(),
                 body: jsonEncode({'text': text}))
             .timeout(const Duration(seconds: 20));
         debugPrint('[ParseLog] Response status=${resp.statusCode}, body=${resp.body}');
@@ -8919,7 +8983,7 @@ class _ChatSheetState extends State<_ChatSheet> {
       final behaviorProfile = await _buildBehaviorProfile();
       final resp = await http
           .post(Uri.parse('$_baseUrl/chat/tank'),
-              headers: {'Content-Type': 'application/json'},
+              headers: _apiHeaders(),
               body: jsonEncode({
                 'tank': _selectedTank != null ? {
                   'name': _selectedTank!.name,
@@ -9013,6 +9077,7 @@ class _ChatSheetState extends State<_ChatSheet> {
 
         // Add new inhabitants if AI offered and user affirmed
         if (data is Map && data['new_inhabitant'] != null && _selectedTank != null) {
+          debugPrint('[Chat/InhabAdd] new_inhabitant payload: ${data['new_inhabitant']}');
           try {
             final inhData = data['new_inhabitant'] as Map<String, dynamic>;
             final inhList = (inhData['inhabitants'] as List?) ?? [];
@@ -9031,28 +9096,41 @@ class _ChatSheetState extends State<_ChatSheet> {
               await _loadTankData(_selectedTank!);
               if (mounted) widget.onLogsChanged();
             }
-          } catch (_) {}
+          } catch (e) {
+            debugPrint('[Chat/InhabAdd] ERROR: $e');
+          }
         }
 
         // Add new plants if AI offered and user affirmed
         if (data is Map && data['new_plants'] != null && _selectedTank != null) {
+          debugPrint('[Chat/PlantAdd] new_plants payload: ${data['new_plants']}');
           try {
             final plantData = data['new_plants'] as Map<String, dynamic>;
             final plantList = (plantData['plants'] as List?) ?? [];
+            debugPrint('[Chat/PlantAdd] plantList (${plantList.length}): $plantList');
+            int added = 0;
             for (final plant in plantList) {
               if (plant is String && plant.isNotEmpty) {
                 await TankStore.instance.addPlant(
                   tankId: _selectedTank!.id,
                   name: plant,
                 );
+                added++;
+              } else {
+                debugPrint('[Chat/PlantAdd] skipped non-string plant: $plant (${plant.runtimeType})');
               }
             }
-            if (plantList.isNotEmpty) {
+            debugPrint('[Chat/PlantAdd] saved $added plants to tank ${_selectedTank!.name}');
+            if (added > 0) {
               TankStore.instance.invalidateSummary(_selectedTank!.id);
               await _loadTankData(_selectedTank!);
               if (mounted) widget.onLogsChanged();
             }
-          } catch (_) {}
+          } catch (e) {
+            debugPrint('[Chat/PlantAdd] ERROR: $e');
+          }
+        } else if (data is Map && data['new_plants'] != null && _selectedTank == null) {
+          debugPrint('[Chat/PlantAdd] SKIPPED — new_plants present but _selectedTank is null');
         }
 
         // Rename a plant if AI confirmed a correction
@@ -9126,7 +9204,7 @@ class _ChatSheetState extends State<_ChatSheet> {
       final descriptions = tasks.map((t) => (t['description'] ?? '').toString()).toList();
       final resp = await http.post(
         Uri.parse('$_baseUrl/moderate/tasks'),
-        headers: {'Content-Type': 'application/json'},
+        headers: _apiHeaders(),
         body: jsonEncode({'tasks': descriptions}),
       ).timeout(const Duration(seconds: 10));
       if (resp.statusCode == 200) {
@@ -10969,6 +11047,27 @@ class _InhabitantsScreenState extends State<InhabitantsScreen> {
                     style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: _cDark),
                   ),
                 ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                  child: OutlinedButton.icon(
+                    icon: const Icon(Icons.edit, size: 18),
+                    label: const Text('Edit Inhabitants'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: _cDark,
+                      side: const BorderSide(color: _cMid),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 24),
+                    ),
+                    onPressed: () async {
+                      await Navigator.of(context).push(MaterialPageRoute(
+                        builder: (_) => EditInhabitantsScreen(
+                          tank: widget.tank,
+                          onSaved: _load,
+                        ),
+                      ));
+                    },
+                  ),
+                ),
                 Expanded(
                   child: (_inhabitants.isEmpty && _plants.isEmpty)
               ? Center(
@@ -11014,52 +11113,6 @@ class _InhabitantsScreenState extends State<InhabitantsScreen> {
                       ..._plants.map((p) => _tile(_titleCase(p.name), null, '🌿')),
                     ],
                     ..._buildWarnings(),
-                    const SizedBox(height: 24),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            icon: const Icon(Icons.add, size: 18),
-                            label: const Text('Add Inhabitants'),
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: _cDark,
-                              side: const BorderSide(color: _cMid),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                              padding: const EdgeInsets.symmetric(vertical: 12),
-                            ),
-                            onPressed: () async {
-                              await Navigator.of(context).push(MaterialPageRoute(
-                                builder: (_) => EditInhabitantsScreen(
-                                  tank: widget.tank,
-                                  onSaved: _load,
-                                ),
-                              ));
-                            },
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            icon: const Icon(Icons.add, size: 18),
-                            label: const Text('Add Plants'),
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: _cDark,
-                              side: const BorderSide(color: _cMid),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                              padding: const EdgeInsets.symmetric(vertical: 12),
-                            ),
-                            onPressed: () async {
-                              await Navigator.of(context).push(MaterialPageRoute(
-                                builder: (_) => EditInhabitantsScreen(
-                                  tank: widget.tank,
-                                  onSaved: _load,
-                                ),
-                              ));
-                            },
-                          ),
-                        ),
-                      ],
-                    ),
                   ],
                 ),
                 ),
@@ -12782,9 +12835,41 @@ class _EquipmentScreenState extends State<_EquipmentScreen> {
   }
 }
 
-class _FullScreenNetworkImage extends StatelessWidget {
+class _FullScreenNetworkImage extends StatefulWidget {
   final String url;
   const _FullScreenNetworkImage({required this.url});
+
+  @override
+  State<_FullScreenNetworkImage> createState() => _FullScreenNetworkImageState();
+}
+
+class _FullScreenNetworkImageState extends State<_FullScreenNetworkImage> {
+  bool _saving = false;
+
+  Future<void> _saveToGallery() async {
+    setState(() => _saving = true);
+    try {
+      final resp = await http.get(Uri.parse(widget.url));
+      if (resp.statusCode != 200) throw Exception('Download failed');
+      final dir = await getTemporaryDirectory();
+      final file = File('${dir.path}/aquaria_${DateTime.now().millisecondsSinceEpoch}.jpg');
+      await file.writeAsBytes(resp.bodyBytes);
+      await Gal.putImage(file.path);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Photo saved to gallery'), duration: Duration(seconds: 2)),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not save photo: $e'), duration: const Duration(seconds: 3)),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -12794,11 +12879,20 @@ class _FullScreenNetworkImage extends StatelessWidget {
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
         elevation: 0,
+        actions: [
+          IconButton(
+            icon: _saving
+                ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                : const Icon(Icons.download),
+            onPressed: _saving ? null : _saveToGallery,
+            tooltip: 'Save to gallery',
+          ),
+        ],
       ),
       body: InteractiveViewer(
         child: Center(
           child: Image.network(
-            url,
+            widget.url,
             fit: BoxFit.contain,
             errorBuilder: (_, __, ___) => const Icon(Icons.broken_image, color: Colors.grey, size: 64),
           ),
@@ -12992,7 +13086,8 @@ const _paramAliases = <String, String>{
   'gh': 'gh',
   'k': 'potassium', 'potassium': 'potassium',
   'ca': 'calcium', 'calcium': 'calcium',
-  'mg': 'magnesium', 'magnesium': 'magnesium',
+  'mg': 'magnesium', 'magnesium': 'magnesium', 'magnesium_calc': 'magnesium',
+  'ca_mg_ratio': 'ca_mg_ratio',
   'phosphate': 'phosphate', 'po4': 'phosphate',
   'temp': 'temp', 'temperature': 'temp',
   'salinity': 'salinity',

@@ -1697,6 +1697,17 @@ class $TankPhotosTable extends TankPhotos
     type: DriftSqlType.string,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _remotePathMeta = const VerificationMeta(
+    'remotePath',
+  );
+  @override
+  late final GeneratedColumn<String> remotePath = GeneratedColumn<String>(
+    'remote_path',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _noteMeta = const VerificationMeta('note');
   @override
   late final GeneratedColumn<String> note = GeneratedColumn<String>(
@@ -1719,7 +1730,14 @@ class $TankPhotosTable extends TankPhotos
     defaultValue: Constant(DateTime.now()),
   );
   @override
-  List<GeneratedColumn> get $columns => [id, tankId, filePath, note, createdAt];
+  List<GeneratedColumn> get $columns => [
+    id,
+    tankId,
+    filePath,
+    remotePath,
+    note,
+    createdAt,
+  ];
   @override
   String get aliasedName => _alias ?? actualTableName;
   @override
@@ -1750,6 +1768,12 @@ class $TankPhotosTable extends TankPhotos
       );
     } else if (isInserting) {
       context.missing(_filePathMeta);
+    }
+    if (data.containsKey('remote_path')) {
+      context.handle(
+        _remotePathMeta,
+        remotePath.isAcceptableOrUnknown(data['remote_path']!, _remotePathMeta),
+      );
     }
     if (data.containsKey('note')) {
       context.handle(
@@ -1784,6 +1808,10 @@ class $TankPhotosTable extends TankPhotos
         DriftSqlType.string,
         data['${effectivePrefix}file_path'],
       )!,
+      remotePath: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}remote_path'],
+      ),
       note: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}note'],
@@ -1805,12 +1833,14 @@ class TankPhoto extends DataClass implements Insertable<TankPhoto> {
   final int id;
   final String tankId;
   final String filePath;
+  final String? remotePath;
   final String? note;
   final DateTime createdAt;
   const TankPhoto({
     required this.id,
     required this.tankId,
     required this.filePath,
+    this.remotePath,
     this.note,
     required this.createdAt,
   });
@@ -1820,6 +1850,9 @@ class TankPhoto extends DataClass implements Insertable<TankPhoto> {
     map['id'] = Variable<int>(id);
     map['tank_id'] = Variable<String>(tankId);
     map['file_path'] = Variable<String>(filePath);
+    if (!nullToAbsent || remotePath != null) {
+      map['remote_path'] = Variable<String>(remotePath);
+    }
     if (!nullToAbsent || note != null) {
       map['note'] = Variable<String>(note);
     }
@@ -1832,6 +1865,9 @@ class TankPhoto extends DataClass implements Insertable<TankPhoto> {
       id: Value(id),
       tankId: Value(tankId),
       filePath: Value(filePath),
+      remotePath: remotePath == null && nullToAbsent
+          ? const Value.absent()
+          : Value(remotePath),
       note: note == null && nullToAbsent ? const Value.absent() : Value(note),
       createdAt: Value(createdAt),
     );
@@ -1846,6 +1882,7 @@ class TankPhoto extends DataClass implements Insertable<TankPhoto> {
       id: serializer.fromJson<int>(json['id']),
       tankId: serializer.fromJson<String>(json['tankId']),
       filePath: serializer.fromJson<String>(json['filePath']),
+      remotePath: serializer.fromJson<String?>(json['remotePath']),
       note: serializer.fromJson<String?>(json['note']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
     );
@@ -1857,6 +1894,7 @@ class TankPhoto extends DataClass implements Insertable<TankPhoto> {
       'id': serializer.toJson<int>(id),
       'tankId': serializer.toJson<String>(tankId),
       'filePath': serializer.toJson<String>(filePath),
+      'remotePath': serializer.toJson<String?>(remotePath),
       'note': serializer.toJson<String?>(note),
       'createdAt': serializer.toJson<DateTime>(createdAt),
     };
@@ -1866,12 +1904,14 @@ class TankPhoto extends DataClass implements Insertable<TankPhoto> {
     int? id,
     String? tankId,
     String? filePath,
+    Value<String?> remotePath = const Value.absent(),
     Value<String?> note = const Value.absent(),
     DateTime? createdAt,
   }) => TankPhoto(
     id: id ?? this.id,
     tankId: tankId ?? this.tankId,
     filePath: filePath ?? this.filePath,
+    remotePath: remotePath.present ? remotePath.value : this.remotePath,
     note: note.present ? note.value : this.note,
     createdAt: createdAt ?? this.createdAt,
   );
@@ -1880,6 +1920,9 @@ class TankPhoto extends DataClass implements Insertable<TankPhoto> {
       id: data.id.present ? data.id.value : this.id,
       tankId: data.tankId.present ? data.tankId.value : this.tankId,
       filePath: data.filePath.present ? data.filePath.value : this.filePath,
+      remotePath: data.remotePath.present
+          ? data.remotePath.value
+          : this.remotePath,
       note: data.note.present ? data.note.value : this.note,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
     );
@@ -1891,6 +1934,7 @@ class TankPhoto extends DataClass implements Insertable<TankPhoto> {
           ..write('id: $id, ')
           ..write('tankId: $tankId, ')
           ..write('filePath: $filePath, ')
+          ..write('remotePath: $remotePath, ')
           ..write('note: $note, ')
           ..write('createdAt: $createdAt')
           ..write(')'))
@@ -1898,7 +1942,8 @@ class TankPhoto extends DataClass implements Insertable<TankPhoto> {
   }
 
   @override
-  int get hashCode => Object.hash(id, tankId, filePath, note, createdAt);
+  int get hashCode =>
+      Object.hash(id, tankId, filePath, remotePath, note, createdAt);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -1906,6 +1951,7 @@ class TankPhoto extends DataClass implements Insertable<TankPhoto> {
           other.id == this.id &&
           other.tankId == this.tankId &&
           other.filePath == this.filePath &&
+          other.remotePath == this.remotePath &&
           other.note == this.note &&
           other.createdAt == this.createdAt);
 }
@@ -1914,12 +1960,14 @@ class TankPhotosCompanion extends UpdateCompanion<TankPhoto> {
   final Value<int> id;
   final Value<String> tankId;
   final Value<String> filePath;
+  final Value<String?> remotePath;
   final Value<String?> note;
   final Value<DateTime> createdAt;
   const TankPhotosCompanion({
     this.id = const Value.absent(),
     this.tankId = const Value.absent(),
     this.filePath = const Value.absent(),
+    this.remotePath = const Value.absent(),
     this.note = const Value.absent(),
     this.createdAt = const Value.absent(),
   });
@@ -1927,6 +1975,7 @@ class TankPhotosCompanion extends UpdateCompanion<TankPhoto> {
     this.id = const Value.absent(),
     required String tankId,
     required String filePath,
+    this.remotePath = const Value.absent(),
     this.note = const Value.absent(),
     this.createdAt = const Value.absent(),
   }) : tankId = Value(tankId),
@@ -1935,6 +1984,7 @@ class TankPhotosCompanion extends UpdateCompanion<TankPhoto> {
     Expression<int>? id,
     Expression<String>? tankId,
     Expression<String>? filePath,
+    Expression<String>? remotePath,
     Expression<String>? note,
     Expression<DateTime>? createdAt,
   }) {
@@ -1942,6 +1992,7 @@ class TankPhotosCompanion extends UpdateCompanion<TankPhoto> {
       if (id != null) 'id': id,
       if (tankId != null) 'tank_id': tankId,
       if (filePath != null) 'file_path': filePath,
+      if (remotePath != null) 'remote_path': remotePath,
       if (note != null) 'note': note,
       if (createdAt != null) 'created_at': createdAt,
     });
@@ -1951,6 +2002,7 @@ class TankPhotosCompanion extends UpdateCompanion<TankPhoto> {
     Value<int>? id,
     Value<String>? tankId,
     Value<String>? filePath,
+    Value<String?>? remotePath,
     Value<String?>? note,
     Value<DateTime>? createdAt,
   }) {
@@ -1958,6 +2010,7 @@ class TankPhotosCompanion extends UpdateCompanion<TankPhoto> {
       id: id ?? this.id,
       tankId: tankId ?? this.tankId,
       filePath: filePath ?? this.filePath,
+      remotePath: remotePath ?? this.remotePath,
       note: note ?? this.note,
       createdAt: createdAt ?? this.createdAt,
     );
@@ -1975,6 +2028,9 @@ class TankPhotosCompanion extends UpdateCompanion<TankPhoto> {
     if (filePath.present) {
       map['file_path'] = Variable<String>(filePath.value);
     }
+    if (remotePath.present) {
+      map['remote_path'] = Variable<String>(remotePath.value);
+    }
     if (note.present) {
       map['note'] = Variable<String>(note.value);
     }
@@ -1990,6 +2046,7 @@ class TankPhotosCompanion extends UpdateCompanion<TankPhoto> {
           ..write('id: $id, ')
           ..write('tankId: $tankId, ')
           ..write('filePath: $filePath, ')
+          ..write('remotePath: $remotePath, ')
           ..write('note: $note, ')
           ..write('createdAt: $createdAt')
           ..write(')'))
@@ -4439,6 +4496,7 @@ typedef $$TankPhotosTableCreateCompanionBuilder =
       Value<int> id,
       required String tankId,
       required String filePath,
+      Value<String?> remotePath,
       Value<String?> note,
       Value<DateTime> createdAt,
     });
@@ -4447,6 +4505,7 @@ typedef $$TankPhotosTableUpdateCompanionBuilder =
       Value<int> id,
       Value<String> tankId,
       Value<String> filePath,
+      Value<String?> remotePath,
       Value<String?> note,
       Value<DateTime> createdAt,
     });
@@ -4472,6 +4531,11 @@ class $$TankPhotosTableFilterComposer
 
   ColumnFilters<String> get filePath => $composableBuilder(
     column: $table.filePath,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get remotePath => $composableBuilder(
+    column: $table.remotePath,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -4510,6 +4574,11 @@ class $$TankPhotosTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get remotePath => $composableBuilder(
+    column: $table.remotePath,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get note => $composableBuilder(
     column: $table.note,
     builder: (column) => ColumnOrderings(column),
@@ -4538,6 +4607,11 @@ class $$TankPhotosTableAnnotationComposer
 
   GeneratedColumn<String> get filePath =>
       $composableBuilder(column: $table.filePath, builder: (column) => column);
+
+  GeneratedColumn<String> get remotePath => $composableBuilder(
+    column: $table.remotePath,
+    builder: (column) => column,
+  );
 
   GeneratedColumn<String> get note =>
       $composableBuilder(column: $table.note, builder: (column) => column);
@@ -4577,12 +4651,14 @@ class $$TankPhotosTableTableManager
                 Value<int> id = const Value.absent(),
                 Value<String> tankId = const Value.absent(),
                 Value<String> filePath = const Value.absent(),
+                Value<String?> remotePath = const Value.absent(),
                 Value<String?> note = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
               }) => TankPhotosCompanion(
                 id: id,
                 tankId: tankId,
                 filePath: filePath,
+                remotePath: remotePath,
                 note: note,
                 createdAt: createdAt,
               ),
@@ -4591,12 +4667,14 @@ class $$TankPhotosTableTableManager
                 Value<int> id = const Value.absent(),
                 required String tankId,
                 required String filePath,
+                Value<String?> remotePath = const Value.absent(),
                 Value<String?> note = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
               }) => TankPhotosCompanion.insert(
                 id: id,
                 tankId: tankId,
                 filePath: filePath,
+                remotePath: remotePath,
                 note: note,
                 createdAt: createdAt,
               ),

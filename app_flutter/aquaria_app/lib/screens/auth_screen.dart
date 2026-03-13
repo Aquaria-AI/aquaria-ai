@@ -56,6 +56,7 @@ class AuthScreen extends StatefulWidget {
 class _AuthScreenState extends State<AuthScreen> {
   final _emailCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
+  final _confirmPassCtrl = TextEditingController();
   bool _isSignUp = false;
   bool _loading = false;
   bool _showConfirmation = false;
@@ -65,6 +66,7 @@ class _AuthScreenState extends State<AuthScreen> {
   void dispose() {
     _emailCtrl.dispose();
     _passCtrl.dispose();
+    _confirmPassCtrl.dispose();
     super.dispose();
   }
 
@@ -75,9 +77,19 @@ class _AuthScreenState extends State<AuthScreen> {
       setState(() => _error = 'Please enter email and password.');
       return;
     }
-    if (pass.length < 6) {
-      setState(() => _error = 'Password must be at least 6 characters.');
-      return;
+    if (_isSignUp) {
+      if (pass.length < 6) {
+        setState(() => _error = 'Password must be at least 6 characters.');
+        return;
+      }
+      if (!RegExp(r'[!@#$%^&*(),.?":{}|<>_\-+=\[\]\\\/~`]').hasMatch(pass)) {
+        setState(() => _error = 'Password must contain at least one special character.');
+        return;
+      }
+      if (pass != _confirmPassCtrl.text) {
+        setState(() => _error = 'Passwords do not match.');
+        return;
+      }
     }
     setState(() { _loading = true; _error = null; });
     try {
@@ -275,8 +287,31 @@ class _AuthScreenState extends State<AuthScreen> {
                     border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
                     contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
                   ),
-                  onSubmitted: (_) => _submitEmail(),
+                  onSubmitted: _isSignUp ? null : (_) => _submitEmail(),
                 ),
+
+                // Confirm password (sign-up only)
+                if (_isSignUp) ...[
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _confirmPassCtrl,
+                    obscureText: true,
+                    decoration: InputDecoration(
+                      labelText: 'Confirm Password',
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                    ),
+                    onSubmitted: (_) => _submitEmail(),
+                  ),
+                  const SizedBox(height: 4),
+                  const Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Min 6 characters with at least one special character.',
+                      style: TextStyle(fontSize: 11, color: Colors.black38),
+                    ),
+                  ),
+                ],
 
                 // Forgot password (sign-in only)
                 if (!_isSignUp)
@@ -321,7 +356,7 @@ class _AuthScreenState extends State<AuthScreen> {
 
                 // Toggle sign up / sign in
                 TextButton(
-                  onPressed: _loading ? null : () => setState(() { _isSignUp = !_isSignUp; _error = null; }),
+                  onPressed: _loading ? null : () => setState(() { _isSignUp = !_isSignUp; _error = null; _confirmPassCtrl.clear(); }),
                   child: Text(
                     _isSignUp ? 'Already have an account? Sign In' : "Don't have an account? Sign Up",
                     style: const TextStyle(color: _cMid, fontSize: 13),

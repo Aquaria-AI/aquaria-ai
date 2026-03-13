@@ -864,4 +864,72 @@ class SupabaseService {
       'tasks': activeTasks,
     };
   }
+
+  // ── Tank Photos (cloud sync) ─────────────────────────────────────────
+
+  /// Upload a tank photo to Supabase Storage and record it in the tank_photos table.
+  /// Returns the storage path.
+  static Future<String> uploadTankPhoto({
+    required String tankId,
+    required String filePath,
+    String? note,
+    required DateTime createdAt,
+  }) async {
+    final uid = userId;
+    if (uid == null) throw Exception('Not logged in');
+    final ext = filePath.split('.').last;
+    final storagePath = '$uid/$tankId/${createdAt.millisecondsSinceEpoch}.$ext';
+    final bytes = await File(filePath).readAsBytes();
+    await client.storage.from('tank-photos').uploadBinary(
+      storagePath,
+      bytes,
+      fileOptions: const FileOptions(upsert: true),
+    );
+    // Record in DB table for sync tracking
+    await client.from('tank_photos').upsert({
+      'user_id': uid,
+      'tank_id': tankId,
+      'storage_path': storagePath,
+      'note': note,
+      'created_at': createdAt.toUtc().toIso8601String(),
+    }, onConflict: 'user_id,storage_path');
+    return storagePath;
+  }
+
+  /// Delete a tank photo from storage and the DB table.
+  static Future<void> deleteTankPhoto(String storagePath) async {
+    final uid = userId;
+    if (uid == null) return;
+    try {
+      await client.storage.from('tank-photos').remove([storagePath]);
+    } catch (e) {
+      debugPrint('[TankPhoto] storage delete failed: $e');
+    }
+    await client.from('tank_photos')
+        .delete()
+        .eq('user_id', uid)
+        .eq('storage_path', storagePath);
+  }
+
+  /// Fetch all tank photo records for a given tank from the cloud DB.
+  static Future<List<Map<String, dynamic>>> fetchTankPhotos(String tankId) async {
+    final uid = userId;
+    if (uid == null) return [];
+    final data = await client
+        .from('tank_photos')
+        .select()
+        .eq('user_id', uid)
+        .eq('tank_id', tankId)
+        .order('created_at', ascending: false);
+    return List<Map<String, dynamic>>.from(data);
+  }
+
+  /// Download a tank photo from storage to a local file. Returns local path.
+  static Future<String> downloadTankPhoto(String storagePath, String localPath) async {
+    final bytes = await client.storage.from('tank-photos').download(storagePath);
+    final file = File(localPath);
+    await file.parent.create(recursive: true);
+    await file.writeAsBytes(bytes);
+    return localPath;
+  }
 }

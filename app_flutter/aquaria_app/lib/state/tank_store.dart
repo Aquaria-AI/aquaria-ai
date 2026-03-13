@@ -1,7 +1,9 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
 
 import '../db/app_db.dart' as db;
@@ -154,6 +156,39 @@ class TankStore {
         // Remove local journal entries deleted from cloud
         final removedJournal = await _db.removeJournalNotInCloud(tankId, cloudJournalIds);
         if (removedJournal > 0) debugPrint('[CloudSync] Tank $tankId: removed $removedJournal stale journal entries');
+
+        // Tank photos — download any cloud photos not already local
+        try {
+          final cloudPhotos = await SupabaseService.fetchTankPhotos(tankId);
+          final docDir = await getApplicationDocumentsDirectory();
+          int downloaded = 0;
+          for (final cp in cloudPhotos) {
+            final remotePath = cp['storage_path'] as String;
+            // Skip if we already have this photo locally
+            final existing = await _db.photoByRemotePath(remotePath);
+            if (existing != null) continue;
+            // Download to local tank_photos directory
+            final ext = remotePath.split('.').last;
+            final ts = DateTime.tryParse(cp['created_at'] as String? ?? '')?.millisecondsSinceEpoch ?? DateTime.now().millisecondsSinceEpoch;
+            final localPath = '${docDir.path}/tank_photos/$tankId/${ts}_cloud.$ext';
+            try {
+              await SupabaseService.downloadTankPhoto(remotePath, localPath);
+              await _db.insertPhoto(db.TankPhotosCompanion.insert(
+                tankId: tankId,
+                filePath: localPath,
+                remotePath: Value(remotePath),
+                note: Value(cp['note'] as String?),
+                createdAt: Value(DateTime.tryParse(cp['created_at'] as String? ?? '') ?? DateTime.now()),
+              ));
+              downloaded++;
+            } catch (e) {
+              debugPrint('[CloudSync] download photo failed ($remotePath): $e');
+            }
+          }
+          if (downloaded > 0) debugPrint('[CloudSync] Tank $tankId: downloaded $downloaded photos from cloud');
+        } catch (e) {
+          debugPrint('[CloudSync] Tank $tankId: photo pull failed: $e');
+        }
       }
 
       // Dismissed tasks (legacy)
@@ -279,6 +314,24 @@ class TankStore {
           priority: task.priority,
           source: task.source,
         );
+      }
+
+      // Push tank photos that haven't been uploaded yet
+      final unsyncedPhotos = await _db.photosWithoutRemotePath();
+      for (final photo in unsyncedPhotos) {
+        if (!File(photo.filePath).existsSync()) continue;
+        try {
+          final remotePath = await SupabaseService.uploadTankPhoto(
+            tankId: photo.tankId,
+            filePath: photo.filePath,
+            note: photo.note,
+            createdAt: photo.createdAt,
+          );
+          await _db.setPhotoRemotePath(photo.id, remotePath);
+          debugPrint('[CloudSync] pushed tank photo: $remotePath');
+        } catch (e) {
+          debugPrint('[CloudSync] push photo ${photo.id} failed: $e');
+        }
       }
     } catch (e) {
       debugPrint('[CloudSync] pushToCloud failed: $e');
@@ -798,18 +851,34 @@ class TankStore {
     required String filePath,
     String? note,
   }) async {
-    await _db.insertPhoto(
+    final now = DateTime.now();
+    final localId = await _db.insertPhotoReturningId(
       db.TankPhotosCompanion.insert(
         tankId: tankId,
         filePath: filePath,
         note: Value(note),
-        createdAt: Value(DateTime.now()),
+        createdAt: Value(now),
       ),
     );
+    // Upload to cloud in background
+    _cloudSync(() async {
+      final remotePath = await SupabaseService.uploadTankPhoto(
+        tankId: tankId,
+        filePath: filePath,
+        note: note,
+        createdAt: now,
+      );
+      await _db.setPhotoRemotePath(localId, remotePath);
+      debugPrint('[CloudSync] tank photo uploaded: $remotePath');
+    });
   }
 
   Future<void> deletePhoto(int id) async {
+    final photo = await _db.photoById(id);
     await _db.deletePhoto(id);
+    if (photo?.remotePath != null) {
+      _cloudSync(() => SupabaseService.deleteTankPhoto(photo!.remotePath!));
+    }
   }
 
   // ---------- Chat Sessions ----------
