@@ -1229,6 +1229,7 @@ If the user mentions a plant that is NOT in the current plants list, treat it as
 2. Once the plant is known, offer to add it: "I don't see [plant] in your plant list — would you like me to add it?"
 3. When the user affirms, say "Done — I've added [plant] to your plant list."
 4. If the user explicitly says "add [plant] to my plants/tank/list", skip straight to step 3 and confirm it was added.
+5. BATCH ADDS: If the user provides a list of plants (e.g. "Added these plants: Java Fern, Anubias, Monte Carlo" or "I have these plants" followed by a list or "my plants are ..."), add ALL of them at once. Do NOT ask about each one individually. Confirm with: "Done — I've added [plant1], [plant2], and [plant3] to your plant list." Check each plant against the existing plants list first and only add ones that are not already listed.
 IMPORTANT: Only detect species that are plausibly aquarium or aquatic plants (e.g. Java Fern, Anubias, Amazon Sword, Monte Carlo, Hornwort, Vallisneria, Water Sprite, etc.). Ignore if the user is clearly speaking figuratively or about non-aquatic plants.
 CRITICAL: Never say "I've added it" after receiving only a clarifying answer — only say so after the user explicitly affirms OR explicitly asks you to add.
 
@@ -1990,7 +1991,10 @@ def chat_tank(request: Request, req: ChatRequest, user_id: str = Depends(_get_us
         ])
 
         user_explicit_add = bool(re.search(
-            r"\badd\b.{0,50}(to (my|the) (tank|inhabitants|list|profile)|to your (tank|list))",
+            r"\b(add|added)\b.{0,50}(to (my|the) (tank|inhabitants|list|profile)|to your (tank|list))"
+            r"|\b(added|add)\b.{0,20}\b(these|the|some|my|new) (fish|inhabitants|inverts)\b"
+            r"|\bmy (fish|inhabitants) (are|include)\b"
+            r"|\b(i have|i got|here are)\b.{0,30}\b(fish|inhabitants|inverts)\b",
             req.message, re.IGNORECASE,
         ))
 
@@ -2034,10 +2038,15 @@ def chat_tank(request: Request, req: ChatRequest, user_id: str = Depends(_get_us
             "i've logged", "i have logged", "logged them to your",
             "logged it to your", "now in your plant", "updated your plant",
             "they're in your plant", "they are in your plant",
+            "added all", "added these", "added everything",
+            "to your plant list", "in your plant list",
         ])
 
         user_explicit_plant_add = bool(re.search(
-            r"\b(add|log)\b.{0,50}(to (my|the) (plants|plant list))",
+            r"\b(add|log)\b.{0,50}(to (my|the) (plants|plant list))"
+            r"|\b(added|add)\b.{0,20}\b(these|the|some|my|new) plants\b"
+            r"|\bmy plants (are|include)\b"
+            r"|\b(i have|i got|i planted|here are)\b.{0,30}\bplants?\b",
             req.message, re.IGNORECASE,
         ))
 
