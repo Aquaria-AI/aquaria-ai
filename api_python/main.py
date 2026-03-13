@@ -47,12 +47,14 @@ def _get_user_id(request: Request) -> str:
         raise HTTPException(status_code=401, detail="Missing authorization header")
     token = auth[7:]
     try:
-        # Try RS256 (JWKS) first — Supabase's default for new projects
+        # Try JWKS first — supports RS256, ES256, etc.
         signing_key = _get_jwks_client().get_signing_key_from_jwt(token)
+        # Read the algorithm from the JWKS key itself
+        header = jwt.get_unverified_header(token)
         payload = jwt.decode(
             token,
             signing_key.key,
-            algorithms=["RS256"],
+            algorithms=[header.get("alg", "ES256")],
             audience="authenticated",
         )
     except Exception:
@@ -87,7 +89,8 @@ def _rate_limit_key(request: Request) -> str:
             token = auth[7:]
             try:
                 signing_key = _get_jwks_client().get_signing_key_from_jwt(token)
-                payload = jwt.decode(token, signing_key.key, algorithms=["RS256"], audience="authenticated")
+                header = jwt.get_unverified_header(token)
+                payload = jwt.decode(token, signing_key.key, algorithms=[header.get("alg", "ES256")], audience="authenticated")
             except Exception:
                 payload = jwt.decode(token, _SUPABASE_JWT_SECRET, algorithms=["HS256"], audience="authenticated")
             return payload.get("sub", get_remote_address(request))
