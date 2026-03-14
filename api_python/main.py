@@ -2837,12 +2837,56 @@ def knowledge_ingest(request: Request, req: KnowledgeIngestRequest, user_id: str
         return {"status": "error", "message": str(e)}
 
 
-def _save_feedback_supabase(user_id: Optional[str], message: str, device: Optional[str], attachment_name: Optional[str]):
+def _upload_feedback_attachment(file_bytes: bytes, file_name: str) -> Optional[str]:
+    """Upload feedback attachment to Supabase Storage. Returns public URL or None."""
+    if not _SUPABASE_SERVICE_KEY or not file_bytes:
+        return None
+    try:
+        import uuid as _uuid
+        # Unique path to avoid collisions
+        ext = os.path.splitext(file_name)[1] if file_name else ""
+        path = f"feedback/{_uuid.uuid4().hex}{ext}"
+        # Guess content type
+        ct = "application/octet-stream"
+        lower = (file_name or "").lower()
+        if lower.endswith((".png",)):
+            ct = "image/png"
+        elif lower.endswith((".jpg", ".jpeg")):
+            ct = "image/jpeg"
+        elif lower.endswith((".pdf",)):
+            ct = "application/pdf"
+        elif lower.endswith((".txt",)):
+            ct = "text/plain"
+        req = urllib.request.Request(
+            f"{_SUPABASE_URL}/storage/v1/object/feedback-attachments/{path}",
+            data=file_bytes,
+            headers={
+                "apikey": _SUPABASE_SERVICE_KEY,
+                "Authorization": f"Bearer {_SUPABASE_SERVICE_KEY}",
+                "Content-Type": ct,
+            },
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=15)
+        public_url = f"{_SUPABASE_URL}/storage/v1/object/public/feedback-attachments/{path}"
+        print(f"[Feedback] attachment uploaded: {path}", flush=True)
+        return public_url
+    except Exception as e:
+        print(f"[Feedback] attachment upload error: {e}", flush=True)
+        return None
+
+
+def _save_feedback_supabase(user_id: Optional[str], message: str, device: Optional[str],
+                            attachment_name: Optional[str], file_bytes: Optional[bytes] = None):
     """Write feedback to Supabase so the admin console can read it."""
     if not _SUPABASE_SERVICE_KEY:
         print("[Feedback] Supabase skipped: no service key", flush=True)
         return
     try:
+        # Upload attachment if present
+        attachment_url = None
+        if file_bytes and attachment_name:
+            attachment_url = _upload_feedback_attachment(file_bytes, attachment_name)
         # user_id must be a valid UUID or null
         uid = user_id if user_id and len(user_id) == 36 and "-" in user_id else None
         payload = json.dumps({
@@ -2850,6 +2894,7 @@ def _save_feedback_supabase(user_id: Optional[str], message: str, device: Option
             "message": message,
             "device": device,
             "attachment_name": attachment_name,
+            "attachment_url": attachment_url,
         }).encode()
         req = urllib.request.Request(
             f"{_SUPABASE_URL}/rest/v1/feedback",
@@ -2920,7 +2965,7 @@ async def submit_feedback_json(request: Request, req: FeedbackRequest):
         print(f"[Feedback] DB error: {e}", flush=True)
     import threading
     user_id = _get_user_id(request)
-    _save_feedback_supabase(user_id, req.message, req.device, None)
+    _save_feedback_supabase(user_id, req.message, req.device, None, None)
     threading.Thread(target=_send_feedback_email, args=(req.message, req.device, None, None), daemon=True).start()
     return {"status": "ok"}
 
@@ -2960,6 +3005,6 @@ async def submit_feedback_upload(
 
     import threading
     user_id = _get_user_id(request)
-    _save_feedback_supabase(user_id, message, device, file_name)
+    _save_feedback_supabase(user_id, message, device, file_name, file_bytes)
     threading.Thread(target=_send_feedback_email, args=(message, device, file_bytes, file_name), daemon=True).start()
     return {"status": "ok"}
