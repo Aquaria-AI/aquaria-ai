@@ -323,6 +323,36 @@ left join (
   group by user_id
 ) flags_cast on flags_cast.user_id = u.id;
 
+-- Feedback — user-submitted feedback with ticket management
+create table if not exists public.feedback (
+  id bigint generated always as identity primary key,
+  user_id uuid references auth.users(id) on delete set null,
+  message text not null,
+  device text,
+  attachment_name text,
+  ticket_status text not null default 'new',
+  admin_notes text not null default '',
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_feedback_created_at on public.feedback(created_at desc);
+
+alter table public.feedback enable row level security;
+
+-- Users can insert their own feedback
+create policy "Users can submit feedback"
+  on public.feedback for insert with check (auth.uid() = user_id);
+-- Admin can view all feedback
+create policy "Admin can view all feedback"
+  on public.feedback for select using (
+    auth.uid() = (select id from auth.users where email = 'admin@aquaria-ai.com' limit 1)
+  );
+-- Admin can update feedback (ticket status, notes)
+create policy "Admin can update feedback"
+  on public.feedback for update using (
+    auth.uid() = (select id from auth.users where email = 'admin@aquaria-ai.com' limit 1)
+  );
+
 -- Legal acceptances — records user acknowledgement of T&C and Privacy Policy
 create table if not exists public.legal_acceptances (
   id bigint generated always as identity primary key,

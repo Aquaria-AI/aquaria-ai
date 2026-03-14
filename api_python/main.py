@@ -30,6 +30,7 @@ from starlette.responses import JSONResponse
 
 _SUPABASE_JWT_SECRET = os.environ.get("SUPABASE_JWT_SECRET", "")
 _SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://jdiwsvealnrzdxofomvz.supabase.co")
+_SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 _JWKS_URL = f"{_SUPABASE_URL}/auth/v1/.well-known/jwks.json"
 _jwks_client: PyJWKClient | None = None
 
@@ -2788,6 +2789,37 @@ def knowledge_ingest(request: Request, req: KnowledgeIngestRequest, user_id: str
         return {"status": "error", "message": str(e)}
 
 
+def _save_feedback_supabase(user_id: Optional[str], message: str, device: Optional[str], attachment_name: Optional[str]):
+    """Write feedback to Supabase so the admin console can read it."""
+    if not _SUPABASE_SERVICE_KEY:
+        print("[Feedback] Supabase skipped: no service key", flush=True)
+        return
+    try:
+        # user_id must be a valid UUID or null
+        uid = user_id if user_id and len(user_id) == 36 and "-" in user_id else None
+        payload = json.dumps({
+            "user_id": uid,
+            "message": message,
+            "device": device,
+            "attachment_name": attachment_name,
+        }).encode()
+        req = urllib.request.Request(
+            f"{_SUPABASE_URL}/rest/v1/feedback",
+            data=payload,
+            headers={
+                "apikey": _SUPABASE_SERVICE_KEY,
+                "Authorization": f"Bearer {_SUPABASE_SERVICE_KEY}",
+                "Content-Type": "application/json",
+                "Prefer": "return=minimal",
+            },
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=5)
+        print("[Feedback] saved to Supabase", flush=True)
+    except Exception as e:
+        print(f"[Feedback] Supabase error: {e}", flush=True)
+
+
 def _send_feedback_email(message: str, device: Optional[str], file_bytes: Optional[bytes], file_name: Optional[str]):
     """Send feedback email in a background thread so the endpoint doesn't block."""
     smtp_user = os.environ.get("SMTP_USER")
@@ -2839,6 +2871,8 @@ async def submit_feedback_json(request: Request, req: FeedbackRequest):
     except Exception as e:
         print(f"[Feedback] DB error: {e}", flush=True)
     import threading
+    user_id = _get_user_id(request)
+    _save_feedback_supabase(user_id, req.message, req.device, None)
     threading.Thread(target=_send_feedback_email, args=(req.message, req.device, None, None), daemon=True).start()
     return {"status": "ok"}
 
@@ -2877,5 +2911,7 @@ async def submit_feedback_upload(
         print(f"[Feedback] DB error: {e}", flush=True)
 
     import threading
+    user_id = _get_user_id(request)
+    _save_feedback_supabase(user_id, message, device, file_name)
     threading.Thread(target=_send_feedback_email, args=(message, device, file_bytes, file_name), daemon=True).start()
     return {"status": "ok"}
