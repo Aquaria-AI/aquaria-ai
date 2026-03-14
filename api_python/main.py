@@ -2193,6 +2193,7 @@ def chat_tank(request: Request, req: ChatRequest, user_id: str = Depends(_get_us
             "updated your tank profile", "updated your inhabitant",
             "updated your tank to include", "updated your tank",
             "added to your crew", "to your tank", "added!",
+            "added ", "✅",
         ])
 
         user_explicit_add = bool(re.search(

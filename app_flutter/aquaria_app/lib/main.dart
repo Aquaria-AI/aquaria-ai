@@ -3026,6 +3026,27 @@ class _ObInhabitantsPageState extends State<_ObInhabitantsPage> {
   }
 
   @override
+  void didUpdateWidget(covariant _ObInhabitantsPage old) {
+    super.didUpdateWidget(old);
+    // Sync inhabitants added externally (e.g. via Meet Ariel chat)
+    final currentNames = _inhs.map((i) => i.name.text.trim().toLowerCase()).toSet();
+    for (final inh in widget.initialInhabitants) {
+      if (!currentNames.contains(inh.name.toLowerCase())) {
+        _inhs.add(_InhEdit(nameText: inh.name, type: inh.type, count: inh.count));
+        currentNames.add(inh.name.toLowerCase());
+      }
+    }
+    // Sync plants added externally
+    final currentPlants = _plts.map((p) => p.name.text.trim().toLowerCase()).toSet();
+    for (final plant in widget.initialPlants) {
+      if (!currentPlants.contains(plant.toLowerCase())) {
+        _plts.add(_PlantEdit(nameText: plant));
+        currentPlants.add(plant.toLowerCase());
+      }
+    }
+  }
+
+  @override
   void dispose() {
     for (final i in _inhs) i.dispose();
     for (final p in _plts) p.dispose();
