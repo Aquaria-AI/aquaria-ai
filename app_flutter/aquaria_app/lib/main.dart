@@ -10109,21 +10109,39 @@ class _ChatSheetState extends State<_ChatSheet> {
           final hasConfirm = RegExp(r'\b(added|removed|deleted|done|all set|created|updated|logged|taken care)\b')
               .hasMatch(replyLower);
           final checkReply = !endsWithQ || hasConfirm;
-          // Sort by name length descending so "New Tank" matches before "Tank"
-          final sorted = List<TankModel>.from(_allTanks)
-            ..sort((a, b) => b.name.length.compareTo(a.name.length));
-          for (final t in sorted) {
-            final nameL = t.name.toLowerCase();
-            // Use word-boundary-aware matching to avoid substring false positives
-            final pattern = RegExp('\\b${RegExp.escape(nameL)}\\b');
-            if ((checkReply && pattern.hasMatch(replyLower)) || pattern.hasMatch(msgLower)) {
-              if (_selectedTank?.id != t.id) {
-                debugPrint('[Chat] Tank detected: ${_selectedTank?.name} → ${t.name}');
-                setState(() => _selectedTank = t);
-                await _loadTankData(t);
-              }
-              break;
+
+          TankModel? detected;
+
+          // Check if the user replied with just a number (selecting from numbered list)
+          final numberMatch = RegExp(r'^\s*(\d+)\s*$').firstMatch(text);
+          if (numberMatch != null) {
+            final idx = int.parse(numberMatch.group(1)!) - 1; // 1-based to 0-based
+            if (idx >= 0 && idx < _allTanks.length) {
+              detected = _allTanks[idx];
+              debugPrint('[Chat] Tank selected by number: ${idx + 1} → ${detected.name}');
             }
+          }
+
+          // Fall back to name matching
+          if (detected == null) {
+            // Sort by name length descending so "New Tank" matches before "Tank"
+            final sorted = List<TankModel>.from(_allTanks)
+              ..sort((a, b) => b.name.length.compareTo(a.name.length));
+            for (final t in sorted) {
+              final nameL = t.name.toLowerCase();
+              // Use word-boundary-aware matching to avoid substring false positives
+              final pattern = RegExp('\\b${RegExp.escape(nameL)}\\b');
+              if ((checkReply && pattern.hasMatch(replyLower)) || pattern.hasMatch(msgLower)) {
+                detected = t;
+                break;
+              }
+            }
+          }
+
+          if (detected != null && _selectedTank?.id != detected.id) {
+            debugPrint('[Chat] Tank detected: ${_selectedTank?.name} → ${detected.name}');
+            setState(() => _selectedTank = detected);
+            await _loadTankData(detected!);
           }
         } else if (_selectedTank == null && _allTanks.length == 1) {
           setState(() => _selectedTank = _allTanks.first);

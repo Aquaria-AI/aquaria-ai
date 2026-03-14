@@ -1780,6 +1780,17 @@ def chat_tank(request: Request, req: ChatRequest, user_id: str = Depends(_get_us
     print(f"[Chat] tank={'set' if tank else 'none'} available_tanks={[_tank_name(t) for t in available_tanks]} no_tank_context={no_tank_context}")
 
     if no_tank_context and len(available_tanks) > 1:
+        # Build a numbered list so Ariel can present it and user can reply by number
+        numbered_lines = []
+        for i, t in enumerate(available_tanks, 1):
+            if isinstance(t, dict):
+                name = t.get("name", "Unknown")
+                gal = t.get("gallons", "?")
+                wt = (t.get("water_type", "") or "").capitalize()
+                numbered_lines.append(f"  {i}. {name} — {gal}g {wt}")
+            else:
+                numbered_lines.append(f"  {i}. {t}")
+        numbered_list = "\n".join(numbered_lines)
         tanks_list = "\n".join(f"  - {_fmt_tank(t)}" for t in available_tanks)
         tank_context = (
             f"MULTI-TANK SESSION: The user has multiple tanks:\n{tanks_list}\n"
@@ -1789,11 +1800,14 @@ def chat_tank(request: Request, req: ChatRequest, user_id: str = Depends(_get_us
             f"This includes when the user mentions buying, picking up, or acquiring new fish, plants, or livestock "
             f"(e.g. 'I just picked up an amazon sword', 'I bought some neon tetras', 'I got a nerite snail') — "
             f"these are ADD requests. Ask which tank to add them to.\n"
+            f"When asking which tank, ALWAYS present a numbered list like this:\n"
+            f"{numbered_list}\n"
+            f"Then ask the user to reply with the number. This is especially important when tanks share the same name.\n"
+            f"If the user replies with a number (e.g. '1', '2'), use that to select the tank from the list above.\n"
             f"If the user refers to a tank indirectly (e.g. 'the one I just created', 'my big tank', 'the reef'), "
             f"use the tank details above (size, type, creation date) to resolve which tank they mean. "
             f"Once the tank is identified, confirm it in your reply (e.g. 'Got it — adding that to [Tank Name].'). "
             f"If the user's message is a general question or doesn't involve logging, no clarification is needed.\n"
-            f"When asking which tank, ALWAYS include the tank name AND size (e.g. 'Reef Tank (75 gal)') to help the user identify them.\n"
             f"HARD RULE: The ONLY valid tanks are listed above. You CANNOT log data to any tank not in that list. "
             f"If the user names a tank that is NOT listed above, it does not exist or has been archived. "
             f"Do NOT say you are logging to it. Instead say something like: "
