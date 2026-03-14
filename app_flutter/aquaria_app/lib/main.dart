@@ -1273,7 +1273,7 @@ class OnboardingScreen extends StatefulWidget {
 class _OnboardingScreenState extends State<OnboardingScreen> {
   final _pageCtrl = PageController();
   int _page = 0;
-  int get _totalPages => _experience == 'beginner' ? 6 : 7;
+  int get _totalPages => 6;
 
   String _experience = '';
   final _tankNameCtrl = TextEditingController(text: 'New Tank');
@@ -1444,15 +1444,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     equipment: _equipment,
                     onEquipmentChanged: (eq) => setState(() => _equipment = eq),
                   ),
-                  if (_experience != 'beginner')
-                    _ObEquipmentPage(
-                      waterType: _waterType,
-                      equipment: _equipment,
-                      onChanged: (eq) => setState(() => _equipment = eq),
-                      onNext: _goNext,
-                    ),
                   _ObInhabitantsPage(
                     initialInhabitants: _inhabitants,
+                    initialPlants: _plants,
                     waterType: _waterType,
                     onNext: (inhs, plts) {
                       setState(() { _inhabitants = inhs; _plants = plts; });
@@ -1461,6 +1455,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   ),
                   _ObInhabitantSummaryPage(
                     inhabitants: _inhabitants,
+                    plants: _plants,
                     waterType: _waterType,
                     tankName: _tankNameCtrl.text,
                     gallons: _gallons,
@@ -1477,7 +1472,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     onReminderTask: (t) => _pendingTasks.add(t),
                     onCsvPending: (content) => _pendingCsvContent = content,
                     experience: _experience,
-                    isActive: _page == (_experience == 'beginner' ? 4 : 5),
+                    isActive: _page == 5,
                     finishing: _finishing,
                   ),
                 ],
@@ -2514,8 +2509,7 @@ class _ObTankSetupPageState extends State<_ObTankSetupPage> {
             ),
           ),
         ),
-        if (widget.experience == 'beginner')
-          Padding(
+        Padding(
             padding: const EdgeInsets.fromLTRB(24, 0, 24, 4),
             child: SizedBox(
               width: double.infinity,
@@ -2858,7 +2852,10 @@ List<({String icon, String message})> _compatibilityWarnings(
 
   final aggressiveCichlids = names.where((n) =>
       n.contains('cichlid') || n.contains('oscar') || n.contains('flowerhorn') ||
-      n.contains('jaguar') || n.contains('dovii') || n.contains('managuense')).toList();
+      n.contains('jaguar') || n.contains('dovii') || n.contains('managuense') ||
+      n.contains('jack dempsey') || n.contains('dempsey') || n.contains('convict') ||
+      n.contains('green terror') || n.contains('red devil') || n.contains('midas') ||
+      n.contains('texas cichlid') || n.contains('jewel cichlid') || n.contains('umbee')).toList();
   final communityFish = names.where((n) =>
       n.contains('tetra') || n.contains('guppy') || n.contains('platy') ||
       n.contains('molly') || n.contains('danio') || n.contains('rasbora') ||
@@ -2967,11 +2964,13 @@ List<({String icon, String message})> _compatibilityWarnings(
 // Page 4 — Inhabitants
 class _ObInhabitantsPage extends StatefulWidget {
   final List<({String name, String type, int count})> initialInhabitants;
+  final List<String> initialPlants;
   final void Function(List<({String name, String type, int count})> inhabitants, List<String> plants) onNext;
   final WaterType waterType;
   final bool showSkip;
   const _ObInhabitantsPage({
     required this.initialInhabitants,
+    this.initialPlants = const [],
     required this.onNext,
     required this.waterType,
     this.showSkip = true,
@@ -2992,7 +2991,7 @@ class _ObInhabitantsPageState extends State<_ObInhabitantsPage> {
   void initState() {
     super.initState();
     _inhs = widget.initialInhabitants.map((i) => _InhEdit(nameText: i.name, type: i.type, count: i.count)).toList();
-    _plts = [];
+    _plts = widget.initialPlants.map((p) => _PlantEdit(nameText: p)).toList();
   }
 
   @override
@@ -3366,10 +3365,12 @@ class _ObInhabitantSummaryPage extends StatefulWidget {
   final String tankName;
   final double gallons;
   final VoidCallback onNext;
+  final List<String> plants;
   final void Function(List<({String name, String type, int count})> added)? onInhabitantsAdded;
   final void Function(List<String> names)? onInhabitantsRemoved;
   const _ObInhabitantSummaryPage({
     required this.inhabitants,
+    this.plants = const [],
     this.waterType = WaterType.freshwater,
     this.tankName = '',
     this.gallons = 0,
@@ -3436,10 +3437,11 @@ class _ObInhabitantSummaryPageState extends State<_ObInhabitantSummaryPage> {
               'history': history,
               'recent_logs': <Map>[],
               'system_context':
-                  'ONBOARDING CONTEXT — Meet Your Crew page. The user is reviewing their inhabitants list and may want to add or remove inhabitants. '
+                  'ONBOARDING CONTEXT — Meet Your Crew page. This chat is specifically for adding or removing inhabitants. '
+                  'When the user mentions an inhabitant name, ADD IT IMMEDIATELY — do NOT ask "would you like me to add it?" Just confirm: "Added [name]!" '
                   'CURRENT INHABITANTS LIST (this is the source of truth): $inhDesc. '
                   'Use this list to answer any questions about what is currently in the tank. '
-                  'Help them add or remove inhabitants by name. Confirm what you added or removed. Keep replies short and friendly.',
+                  'Keep replies short and friendly.',
             }),
           )
           .timeout(const Duration(seconds: 30));
@@ -3718,6 +3720,45 @@ class _ObInhabitantSummaryPageState extends State<_ObInhabitantSummaryPage> {
                             color: w.icon == '🚨' ? Colors.red.shade800 : Colors.orange.shade900,
                             height: 1.4,
                           ))),
+                    ],
+                  ),
+                )),
+              ],
+            ),
+          );
+        }),
+        // Plants section
+        Builder(builder: (context) {
+          if (_chatExpanded || widget.plants.isEmpty) return const SizedBox.shrink();
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 8),
+                  child: Text('PLANTS',
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.grey, letterSpacing: 0.8)),
+                ),
+                ...widget.plants.map((p) => Container(
+                  margin: const EdgeInsets.only(bottom: 6),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    border: Border.all(color: Colors.grey.shade200),
+                    borderRadius: BorderRadius.circular(12),
+                    boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 6, offset: const Offset(0, 2))],
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 36, height: 36,
+                        decoration: BoxDecoration(color: _cMint, borderRadius: BorderRadius.circular(8)),
+                        alignment: Alignment.center,
+                        child: const Text('🌿', style: TextStyle(fontSize: 18)),
+                      ),
+                      const SizedBox(width: 10),
+                      Text(_titleCase(p), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
                     ],
                   ),
                 )),
@@ -7058,7 +7099,7 @@ class AddTankFlowScreen extends StatefulWidget {
 class _AddTankFlowScreenState extends State<AddTankFlowScreen> {
   final _pageCtrl = PageController();
   int _page = 0;
-  static const _totalPages = 5;
+  static const _totalPages = 4;
 
   final _tankNameCtrl = TextEditingController(text: 'New Tank');
   double _gallons = 30;
@@ -7140,15 +7181,12 @@ class _AddTankFlowScreenState extends State<AddTankFlowScreen> {
                     onGallonsChanged: (v) => setState(() => _gallons = v),
                     onWaterTypeChanged: (v) => setState(() => _waterType = v),
                     onNext: _goNext,
-                  ),
-                  _ObEquipmentPage(
-                    waterType: _waterType,
                     equipment: _equipment,
-                    onChanged: (eq) => setState(() => _equipment = eq),
-                    onNext: _goNext,
+                    onEquipmentChanged: (eq) => setState(() => _equipment = eq),
                   ),
                   _ObInhabitantsPage(
                     initialInhabitants: _inhabitants,
+                    initialPlants: _plants,
                     waterType: _waterType,
                     onNext: (inhs, plts) {
                       setState(() { _inhabitants = inhs; _plants = plts; });
@@ -7157,6 +7195,7 @@ class _AddTankFlowScreenState extends State<AddTankFlowScreen> {
                   ),
                   _ObInhabitantSummaryPage(
                     inhabitants: _inhabitants,
+                    plants: _plants,
                     waterType: _waterType,
                     tankName: _tankNameCtrl.text,
                     gallons: _gallons,

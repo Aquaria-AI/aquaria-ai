@@ -1570,9 +1570,10 @@ Rules:
 def _is_affirmation(text: str) -> bool:
     t = text.lower().strip().rstrip("!.")
     affirmations = ["yes", "yeah", "sure", "ok", "okay", "please", "yep", "yup",
-                    "go ahead", "do it", "set it", "sounds good", "that would be great",
-                    "yes please", "sure thing", "absolutely", "go for it", "why not",
-                    "i said yes", "that's what i asked", "that's what i said"]
+                    "go ahead", "do it", "add it", "add them", "set it", "sounds good",
+                    "that would be great", "yes please", "sure thing", "absolutely",
+                    "go for it", "why not", "i said yes", "that's what i asked",
+                    "that's what i said", "just add", "add anyway", "add it anyway"]
     # Also match implicit references to prior offers
     implicit = ["you offered", "you said you would", "you already offered",
                 "you just offered", "you mentioned", "you suggested",
@@ -1634,6 +1635,11 @@ def _history_has_inhabitant_add_offer(history: list) -> tuple[bool, str]:
                 "log it as", "add it as",
                 "would you like me to add", "like me to log",
                 "want me to log", "shall i log",
+                # Broader patterns — Ariel discussing a species in context of adding
+                "which species", "which type", "what kind", "what species",
+                "are you sure", "they can be aggressive", "they are aggressive",
+                "compatible", "compatibility", "still want to add", "still like to add",
+                "go ahead and add", "proceed with adding",
             ]):
                 return True, content
             checked += 1
@@ -2184,20 +2190,23 @@ def chat_tank(request: Request, req: ChatRequest, user_id: str = Depends(_get_us
             "i've logged", "i have logged", "logged them to your",
             "logged it to your", "now in your tank profile",
             "updated your tank profile", "updated your inhabitant",
+            "updated your tank to include", "updated your tank",
+            "added to your crew", "to your tank", "added!",
         ])
 
         user_explicit_add = bool(re.search(
             r"\b(add|added)\b.{0,50}(to (my|the) (tank|inhabitants|list|profile)|to your (tank|list))"
             r"|\b(added|add)\b.{0,20}\b(these|the|some|my|new) (fish|inhabitants|inverts)\b"
             r"|\bmy (fish|inhabitants) (are|include)\b"
-            r"|\b(i have|i got|here are)\b.{0,30}\b(fish|inhabitants|inverts)\b",
+            r"|\b(i have|i got|here are)\b.{0,30}\b(fish|inhabitants|inverts)\b"
+            r"|\badd (it|them|those)\b",
             req.message, re.IGNORECASE,
         ))
 
         # Terse reply confirms guarded by history context
         inhab_reply_terse = any(k in reply_lower for k in [
             "done", "all done", "all set", "taken care", "you're right",
-            "got it", "no problem", "of course",
+            "got it", "no problem", "of course", "updated", "added",
         ])
         history_has_inhab_offer = _history_has_inhabitant_add_offer(req.history or [])[0]
 
