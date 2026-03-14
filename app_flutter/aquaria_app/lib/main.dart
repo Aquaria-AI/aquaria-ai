@@ -9423,6 +9423,10 @@ class _ChatSheetState extends State<_ChatSheet> {
 
   TankModel? _selectedTank;
   late List<TankModel> _allTanks;
+  /// Cache key stays fixed for the lifetime of this sheet so that
+  /// messages saved mid-conversation (after tank auto-detection changes
+  /// _selectedTank) can still be loaded when the sheet reopens.
+  late String? _cacheKey;
   List<db.Inhabitant> _inhabitants = [];
   List<db.Plant> _plants = [];
   List<String> _recentLogs = [];
@@ -9444,7 +9448,8 @@ class _ChatSheetState extends State<_ChatSheet> {
     // From the home page (no initialTank) with multiple tanks, let Ariel ask.
     _selectedTank = widget.initialTank ??
         (_allTanks.length == 1 ? _allTanks.first : null);
-    final cached = _ChatCache.load(_selectedTank?.id);
+    _cacheKey = _selectedTank?.id;
+    final cached = _ChatCache.load(_cacheKey);
     if (cached != null && cached.isNotEmpty) {
       _chatMessages = cached;
       _scrollToBottom();
@@ -9512,7 +9517,7 @@ class _ChatSheetState extends State<_ChatSheet> {
 
   void _addMessage(_ChatMessage msg) {
     setState(() => _chatMessages.add(msg));
-    _ChatCache.save(_selectedTank?.id, _chatMessages);
+    _ChatCache.save(_cacheKey, _chatMessages);
   }
 
   @override
@@ -10079,6 +10084,12 @@ class _ChatSheetState extends State<_ChatSheet> {
           .timeout(const Duration(seconds: 30));
       if (resp.statusCode == 200 && mounted && !_cancelled) {
         final data = jsonDecode(resp.body);
+        debugPrint('[Chat] FULL RESPONSE KEYS: ${data is Map ? (data as Map).keys.toList() : "not a map"}');
+        debugPrint('[Chat] new_inhabitant: ${data is Map ? data['new_inhabitant'] : "N/A"}');
+        debugPrint('[Chat] new_plants: ${data is Map ? data['new_plants'] : "N/A"}');
+        debugPrint('[Chat] remove_plants: ${data is Map ? data['remove_plants'] : "N/A"}');
+        debugPrint('[Chat] remove_inhabitants: ${data is Map ? data['remove_inhabitants'] : "N/A"}');
+        debugPrint('[Chat] _selectedTank: ${_selectedTank?.name ?? "NULL"}');
         final reply = (data is Map ? data['response'] ?? data['message'] ?? data.toString() : resp.body) as String;
         _addMessage(_ChatMessage(role: 'assistant', content: reply));
         _scrollToBottom();
@@ -10093,9 +10104,14 @@ class _ChatSheetState extends State<_ChatSheet> {
           // message when the user explicitly names a tank.
           if (!isQuestion) {
             final msgLower = text.toLowerCase();
-            for (final t in _allTanks) {
+            // Sort by name length descending so "New Tank" matches before "Tank"
+            final sorted = List<TankModel>.from(_allTanks)
+              ..sort((a, b) => b.name.length.compareTo(a.name.length));
+            for (final t in sorted) {
               final nameL = t.name.toLowerCase();
-              if (replyLower.contains(nameL) || msgLower.contains(nameL)) {
+              // Use word-boundary-aware matching to avoid substring false positives
+              final pattern = RegExp('\\b${RegExp.escape(nameL)}\\b');
+              if (pattern.hasMatch(replyLower) || pattern.hasMatch(msgLower)) {
                 if (_selectedTank?.id != t.id) {
                   debugPrint('[Chat] Tank detected: ${_selectedTank?.name} → ${t.name}');
                   setState(() => _selectedTank = t);
@@ -10108,6 +10124,7 @@ class _ChatSheetState extends State<_ChatSheet> {
         } else if (_selectedTank == null && _allTanks.length == 1) {
           setState(() => _selectedTank = _allTanks.first);
         }
+        debugPrint('[Chat] After tank detection: _selectedTank=${_selectedTank?.name ?? "NULL"}');
 
         // Create new tank if AI collected all details
         if (data is Map && data['new_tank'] != null) {
@@ -10566,7 +10583,7 @@ class _ChatSheetState extends State<_ChatSheet> {
                       if (_chatMessages.isNotEmpty)
                         GestureDetector(
                           onTap: () {
-                            _ChatCache.clear(_selectedTank?.id);
+                            _ChatCache.clear(_cacheKey);
                             setState(() => _chatMessages = [
                               _ChatMessage(role: 'assistant', content: 'Hey! I\'m Ariel — ask me anything about your tanks or log an entry.'),
                             ]);
