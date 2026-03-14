@@ -1782,7 +1782,7 @@ def chat_tank(request: Request, req: ChatRequest, user_id: str = Depends(_get_us
         tank_context = (
             f"MULTI-TANK SESSION: The user has multiple tanks:\n{tanks_list}\n"
             f"No specific tank is selected for this conversation.\n"
-            f"IMPORTANT: Before logging any measurement, observation, action, or task, "
+            f"IMPORTANT: Before logging any measurement, observation, action, task, or adding/removing inhabitants or plants, "
             f"you MUST ask which tank it applies to if it is not already clear from context. "
             f"If the user refers to a tank indirectly (e.g. 'the one I just created', 'my big tank', 'the reef'), "
             f"use the tank details above (size, type, creation date) to resolve which tank they mean. "
@@ -2351,6 +2351,8 @@ def chat_tank(request: Request, req: ChatRequest, user_id: str = Depends(_get_us
             "they're in your plant", "they are in your plant",
             "added all", "added these", "added everything",
             "to your plant list", "in your plant list",
+            "added to your tank", "added it to your tank",
+            "added them to your tank",
         ])
 
         user_explicit_plant_add = bool(re.search(
@@ -2374,11 +2376,16 @@ def chat_tank(request: Request, req: ChatRequest, user_id: str = Depends(_get_us
             req.message, re.IGNORECASE,
         ))
 
+        # Also trigger plant extraction when inhabitant extraction ran but found nothing
+        # (the user likely mentioned a plant that the inhabitant extractor correctly excluded)
+        inhab_ran_empty = should_extract and (new_inhabitant is None or not new_inhabitant.get("inhabitants"))
+
         should_extract_plants = not user_removing_plants and (
             (_is_affirmation(req.message) and history_has_plant_offer)
             or reply_confirms_plant_added
             or user_explicit_plant_add
             or (reply_terse_confirm and history_has_plant_offer)
+            or inhab_ran_empty
         )
         print(f"[PlantExtract] triggers: affirm={_is_affirmation(req.message)}, history_offer={history_has_plant_offer}, reply_confirms={reply_confirms_plant_added}, reply_terse={reply_terse_confirm}, user_explicit={user_explicit_plant_add} → should_extract={should_extract_plants}")
 

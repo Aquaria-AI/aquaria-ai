@@ -881,6 +881,9 @@ class TankStore {
     String? type,
     int count = 1,
   }) async {
+    // Skip if already exists (case-insensitive)
+    final existing = await _db.inhabitantsForTank(tankId);
+    if (existing.any((i) => i.name.toLowerCase() == name.toLowerCase())) return;
     await _db.insertInhabitant(
       db.InhabitantsCompanion.insert(
         tankId: tankId,
@@ -903,10 +906,33 @@ class TankStore {
     return _db.inhabitantsForTank(tankId);
   }
 
+  Future<void> removeInhabitant({
+    required String tankId,
+    required String name,
+  }) async {
+    // Case-insensitive: find actual name in DB then delete
+    final all = await _db.inhabitantsForTank(tankId);
+    for (final i in all) {
+      if (i.name.toLowerCase() == name.toLowerCase()) {
+        await _db.deleteInhabitantByName(tankId, i.name);
+      }
+    }
+    _cloudSync(() async {
+      final all = await _db.inhabitantsForTank(tankId);
+      await SupabaseService.replaceInhabitants(
+        tankId,
+        all.map((i) => {'name': i.name, 'count': i.count, 'type': i.type}).toList(),
+      );
+    });
+  }
+
   Future<void> addPlant({
     required String tankId,
     required String name,
   }) async {
+    // Skip if already exists (case-insensitive)
+    final existing = await _db.plantsForTank(tankId);
+    if (existing.any((p) => p.name.toLowerCase() == name.toLowerCase())) return;
     await _db.insertPlant(
       db.PlantsCompanion.insert(
         tankId: tankId,
@@ -927,7 +953,13 @@ class TankStore {
     required String tankId,
     required String name,
   }) async {
-    await _db.deletePlantByName(tankId, name);
+    // Case-insensitive: find actual name in DB then delete
+    final all = await _db.plantsForTank(tankId);
+    for (final p in all) {
+      if (p.name.toLowerCase() == name.toLowerCase()) {
+        await _db.deletePlantByName(tankId, p.name);
+      }
+    }
     _cloudSync(() async {
       final all = await _db.plantsForTank(tankId);
       await SupabaseService.replacePlants(

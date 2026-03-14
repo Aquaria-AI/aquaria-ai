@@ -141,7 +141,7 @@ class AppDb extends _$AppDb {
   AppDb() : super(_openConnection());
 
   @override
-  int get schemaVersion => 20;
+  int get schemaVersion => 21;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -245,6 +245,26 @@ class AppDb extends _$AppDb {
               'PRIMARY KEY(tank_id, kind))',
             );
           }
+          if (from <= 20) {
+            // Dedup existing inhabitants: keep lowest id per (tank_id, name)
+            await customStatement(
+              'DELETE FROM inhabitants WHERE id NOT IN '
+              '(SELECT MIN(id) FROM inhabitants GROUP BY tank_id, LOWER(name))',
+            );
+            await customStatement(
+              'CREATE UNIQUE INDEX IF NOT EXISTS idx_inhabitants_tank_name '
+              'ON inhabitants(tank_id, name COLLATE NOCASE)',
+            );
+            // Dedup existing plants: keep lowest id per (tank_id, name)
+            await customStatement(
+              'DELETE FROM plants WHERE id NOT IN '
+              '(SELECT MIN(id) FROM plants GROUP BY tank_id, LOWER(name))',
+            );
+            await customStatement(
+              'CREATE UNIQUE INDEX IF NOT EXISTS idx_plants_tank_name '
+              'ON plants(tank_id, name COLLATE NOCASE)',
+            );
+          }
         },
       );
 
@@ -306,13 +326,18 @@ class AppDb extends _$AppDb {
     await transaction(() async {
       await (delete(inhabitants)..where((r) => r.tankId.equals(tankId))).go();
       if (rows.isNotEmpty) {
-        await batch((b) => b.insertAll(inhabitants, rows));
+        await batch((b) => b.insertAll(inhabitants, rows, mode: InsertMode.insertOrIgnore));
       }
     });
   }
 
   Future<void> insertInhabitant(InhabitantsCompanion entry) =>
-      into(inhabitants).insert(entry);
+      into(inhabitants).insert(entry, mode: InsertMode.insertOrIgnore);
+
+  Future<int> deleteInhabitantByName(String tankId, String name) {
+    return (delete(inhabitants)..where((r) =>
+        r.tankId.equals(tankId) & r.name.equals(name))).go();
+  }
 
   // ---------- Plants ----------
   Future<List<Plant>> plantsForTank(String tankId) {
@@ -320,7 +345,7 @@ class AppDb extends _$AppDb {
   }
 
   Future<void> insertPlant(PlantsCompanion entry) =>
-      into(plants).insert(entry);
+      into(plants).insert(entry, mode: InsertMode.insertOrIgnore);
 
   Future<int> deletePlantByName(String tankId, String name) {
     return (delete(plants)..where((r) =>
@@ -340,7 +365,7 @@ class AppDb extends _$AppDb {
     await transaction(() async {
       await (delete(plants)..where((r) => r.tankId.equals(tankId))).go();
       if (rows.isNotEmpty) {
-        await batch((b) => b.insertAll(plants, rows));
+        await batch((b) => b.insertAll(plants, rows, mode: InsertMode.insertOrIgnore));
       }
     });
   }

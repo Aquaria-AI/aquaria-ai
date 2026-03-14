@@ -1578,9 +1578,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       _pendingCsvMapping = mapping;
                       _pendingCsvDateCol = dateCol;
                     },
-                    onInhabitantsAdded: (added) => setState(() => _inhabitants = [..._inhabitants, ...added]),
-                    onInhabitantsRemoved: (names) => setState(() => _inhabitants = _inhabitants.where((i) => !names.contains(i.name.toLowerCase())).toList()),
-                    onPlantsAdded: (added) => setState(() => _plants = [..._plants, ...added]),
+                    onInhabitantsAdded: (added) { debugPrint('[Onboard] onInhabitantsAdded: ${added.map((a) => a.name).toList()}'); setState(() => _inhabitants = [..._inhabitants, ...added]); },
+                    onInhabitantsRemoved: (names) { debugPrint('[Onboard] onInhabitantsRemoved: $names'); setState(() => _inhabitants = _inhabitants.where((i) => !names.contains(i.name.toLowerCase())).toList()); },
+                    onPlantsAdded: (added) { debugPrint('[Onboard] onPlantsAdded: $added'); setState(() => _plants = [..._plants, ...added]); },
                     tankId: _createdTankId,
                     experience: _experience,
                     isActive: _page == 5,
@@ -4129,23 +4129,27 @@ class _ObWaterQualityPageState extends State<_ObWaterQualityPage>
         // Process new inhabitants from chat response
         if (data is Map && data['new_inhabitant'] != null && widget.onInhabitantsAdded != null) {
           final inhData = data['new_inhabitant'] as Map<String, dynamic>;
+          debugPrint('[Onboard/Chat] new_inhabitant payload: $inhData');
           final inhList = (inhData['inhabitants'] as List?) ?? [];
           final existingNames = widget.inhabitants.map((i) => i.name.toLowerCase()).toSet();
           final added = <({String name, String type, int count})>[];
+          final plantsToAdd = <String>[];
           for (final inh in inhList) {
             if (inh is Map && inh['name'] != null) {
               final name = inh['name'].toString();
-              if (!existingNames.contains(name.toLowerCase())) {
+              final type = inh['type']?.toString() ?? 'fish';
+              if (type == 'plant') {
+                if (!widget.plants.map((p) => p.toLowerCase()).contains(name.toLowerCase())) {
+                  plantsToAdd.add(name);
+                }
+              } else if (!existingNames.contains(name.toLowerCase())) {
                 existingNames.add(name.toLowerCase());
-                added.add((
-                  name: name,
-                  type: inh['type']?.toString() ?? 'fish',
-                  count: (inh['count'] as num?)?.toInt() ?? 1,
-                ));
+                added.add((name: name, type: type, count: (inh['count'] as num?)?.toInt() ?? 1));
               }
             }
           }
           if (added.isNotEmpty) widget.onInhabitantsAdded!(added);
+          if (plantsToAdd.isNotEmpty && widget.onPlantsAdded != null) widget.onPlantsAdded!(plantsToAdd);
         }
         // Process inhabitant removals
         if (data is Map && data['remove_inhabitants'] != null && widget.onInhabitantsRemoved != null) {
@@ -4160,6 +4164,7 @@ class _ObWaterQualityPageState extends State<_ObWaterQualityPage>
           if (names.isNotEmpty) widget.onInhabitantsRemoved!(names);
         }
         // Process new plants
+        debugPrint('[Onboard/Chat] data keys: ${data is Map ? (data as Map).keys.toList() : "not a map"}');
         if (data is Map && data['new_plants'] != null && widget.onPlantsAdded != null) {
           final plantData = data['new_plants'] as Map<String, dynamic>;
           final plantList = (plantData['plants'] as List?) ?? [];
@@ -10136,6 +10141,12 @@ class _ChatSheetState extends State<_ChatSheet> {
           } catch (_) {}
         }
 
+        // Auto-select tank if still null but only one tank exists
+        if (_selectedTank == null && _allTanks.length == 1) {
+          setState(() => _selectedTank = _allTanks.first);
+          await _loadTankData(_allTanks.first);
+        }
+
         // Add new inhabitants if AI offered and user affirmed
         if (data is Map && data['new_inhabitant'] != null && _selectedTank != null) {
           debugPrint('[Chat/InhabAdd] new_inhabitant payload: ${data['new_inhabitant']}');
@@ -10149,11 +10160,16 @@ class _ChatSheetState extends State<_ChatSheet> {
             for (final inh in inhList) {
               if (inh is Map && inh['name'] != null) {
                 final name = inh['name'].toString();
-                if (!existingInhabs.contains(name.toLowerCase())) {
+                final type = inh['type']?.toString() ?? 'fish';
+                // Route plants to addPlant instead of addInhabitant
+                if (type == 'plant') {
+                  await TankStore.instance.addPlant(tankId: _selectedTank!.id, name: name);
+                  added++;
+                } else if (!existingInhabs.contains(name.toLowerCase())) {
                   await TankStore.instance.addInhabitant(
                     tankId: _selectedTank!.id,
                     name: name,
-                    type: inh['type']?.toString(),
+                    type: type,
                     count: (inh['count'] as num?)?.toInt() ?? 1,
                   );
                   existingInhabs.add(name.toLowerCase());
@@ -10225,6 +10241,33 @@ class _ChatSheetState extends State<_ChatSheet> {
               if (mounted) widget.onLogsChanged();
             }
           } catch (_) {}
+        }
+
+        // Remove inhabitants if AI confirmed removal
+        if (data is Map && data['remove_inhabitants'] != null && _selectedTank != null) {
+          try {
+            final remData = data['remove_inhabitants'] as Map<String, dynamic>;
+            final remList = (remData['inhabitants'] as List?) ?? [];
+            int removed = 0;
+            for (final inh in remList) {
+              final name = (inh is Map ? inh['name']?.toString() : inh?.toString()) ?? '';
+              if (name.isNotEmpty) {
+                await TankStore.instance.removeInhabitant(
+                  tankId: _selectedTank!.id,
+                  name: name,
+                );
+                removed++;
+              }
+            }
+            if (removed > 0) {
+              TankStore.instance.invalidateSummary(_selectedTank!.id);
+              await _loadTankData(_selectedTank!);
+              if (mounted) widget.onLogsChanged();
+              debugPrint('[Chat/InhabitantRemove] removed $removed inhabitants');
+            }
+          } catch (e) {
+            debugPrint('[Chat/InhabitantRemove] ERROR: $e');
+          }
         }
 
         // Remove plants if AI confirmed removal
@@ -12208,11 +12251,32 @@ class _InhabitantsScreenState extends State<InhabitantsScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-                  child: Text(
-                    '${widget.tank.name} — Inhabitants',
-                    style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: _cDark),
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          widget.tank.name,
+                          style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: _cDark),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.edit, size: 20, color: _cMid),
+                        onPressed: () async {
+                          await Navigator.of(context).push(MaterialPageRoute(
+                            builder: (_) => EditInhabitantsScreen(
+                              tank: widget.tank,
+                              onSaved: _load,
+                            ),
+                          ));
+                        },
+                      ),
+                    ],
                   ),
+                ),
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+                  child: Text('Inhabitants', style: TextStyle(fontSize: 14, color: Colors.grey, fontWeight: FontWeight.w500)),
                 ),
                 Expanded(
                   child: (_inhabitants.isEmpty && _plants.isEmpty)
