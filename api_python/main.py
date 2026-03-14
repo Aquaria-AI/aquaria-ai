@@ -323,6 +323,7 @@ def _search_knowledge(message: str, water_type: str, species: List[str], max_res
 # -------------------------
 class ParseRequest(BaseModel):
     text: str
+    context: Optional[str] = None  # Recent conversation context for resolving ambiguous references
 
 
 class AdviseRequest(BaseModel):
@@ -751,7 +752,7 @@ def _sentence_case(s: str) -> str:
     return s[0].upper() + s[1:]
 
 
-def _parse_with_llm(text: str, today: str) -> Optional[List[Dict[str, Any]]]:
+def _parse_with_llm(text: str, today: str, context: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
     """Call Claude to parse the log entry. Returns a list of log dicts, or None on failure."""
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
@@ -759,10 +760,13 @@ def _parse_with_llm(text: str, today: str) -> Optional[List[Dict[str, Any]]]:
         return None
     try:
         client = anthropic.Anthropic(api_key=api_key)
+        system = _LOG_SYSTEM_PROMPT + f"\n\nToday's date is {today}."
+        if context:
+            system += f"\n\nRecent conversation context (use this to resolve ambiguous references in the user's message):\n{context}"
         response = _chat(client,
             model="claude-haiku-4-5",
             max_tokens=1024,
-            system=_LOG_SYSTEM_PROMPT + f"\n\nToday's date is {today}.",
+            system=system,
             messages=[{"role": "user", "content": text}],
         )
         raw = response.content[0].text.strip()
@@ -812,7 +816,7 @@ def _parse_with_regex(text: str) -> List[Dict[str, Any]]:
 def parse_tank_log(request: Request, req: ParseRequest, user_id: str = Depends(_get_user_id)):
     text = (req.text or "").strip()
     today = date.today().isoformat()
-    logs = _parse_with_llm(text, today)
+    logs = _parse_with_llm(text, today, context=req.context)
     if logs is None:
         logs = _parse_with_regex(text)
         logs[0]["date"] = _extract_date_regex(text)

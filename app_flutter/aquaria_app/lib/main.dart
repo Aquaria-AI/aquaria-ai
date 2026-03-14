@@ -8976,10 +8976,19 @@ class _ChatSheetState extends State<_ChatSheet> {
       if (tankSnapshot == null) return;
       try {
         debugPrint('[ParseLog] Sending parse request for: "$text"');
+        // Build recent conversation context so the parser can resolve
+        // ambiguous references (e.g. "added to canister filter" → aragonite)
+        final recentContext = _chatMessages
+            .take(6)
+            .map((m) => '${m.role}: ${m.content}')
+            .join('\n');
         final resp = await http
             .post(Uri.parse('$_baseUrl/parse/tank-log'),
                 headers: _apiHeaders(),
-                body: jsonEncode({'text': text}))
+                body: jsonEncode({
+                  'text': text,
+                  if (recentContext.isNotEmpty) 'context': recentContext,
+                }))
             .timeout(const Duration(seconds: 20));
         debugPrint('[ParseLog] Response status=${resp.statusCode}, body=${resp.body}');
         if (resp.statusCode == 200) {
