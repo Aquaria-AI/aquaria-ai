@@ -14780,7 +14780,8 @@ class _EquipmentScreenState extends State<_EquipmentScreen> {
 
 class _FullScreenNetworkImage extends StatefulWidget {
   final String url;
-  const _FullScreenNetworkImage({required this.url});
+  final String? photoStoragePath; // non-null = user's own photo, show share
+  const _FullScreenNetworkImage({required this.url, this.photoStoragePath});
 
   @override
   State<_FullScreenNetworkImage> createState() => _FullScreenNetworkImageState();
@@ -14788,6 +14789,7 @@ class _FullScreenNetworkImage extends StatefulWidget {
 
 class _FullScreenNetworkImageState extends State<_FullScreenNetworkImage> {
   bool _saving = false;
+  bool _sharing = false;
 
   Future<void> _saveToGallery() async {
     setState(() => _saving = true);
@@ -14823,6 +14825,36 @@ class _FullScreenNetworkImageState extends State<_FullScreenNetworkImage> {
         foregroundColor: Colors.white,
         elevation: 0,
         actions: [
+          if (widget.photoStoragePath != null)
+            IconButton(
+              icon: _sharing
+                  ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : const Icon(Icons.share),
+              onPressed: _sharing ? null : () {
+                showModalBottomSheet(
+                  context: context,
+                  shape: const RoundedRectangleBorder(
+                    borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+                  ),
+                  builder: (ctx) => SafeArea(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        ListTile(
+                          leading: const Icon(Icons.discord, color: Color(0xFF5865F2)),
+                          title: const Text('Share to Discord'),
+                          onTap: () {
+                            Navigator.pop(ctx);
+                            _showDiscordShareFlow(context, widget.photoStoragePath!);
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+              tooltip: 'Share',
+            ),
           IconButton(
             icon: _saving
                 ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
@@ -16901,9 +16933,9 @@ class _CommunityScreenState extends State<_CommunityScreen> {
     );
   }
 
-  void _openFullScreenImage(String url) {
+  void _openFullScreenImage(String url, {String? photoStoragePath}) {
     Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => _FullScreenNetworkImage(url: url),
+      builder: (_) => _FullScreenNetworkImage(url: url, photoStoragePath: photoStoragePath),
     ));
   }
 
@@ -17094,7 +17126,10 @@ class _CommunityScreenState extends State<_CommunityScreen> {
                             ],
                             // Photo
                             GestureDetector(
-                              onTap: () => _openFullScreenImage(post['_signed_url'] as String),
+                              onTap: () => _openFullScreenImage(
+                                post['_signed_url'] as String,
+                                photoStoragePath: isAuthor ? (post['photo_url'] as String?) : null,
+                              ),
                               child: Image.network(
                                 post['_signed_url'] as String,
                                 width: double.infinity,
