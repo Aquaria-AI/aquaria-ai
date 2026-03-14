@@ -1782,29 +1782,34 @@ def chat_tank(request: Request, req: ChatRequest, user_id: str = Depends(_get_us
     if no_tank_context and len(available_tanks) > 1:
         # Build a numbered list so Ariel can present it and user can reply by number
         numbered_lines = []
+        number_mapping = []  # explicit "1 = Tank Name" mapping
         for i, t in enumerate(available_tanks, 1):
             if isinstance(t, dict):
                 name = t.get("name", "Unknown")
                 gal = t.get("gallons", "?")
                 wt = (t.get("water_type", "") or "").capitalize()
-                numbered_lines.append(f"  {i}. {name} — {gal}g {wt}")
+                numbered_lines.append(f"{i}. {name} — {gal}g {wt}")
+                number_mapping.append(f"{i} = \"{name}\" ({gal}g {wt})")
             else:
-                numbered_lines.append(f"  {i}. {t}")
+                numbered_lines.append(f"{i}. {t}")
+                number_mapping.append(f"{i} = \"{t}\"")
         numbered_list = "\n".join(numbered_lines)
-        tanks_list = "\n".join(f"  - {_fmt_tank(t)}" for t in available_tanks)
+        mapping_text = ", ".join(number_mapping)
         tank_context = (
-            f"MULTI-TANK SESSION: The user has multiple tanks:\n{tanks_list}\n"
+            f"MULTI-TANK SESSION: The user has multiple tanks.\n"
+            f"Tank list (THIS IS THE AUTHORITATIVE NUMBERING):\n{numbered_list}\n\n"
+            f"Number-to-tank mapping: {mapping_text}\n"
             f"No specific tank is selected for this conversation.\n"
             f"IMPORTANT: Before logging any measurement, observation, action, task, or adding/removing inhabitants or plants, "
             f"you MUST ask which tank it applies to if it is not already clear from context. "
             f"This includes when the user mentions buying, picking up, or acquiring new fish, plants, or livestock "
             f"(e.g. 'I just picked up an amazon sword', 'I bought some neon tetras', 'I got a nerite snail') — "
             f"these are ADD requests. Ask which tank to add them to.\n"
-            f"MANDATORY FORMAT — when asking which tank, you MUST use this EXACT numbered list (copy it verbatim):\n"
-            f"{numbered_list}\n"
-            f"Do NOT use bullet points. Do NOT rephrase or reformat the list. Copy the numbered list above exactly as shown, "
-            f"then ask the user to reply with the number. This is critical when tanks share the same name.\n"
-            f"If the user replies with a number (e.g. '1', '2'), use that to select the tank from the numbered list.\n"
+            f"MANDATORY FORMAT — when asking which tank, you MUST present the numbered list above exactly as shown. "
+            f"Do NOT use bullet points. Do NOT reorder or reformat.\n"
+            f"NUMBER RESOLUTION: If the user replies with a number (e.g. '1', '2', '3'), look up the number in the mapping above. "
+            f"For example if the user says '2', that means {number_mapping[1] if len(number_mapping) > 1 else 'the second tank'}. "
+            f"Always confirm which tank you selected in your reply.\n"
             f"If the user refers to a tank indirectly (e.g. 'the one I just created', 'my big tank', 'the reef'), "
             f"use the tank details above (size, type, creation date) to resolve which tank they mean. "
             f"Once the tank is identified, confirm it in your reply (e.g. 'Got it — adding that to [Tank Name].'). "
