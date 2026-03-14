@@ -1273,7 +1273,7 @@ class OnboardingScreen extends StatefulWidget {
 class _OnboardingScreenState extends State<OnboardingScreen> {
   final _pageCtrl = PageController();
   int _page = 0;
-  int get _totalPages => _experience == 'beginner' ? 7 : 8;
+  int get _totalPages => _experience == 'beginner' ? 6 : 7;
 
   String _experience = '';
   final _tankNameCtrl = TextEditingController(text: 'New Tank');
@@ -1440,6 +1440,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     onGallonsChanged: (v) => setState(() => _gallons = v),
                     onWaterTypeChanged: (v) => setState(() => _waterType = v),
                     onNext: _goNext,
+                    experience: _experience,
+                    equipment: _equipment,
+                    onEquipmentChanged: (eq) => setState(() => _equipment = eq),
                   ),
                   if (_experience != 'beginner')
                     _ObEquipmentPage(
@@ -1470,16 +1473,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     gallons: _gallons,
                     waterType: _waterType,
                     inhabitants: _inhabitants,
-                    onNext: _goNext,
+                    onNext: _finish,
                     onReminderTask: (t) => _pendingTasks.add(t),
                     onCsvPending: (content) => _pendingCsvContent = content,
                     experience: _experience,
-                    isActive: _page == (_experience == 'beginner' ? 5 : 6),
-                  ),
-                  _ObCongratsPage(
-                    experience: _experience,
+                    isActive: _page == (_experience == 'beginner' ? 4 : 5),
                     finishing: _finishing,
-                    onDone: _finish,
                   ),
                 ],
               ),
@@ -2295,9 +2294,15 @@ class _ObTankSetupPage extends StatefulWidget {
   final void Function(double) onGallonsChanged;
   final void Function(WaterType) onWaterTypeChanged;
   final VoidCallback onNext;
+  final String experience;
+  final Map<String, dynamic> equipment;
+  final void Function(Map<String, dynamic>)? onEquipmentChanged;
   const _ObTankSetupPage({
     required this.nameCtrl, required this.gallons, required this.waterType,
     required this.onGallonsChanged, required this.onWaterTypeChanged, required this.onNext,
+    this.experience = '',
+    this.equipment = const {},
+    this.onEquipmentChanged,
   });
 
   @override
@@ -2509,6 +2514,43 @@ class _ObTankSetupPageState extends State<_ObTankSetupPage> {
             ),
           ),
         ),
+        if (widget.experience == 'beginner')
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 0, 24, 4),
+            child: SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () {
+                  showModalBottomSheet<void>(
+                    context: context,
+                    isScrollControlled: true,
+                    backgroundColor: Colors.white,
+                    shape: const RoundedRectangleBorder(
+                      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+                    ),
+                    builder: (_) => SizedBox(
+                      height: MediaQuery.of(context).size.height * 0.85,
+                      child: _ObEquipmentPage(
+                        waterType: widget.waterType,
+                        equipment: widget.equipment,
+                        showSkip: false,
+                        onChanged: (eq) => widget.onEquipmentChanged?.call(eq),
+                        onNext: () => Navigator.of(context).pop(),
+                      ),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.build_outlined, size: 16),
+                label: const Text('Add Equipment', style: TextStyle(fontSize: 13)),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: _cDark,
+                  side: BorderSide(color: _cMid, width: 1.5),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+            ),
+          ),
         _obNextButton(label: 'Continue', onPressed: widget.onNext),
       ],
     );
@@ -3615,7 +3657,7 @@ class _ObInhabitantSummaryPageState extends State<_ObInhabitantSummaryPage> {
                                 child: Container(
                                   margin: const EdgeInsets.only(bottom: 8),
                                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                  constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),
+                                  constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.85),
                                   decoration: BoxDecoration(
                                     color: isUser ? _cDark : Colors.white,
                                     borderRadius: BorderRadius.circular(12),
@@ -3749,6 +3791,7 @@ class _ObWaterQualityPage extends StatefulWidget {
   final void Function(String csvContent)? onCsvPending;
   final String experience;
   final bool isActive;
+  final bool finishing;
 
   const _ObWaterQualityPage({
     required this.tankName,
@@ -3760,6 +3803,7 @@ class _ObWaterQualityPage extends StatefulWidget {
     this.onCsvPending,
     this.experience = 'beginner',
     this.isActive = false,
+    this.finishing = false,
   });
 
   @override
@@ -3776,19 +3820,19 @@ class _ObWaterQualityPageState extends State<_ObWaterQualityPage> {
     (
       role: 'assistant',
       content: widget.experience == 'beginner'
-          ? "Hey! I'm Ariel 🐠\n\n"
-            "✨ Tap the sparkle button whenever you have a question — I'm here to help you learn.\n\n"
-            "🐟 Need help setting up your tank? Tell me what you have and I'll guide you through equipment, cycling, stocking, and more.\n\n"
-            "💧 Ask me about water quality, compatibility, maintenance — anything you're unsure about. I'll walk you through it.\n\n"
-            "🧪 Share your test results and tap water parameters so I can give advice tailored to your tank.\n\n"
-            "🔔 Ask me to schedule regular reminders — I'll help you build good habits from the start.\n\n"
+          ? "Hey! I'm Ariel — your AI aquarium assistant 🐠\n\n"
+            "🛠️ Need help setting up? Tell me what you have and I'll walk you through everything.\n\n"
+            "🧠 I learn your tank — your fish, your water, your gear. The more you share, the smarter I get.\n\n"
+            "📊 Tell me your test results and I'll track trends, spot problems early, and tell you what to do.\n\n"
+            "🔮 Thinking about a change? I can predict how it'll affect your water chemistry.\n\n"
+            "⏰ I'll remind you when it's time to test, do water changes, or dose.\n\n"
             "Give it a try!"
-          : "Hey! I'm Ariel 🐠\n\n"
-            "✨ Tap the sparkle button when you need a hand.\n\n"
-            "🐟 Planning a new build or making changes? Tell me about your setup and I'll help with equipment, stocking, and compatibility.\n\n"
-            "💧 Ask me about maintenance, water quality, test results, compatibility — I can even help estimate the impact changes will have on your aquarium.\n\n"
-            "🧪 Share your test results, tap water parameters, and tank equipment so I can customize my guidance to your specific setup.\n\n"
-            "🔔 Ask me to schedule regular reminders — I'll keep things on track.\n\n"
+          : "Hey! I'm Ariel — your AI aquarium assistant 🐠\n\n"
+            "🛠️ Planning a new build? I can help with equipment, cycling, stocking, and compatibility.\n\n"
+            "🧠 I learn your tank — inhabitants, water history, equipment, tap water. Every detail sharpens my recommendations.\n\n"
+            "📊 Drop your test results and I'll log them, track trends, and flag anything drifting.\n\n"
+            "🔮 Considering a change? I can model the impact on your water chemistry.\n\n"
+            "⏰ Set up automated reminders for testing, water changes, dosing — I'll keep your routine tight.\n\n"
             "Give it a try!",
     ),
   ];
@@ -4044,7 +4088,7 @@ class _ObWaterQualityPageState extends State<_ObWaterQualityPage> {
         // Chat area
         Expanded(
           child: Container(
-            margin: const EdgeInsets.fromLTRB(12, 0, 12, 0),
+            margin: const EdgeInsets.fromLTRB(4, 0, 4, 0),
             decoration: BoxDecoration(
               color: const Color(0xFFF5F9FA),
               borderRadius: BorderRadius.circular(12),
@@ -4059,14 +4103,9 @@ class _ObWaterQualityPageState extends State<_ObWaterQualityPage> {
                 // First item is always Ariel's intro
                 if (i == 0) {
                   final msg = _messages[0];
-                  return Align(
-                    alignment: Alignment.centerLeft,
-                    child: Container(
+                  return Container(
                       margin: const EdgeInsets.only(bottom: 8),
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                      constraints: BoxConstraints(
-                        maxWidth: MediaQuery.of(context).size.width * 0.75,
-                      ),
                       decoration: BoxDecoration(
                         color: Colors.white,
                         borderRadius: BorderRadius.circular(12),
@@ -4076,7 +4115,6 @@ class _ObWaterQualityPageState extends State<_ObWaterQualityPage> {
                         msg.content,
                         style: const TextStyle(fontSize: 13, color: Colors.black87, height: 1.4),
                       ),
-                    ),
                   );
                 }
                 // Import Data button right after intro
@@ -4190,7 +4228,24 @@ class _ObWaterQualityPageState extends State<_ObWaterQualityPage> {
             ),
           ]),
         ),
-        _obNextButton(label: 'Continue', onPressed: widget.onNext),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 4, 24, 4),
+          child: SizedBox(
+            width: double.infinity,
+            child: FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: _cDark,
+                disabledBackgroundColor: _cDark,
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              onPressed: widget.finishing ? null : widget.onNext,
+              child: widget.finishing
+                  ? const SizedBox(height: 22, width: 22, child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white))
+                  : const Text('Start Exploring', style: TextStyle(fontSize: 16)),
+            ),
+          ),
+        ),
         const SizedBox(height: 8),
       ],
     );
@@ -4607,7 +4662,7 @@ class _TankListScreenState extends State<TankListScreen> {
     _refresh().then((_) {
       _refreshReady = true;
       _tryShowDailyPopup();
-      if (widget.showWelcome && mounted) _showWelcomeDialog();
+      // Welcome dialog disabled — user lands directly on home screen
       _checkUserNotifications();
     });
   }
