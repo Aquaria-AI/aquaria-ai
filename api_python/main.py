@@ -3124,26 +3124,49 @@ def _refresh_discord_token(user_id: str) -> str:
 
 
 def _apply_watermark(image_bytes: bytes) -> bytes:
-    """Apply a subtle Aquaria text watermark to the bottom-right of an image."""
+    """Apply an Aquaria text watermark to the bottom-right of an image."""
     img = Image.open(BytesIO(image_bytes)).convert("RGBA")
     from PIL import ImageDraw, ImageFont
     overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
-    # Scale font size to ~2.5% of image width
-    font_size = max(16, int(img.width * 0.025))
-    try:
-        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", font_size)
-    except (OSError, IOError):
-        font = ImageFont.load_default()
+    # Scale font size to ~3.5% of image width for visibility
+    font_size = max(20, int(img.width * 0.035))
+    # Try multiple font paths (different Linux distros / containers)
+    font = None
+    font_paths = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+        "/usr/share/fonts/noto/NotoSans-Bold.ttf",
+    ]
+    for fp in font_paths:
+        try:
+            font = ImageFont.truetype(fp, font_size)
+            print(f"[Watermark] using font: {fp}", flush=True)
+            break
+        except (OSError, IOError):
+            continue
+    if font is None:
+        # Last resort: Pillow's built-in default at a larger size
+        try:
+            font = ImageFont.load_default(size=font_size)
+            print(f"[Watermark] using default font at size {font_size}", flush=True)
+        except TypeError:
+            font = ImageFont.load_default()
+            print("[Watermark] using default bitmap font (may be small)", flush=True)
     text = "aquaria.app"
     bbox = draw.textbbox((0, 0), text, font=font)
     tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    margin = int(img.width * 0.02)
+    margin = int(img.width * 0.025)
     x = img.width - tw - margin
     y = img.height - th - margin
-    # Semi-transparent white text with dark shadow
-    draw.text((x + 1, y + 1), text, fill=(0, 0, 0, 80), font=font)
-    draw.text((x, y), text, fill=(255, 255, 255, 140), font=font)
+    # Dark shadow for contrast on light photos, then white text
+    for dx, dy in [(2, 2), (1, 1), (-1, -1), (0, 2), (2, 0)]:
+        draw.text((x + dx, y + dy), text, fill=(0, 0, 0, 160), font=font)
+    draw.text((x, y), text, fill=(255, 255, 255, 220), font=font)
     result = Image.alpha_composite(img, overlay).convert("RGB")
     buf = BytesIO()
     result.save(buf, format="JPEG", quality=90)
