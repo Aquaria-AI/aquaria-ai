@@ -1675,6 +1675,7 @@ def _history_has_inhabitant_add_offer(history: list) -> tuple[bool, str]:
                 "are you sure", "they can be aggressive", "they are aggressive",
                 "compatible", "compatibility", "still want to add", "still like to add",
                 "go ahead and add", "proceed with adding",
+                "which tank",  # asking which tank implies an upcoming add action
             ]):
                 return True, content
             checked += 1
@@ -1697,6 +1698,7 @@ def _history_has_plant_add_offer(history: list) -> tuple[bool, str]:
                 "don't see", "not in your plant",
                 "would you like me to add", "like me to log",
                 "want me to log", "shall i log",
+                "which tank",  # asking which tank implies an upcoming add action
             ]):
                 return True, content
             checked += 1
@@ -2303,13 +2305,17 @@ def chat_tank(request: Request, req: ChatRequest, user_id: str = Depends(_get_us
             req.message, re.IGNORECASE,
         ))
 
+        # Also check history for removal keywords (multi-turn: user asked to remove, then confirmed tank name)
+        history_text = " ".join(m.get("content", "").lower() for m in (req.history or []))
+        all_text = req.message.lower() + " " + reply_lower + " " + history_text
+
         should_extract_removal = (
             (reply_confirms_removal or user_requests_removal) and any(
-                k in (req.message.lower() + " " + reply_lower) for k in ["remove", "delete", "take out", "get rid", "drop"]
+                k in (req.message.lower() + " " + reply_lower + " " + history_text) for k in ["remove", "delete", "take out", "get rid", "drop"]
             )
         ) or (
             (user_requests_correction or reply_confirms_removal) and any(
-                k in (req.message.lower() + " " + reply_lower) for k in [
+                k in (req.message.lower() + " " + reply_lower + " " + history_text) for k in [
                     "swap", "replace", "instead", "weren't", "weren't", "were not",
                     "wasn't", "wasn't", "was not", "mistake", "meant", "actually",
                     "not ", "wrong", "correction", "changed", "updated",
@@ -2419,22 +2425,44 @@ def chat_tank(request: Request, req: ChatRequest, user_id: str = Depends(_get_us
         # Extract plant removal — triggered when user asks to remove/delete plants
         remove_plants = None
 
+        # Reply confirms removal — no longer requires "plant" keyword in reply
+        # (AI may say "Removed S. Repens from New Tank!" without the word "plant")
         reply_confirms_plant_removed = any(k in reply_lower for k in [
             "removed", "i've removed", "i have removed", "deleted",
             "i've deleted", "i have deleted", "taken out",
             "cleaned up", "deduplicated", "removed the duplicate",
             "removed duplicate",
-        ]) and any(k in reply_lower for k in ["plant", "your plant list", "entry", "entries", "duplicate"])
+        ]) and any(k in (reply_lower + " " + history_text) for k in [
+            "plant", "your plant list", "entry", "entries", "duplicate",
+            # Also match specific plant names being discussed in history
+            "repens", "fern", "moss", "anubias", "sword", "hornwort",
+            "vallisneria", "crypto", "bucephalandra", "rotala", "ludwigia",
+            "cabomba", "monte carlo", "hairgrass", "duckweed", "frogbit",
+            "salvinia", "riccia", "wisteria", "sprite", "pogostemon",
+            "elodea", "lotus", "marimo",
+        ])
 
         user_requests_plant_removal = bool(re.search(
             r"\b(remove|delete|take out|get rid of|drop|clean up)\b.{0,50}\b(plant|plants|duplicate|duplicates|entry|entries)\b",
             req.message, re.IGNORECASE,
         ))
 
+        # Also check history for plant removal keywords (multi-turn: user asked to remove, then confirmed tank name)
+        history_requests_plant_removal = bool(re.search(
+            r"\b(remove|delete|take out|get rid of|drop|clean up)\b",
+            history_text, re.IGNORECASE,
+        )) and any(k in history_text for k in [
+            "plant", "repens", "fern", "moss", "anubias", "sword", "hornwort",
+            "vallisneria", "crypto", "rotala", "ludwigia", "duckweed",
+        ])
+
         should_extract_plant_removal = (
             reply_confirms_plant_removed
             or user_requests_plant_removal
-        ) and plants  # only if there are existing plants
+            or (history_requests_plant_removal and (reply_confirms_plant_removed or
+                any(k in reply_lower for k in ["done", "removed", "deleted", "all set", "taken care"])))
+        )
+        print(f"[PlantRemove] triggers: reply_confirms={reply_confirms_plant_removed}, user_requests={user_requests_plant_removal}, history_requests={history_requests_plant_removal} → should_extract={should_extract_plant_removal}")
 
         if should_extract_plant_removal:
             convo = "\n".join(
@@ -2443,7 +2471,8 @@ def chat_tank(request: Request, req: ChatRequest, user_id: str = Depends(_get_us
                 if m.get("role") in ("user", "assistant")
             )
             convo += f"\nUSER: {req.message}\nASSISTANT: {reply}"
-            convo += f"\n\nCurrent plants in tank: {', '.join(plants)}"
+            if plants:
+                convo += f"\n\nCurrent plants in tank: {', '.join(plants)}"
             try:
                 rem_response = _chat(client,
                     model="claude-haiku-4-5",

@@ -10095,30 +10095,34 @@ class _ChatSheetState extends State<_ChatSheet> {
         _scrollToBottom();
 
         // Detect which tank Ariel identified from the reply or user message.
-        // Only set the tank when the reply CONFIRMS an action (not when asking
-        // "which tank?"). This prevents premature selection before user answers.
+        // Always check the user's message for a tank name (they may have typed
+        // the tank name to answer "which tank?"). Only check the reply when it
+        // is NOT purely a question — this prevents premature selection from
+        // "which tank?" replies while still detecting from confirming replies
+        // like "Added Amazon Sword to New Tank! Anything else?"
         if (_allTanks.length > 1) {
           final replyLower = reply.toLowerCase();
-          final isQuestion = reply.trimRight().endsWith('?');
-          // Only auto-detect tank from a confirming reply, or from the user's
-          // message when the user explicitly names a tank.
-          if (!isQuestion) {
-            final msgLower = text.toLowerCase();
-            // Sort by name length descending so "New Tank" matches before "Tank"
-            final sorted = List<TankModel>.from(_allTanks)
-              ..sort((a, b) => b.name.length.compareTo(a.name.length));
-            for (final t in sorted) {
-              final nameL = t.name.toLowerCase();
-              // Use word-boundary-aware matching to avoid substring false positives
-              final pattern = RegExp('\\b${RegExp.escape(nameL)}\\b');
-              if (pattern.hasMatch(replyLower) || pattern.hasMatch(msgLower)) {
-                if (_selectedTank?.id != t.id) {
-                  debugPrint('[Chat] Tank detected: ${_selectedTank?.name} → ${t.name}');
-                  setState(() => _selectedTank = t);
-                  await _loadTankData(t);
-                }
-                break;
+          final msgLower = text.toLowerCase();
+          // A reply is "purely a question" only if it ends with ? AND does not
+          // contain action-confirming words (e.g. "added", "removed", "done").
+          final endsWithQ = reply.trimRight().endsWith('?');
+          final hasConfirm = RegExp(r'\b(added|removed|deleted|done|all set|created|updated|logged|taken care)\b')
+              .hasMatch(replyLower);
+          final checkReply = !endsWithQ || hasConfirm;
+          // Sort by name length descending so "New Tank" matches before "Tank"
+          final sorted = List<TankModel>.from(_allTanks)
+            ..sort((a, b) => b.name.length.compareTo(a.name.length));
+          for (final t in sorted) {
+            final nameL = t.name.toLowerCase();
+            // Use word-boundary-aware matching to avoid substring false positives
+            final pattern = RegExp('\\b${RegExp.escape(nameL)}\\b');
+            if ((checkReply && pattern.hasMatch(replyLower)) || pattern.hasMatch(msgLower)) {
+              if (_selectedTank?.id != t.id) {
+                debugPrint('[Chat] Tank detected: ${_selectedTank?.name} → ${t.name}');
+                setState(() => _selectedTank = t);
+                await _loadTankData(t);
               }
+              break;
             }
           }
         } else if (_selectedTank == null && _allTanks.length == 1) {
