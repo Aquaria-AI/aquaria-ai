@@ -1273,6 +1273,7 @@ class OnboardingScreen extends StatefulWidget {
 class _OnboardingScreenState extends State<OnboardingScreen> {
   final _pageCtrl = PageController();
   int _page = 0;
+  int _maxPage = 0; // highest page reached — prevents swiping forward past this
   int get _totalPages => 6;
 
   String _experience = '';
@@ -1285,6 +1286,29 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   bool _finishing = false;
   final List<Map<String, dynamic>> _pendingTasks = [];
   String? _pendingCsvContent;
+  String? _createdTankId;
+
+  /// Create (or update) the tank in the DB so Meet Ariel can operate on a real tank.
+  Future<void> _ensureTankCreated() async {
+    final name = _tankNameCtrl.text.trim().isEmpty ? 'New Tank' : _tankNameCtrl.text.trim();
+    final tank = TankModel(
+      id: _createdTankId,
+      name: name,
+      gallons: _gallons.round(),
+      waterType: _waterType,
+    );
+    await TankStore.instance.saveParsedDetails(
+      tank: tank,
+      inhabitants: _inhabitants
+          .map((i) => {'name': i.name, 'type': i.type, 'count': i.count})
+          .toList(),
+      plants: _plants,
+    );
+    if (_equipment.isNotEmpty) {
+      await TankStore.instance.saveEquipment(tank.id, jsonEncode(_equipment));
+    }
+    _createdTankId = tank.id;
+  }
 
   @override
   void dispose() {
@@ -1360,6 +1384,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   void _goNext() {
     if (_page < _totalPages - 1) {
+      // Create/update the tank in DB before entering Meet Ariel (page 5)
+      // so the chat can operate on a real tank.
+      if (_page == 4) _ensureTankCreated();
+      final next = _page + 1;
+      if (next > _maxPage) _maxPage = next;
       _pageCtrl.nextPage(
         duration: const Duration(milliseconds: 350),
         curve: Curves.easeInOut,
@@ -1370,24 +1399,14 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   Future<void> _finish() async {
     setState(() => _finishing = true);
     try {
-      final name = _tankNameCtrl.text.trim().isEmpty ? 'New Tank' : _tankNameCtrl.text.trim();
-      final tank = TankModel(name: name, gallons: _gallons.round(), waterType: _waterType);
-      await TankStore.instance.saveParsedDetails(
-        tank: tank,
-        inhabitants: _inhabitants
-            .map((i) => {'name': i.name, 'type': i.type, 'count': i.count})
-            .toList(),
-        plants: _plants,
-      );
-      // Save equipment if configured
-      if (_equipment.isNotEmpty) {
-        await TankStore.instance.saveEquipment(tank.id, jsonEncode(_equipment));
-      }
+      // Final save — updates the tank already created before Meet Ariel
+      await _ensureTankCreated();
+      final tankId = _createdTankId!;
       // Save any reminder tasks collected during the water quality chat
       if (_pendingTasks.isNotEmpty) {
         for (final task in _pendingTasks) {
           await TankStore.instance.addTask(
-            tankId: tank.id,
+            tankId: tankId,
             description: (task['description'] ?? '').toString(),
             dueDate: (task['due_date'] ?? task['due'])?.toString(),
             priority: (task['priority'] ?? 'normal').toString(),
@@ -1397,7 +1416,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       }
       // Import pending CSV data
       if (_pendingCsvContent != null) {
-        await _importCsvForTank(tank.id, _pendingCsvContent!);
+        await _importCsvForTank(tankId, _pendingCsvContent!);
       }
       await _markOnboardingDone();
       await _saveExperienceLevel(_experience);
@@ -1422,7 +1441,16 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             child: PageView(
               controller: _pageCtrl,
               physics: const PageScrollPhysics(),
-              onPageChanged: (p) => setState(() => _page = p),
+              onPageChanged: (p) {
+                if (p > _maxPage) {
+                  // User swiped forward past allowed page — snap back
+                  _pageCtrl.animateToPage(_maxPage,
+                      duration: const Duration(milliseconds: 200),
+                      curve: Curves.easeOut);
+                } else {
+                  setState(() => _page = p);
+                }
+              },
               children: [
                 _ObExperiencePage(
                     selected: _experience,
@@ -1457,20 +1485,22 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     inhabitants: _inhabitants,
                     plants: _plants,
                     waterType: _waterType,
-                    tankName: _tankNameCtrl.text,
-                    gallons: _gallons,
                     onNext: _goNext,
-                    onInhabitantsAdded: (added) => setState(() => _inhabitants = [..._inhabitants, ...added]),
-                    onInhabitantsRemoved: (names) => setState(() => _inhabitants = _inhabitants.where((i) => !names.contains(i.name.toLowerCase())).toList()),
                   ),
                   _ObWaterQualityPage(
                     tankName: _tankNameCtrl.text,
                     gallons: _gallons,
                     waterType: _waterType,
                     inhabitants: _inhabitants,
+                    plants: _plants,
+                    equipment: _equipment,
                     onNext: _finish,
                     onReminderTask: (t) => _pendingTasks.add(t),
                     onCsvPending: (content) => _pendingCsvContent = content,
+                    onInhabitantsAdded: (added) => setState(() => _inhabitants = [..._inhabitants, ...added]),
+                    onInhabitantsRemoved: (names) => setState(() => _inhabitants = _inhabitants.where((i) => !names.contains(i.name.toLowerCase())).toList()),
+                    onPlantsAdded: (added) => setState(() => _plants = [..._plants, ...added]),
+                    tankId: _createdTankId,
                     experience: _experience,
                     isActive: _page == 5,
                     finishing: _finishing,
@@ -1504,6 +1534,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 }
 
 // ─── Onboarding page widgets ─────────────────────────────────────────────────
+
 
 class _ObLogoBar extends StatelessWidget {
   const _ObLogoBar();
@@ -3359,31 +3390,18 @@ String _speciesDescription(String name, String type) {
 }
 
 // Page 5 — Inhabitant Summary
-class _ObInhabitantSummaryPage extends StatefulWidget {
+class _ObInhabitantSummaryPage extends StatelessWidget {
   final List<({String name, String type, int count})> inhabitants;
   final WaterType waterType;
-  final String tankName;
-  final double gallons;
   final VoidCallback onNext;
   final List<String> plants;
-  final void Function(List<({String name, String type, int count})> added)? onInhabitantsAdded;
-  final void Function(List<String> names)? onInhabitantsRemoved;
   const _ObInhabitantSummaryPage({
     required this.inhabitants,
     this.plants = const [],
     this.waterType = WaterType.freshwater,
-    this.tankName = '',
-    this.gallons = 0,
     required this.onNext,
-    this.onInhabitantsAdded,
-    this.onInhabitantsRemoved,
   });
 
-  @override
-  State<_ObInhabitantSummaryPage> createState() => _ObInhabitantSummaryPageState();
-}
-
-class _ObInhabitantSummaryPageState extends State<_ObInhabitantSummaryPage> {
   static String _emoji(String type) {
     switch (type) {
       case 'invertebrate': return '🦐';
@@ -3392,130 +3410,6 @@ class _ObInhabitantSummaryPageState extends State<_ObInhabitantSummaryPage> {
       case 'anemone':      return '🌺';
       default:             return '🐟';
     }
-  }
-
-  final _textCtrl = TextEditingController();
-  final _scrollCtrl = ScrollController();
-  final List<({String role, String content})> _messages = [];
-  bool _sending = false;
-  bool _chatExpanded = false;
-
-  Future<void> _send() async {
-    final text = _textCtrl.text.trim();
-    if (text.isEmpty || _sending) return;
-    _textCtrl.clear();
-    setState(() {
-      if (!_chatExpanded) _chatExpanded = true;
-      _messages.add((role: 'user', content: text));
-      _sending = true;
-    });
-    _scrollToBottom();
-
-    try {
-      final history = _messages.take(_messages.length - 1)
-          .map((m) => {'role': m.role, 'content': m.content})
-          .toList();
-      final inhDesc = widget.inhabitants.isEmpty
-          ? 'No inhabitants added yet.'
-          : widget.inhabitants.map((i) => '${i.count > 1 ? "${i.count}x " : ""}${i.name} (${i.type})').join(', ');
-      final tank = {
-        'name': widget.tankName.isNotEmpty ? widget.tankName : 'my tank',
-        'gallons': widget.gallons,
-        'water_type': widget.waterType.label,
-        'inhabitants': widget.inhabitants
-            .map((i) => '${i.count > 1 ? "${i.count}x " : ""}${i.name}')
-            .toList(),
-      };
-      final resp = await http
-          .post(
-            Uri.parse('$_kBaseUrl/chat/tank'),
-            headers: _apiHeaders(),
-            body: jsonEncode({
-              'tank': tank,
-              'available_tanks': <String>[],
-              'message': text,
-              'history': history,
-              'recent_logs': <Map>[],
-              'system_context':
-                  'ONBOARDING CONTEXT — Meet Your Crew page. This chat is specifically for adding or removing inhabitants. '
-                  'When the user mentions an inhabitant name, ADD IT IMMEDIATELY — do NOT ask "would you like me to add it?" Just confirm: "Added [name]!" '
-                  'CURRENT INHABITANTS LIST (this is the source of truth): $inhDesc. '
-                  'Use this list to answer any questions about what is currently in the tank. '
-                  'Keep replies short and friendly.',
-            }),
-          )
-          .timeout(const Duration(seconds: 30));
-      if (resp.statusCode == 200 && mounted) {
-        final data = jsonDecode(resp.body);
-        final reply = (data is Map
-                ? data['response'] ?? data['message'] ?? data.toString()
-                : resp.body)
-            as String;
-        setState(() => _messages.add((role: 'assistant', content: reply)));
-        _scrollToBottom();
-        // Process new inhabitants from chat response (deduplicate against existing)
-        if (data is Map && data['new_inhabitant'] != null && widget.onInhabitantsAdded != null) {
-          final inhData = data['new_inhabitant'] as Map<String, dynamic>;
-          final inhList = (inhData['inhabitants'] as List?) ?? [];
-          final existingNames = widget.inhabitants.map((i) => i.name.toLowerCase()).toSet();
-          final added = <({String name, String type, int count})>[];
-          for (final inh in inhList) {
-            if (inh is Map && inh['name'] != null) {
-              final name = inh['name'].toString();
-              if (!existingNames.contains(name.toLowerCase())) {
-                existingNames.add(name.toLowerCase());
-                added.add((
-                  name: name,
-                  type: inh['type']?.toString() ?? 'fish',
-                  count: (inh['count'] as num?)?.toInt() ?? 1,
-                ));
-              }
-            }
-          }
-          if (added.isNotEmpty) widget.onInhabitantsAdded!(added);
-        }
-        // Process inhabitant removals
-        if (data is Map && data['remove_inhabitants'] != null && widget.onInhabitantsRemoved != null) {
-          final remData = data['remove_inhabitants'] as Map<String, dynamic>;
-          final remList = (remData['inhabitants'] as List?) ?? [];
-          final names = <String>[];
-          for (final inh in remList) {
-            if (inh is Map && inh['name'] != null) {
-              names.add(inh['name'].toString().toLowerCase());
-            }
-          }
-          if (names.isNotEmpty) widget.onInhabitantsRemoved!(names);
-        }
-      }
-    } catch (_) {
-      if (mounted) {
-        setState(() => _messages.add((
-          role: 'assistant',
-          content: "Sorry, I couldn't reach the server right now. You can add them from the home screen later!",
-        )));
-      }
-    } finally {
-      if (mounted) setState(() => _sending = false);
-    }
-  }
-
-  void _scrollToBottom() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollCtrl.hasClients) {
-        _scrollCtrl.animateTo(
-          _scrollCtrl.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOut,
-        );
-      }
-    });
-  }
-
-  @override
-  void dispose() {
-    _textCtrl.dispose();
-    _scrollCtrl.dispose();
-    super.dispose();
   }
 
   @override
@@ -3531,7 +3425,7 @@ class _ObInhabitantSummaryPageState extends State<_ObInhabitantSummaryPage> {
           ),
         ),
         Expanded(
-          child: widget.inhabitants.isEmpty && !_chatExpanded
+          child: inhabitants.isEmpty
               ? Center(
                   child: Padding(
                     padding: const EdgeInsets.all(32),
@@ -3542,279 +3436,111 @@ class _ObInhabitantSummaryPageState extends State<_ObInhabitantSummaryPage> {
                         SizedBox(height: 16),
                         Text('No inhabitants added yet.', style: TextStyle(fontSize: 16, color: Colors.grey)),
                         SizedBox(height: 6),
-                        Text('Chat them to us below or add them later.', style: TextStyle(fontSize: 13, color: Colors.grey), textAlign: TextAlign.center),
+                        Text('You can add them from the home screen later.', style: TextStyle(fontSize: 13, color: Colors.grey), textAlign: TextAlign.center),
                       ],
                     ),
                   ),
                 )
-              : Column(
+              : ListView(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
                   children: [
-                    // Inhabitants list (shrinks when chat expands)
-                    if (!_chatExpanded && widget.inhabitants.isNotEmpty)
-                      Expanded(
-                        child: ListView.separated(
-                          padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
-                          itemCount: widget.inhabitants.length,
-                          separatorBuilder: (_, __) => const SizedBox(height: 10),
-                          itemBuilder: (_, i) {
-                            final inh = widget.inhabitants[i];
-                            return Container(
-                              padding: const EdgeInsets.all(14),
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                border: Border.all(color: Colors.grey.shade200),
-                                borderRadius: BorderRadius.circular(12),
-                                boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 6, offset: const Offset(0, 2))],
-                              ),
-                              child: Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Container(
-                                    width: 42, height: 42,
-                                    decoration: BoxDecoration(color: _cMint, borderRadius: BorderRadius.circular(10)),
-                                    alignment: Alignment.center,
-                                    child: Text(_emoji(inh.type), style: const TextStyle(fontSize: 22)),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          inh.count > 1 ? '${inh.count}× ${_titleCase(inh.name)}' : _titleCase(inh.name),
-                                          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
-                                        ),
-                                        const SizedBox(height: 4),
-                                        Text(
-                                          _speciesDescription(inh.name, inh.type),
-                                          style: const TextStyle(fontSize: 13, color: Colors.black54, height: 1.4),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            );
-                          },
-                        ),
+                    ...inhabitants.map((inh) => Container(
+                      margin: const EdgeInsets.only(bottom: 10),
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        border: Border.all(color: Colors.grey.shade200),
+                        borderRadius: BorderRadius.circular(12),
+                        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 6, offset: const Offset(0, 2))],
                       ),
-                    // Chat area (expands when user starts chatting, swipe down to collapse)
-                    if (_chatExpanded)
-                      Expanded(
-                        child: GestureDetector(
-                          onVerticalDragEnd: (details) {
-                            if (details.primaryVelocity != null && details.primaryVelocity! > 200) {
-                              setState(() => _chatExpanded = false);
-                            }
-                          },
-                          child: Container(
-                          margin: const EdgeInsets.fromLTRB(12, 0, 12, 0),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFF5F9FA),
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: Colors.grey.shade200),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Container(
+                            width: 42, height: 42,
+                            decoration: BoxDecoration(color: _cMint, borderRadius: BorderRadius.circular(10)),
+                            alignment: Alignment.center,
+                            child: Text(_emoji(inh.type), style: const TextStyle(fontSize: 22)),
                           ),
-                          child: Column(children: [
-                            // Drag handle
-                            GestureDetector(
-                              onTap: () => setState(() => _chatExpanded = false),
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(vertical: 8),
-                                child: Container(
-                                  width: 36, height: 4,
-                                  decoration: BoxDecoration(
-                                    color: Colors.grey.shade300,
-                                    borderRadius: BorderRadius.circular(2),
-                                  ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  inh.count > 1 ? '${inh.count}× ${_titleCase(inh.name)}' : _titleCase(inh.name),
+                                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
                                 ),
-                              ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  _speciesDescription(inh.name, inh.type),
+                                  style: const TextStyle(fontSize: 13, color: Colors.black54, height: 1.4),
+                                ),
+                              ],
                             ),
-                            Expanded(child: ListView.builder(
-                            controller: _scrollCtrl,
-                            padding: const EdgeInsets.all(12),
-                            itemCount: _messages.length + (_sending ? 1 : 0),
-                            itemBuilder: (context, i) {
-                              if (_sending && i == _messages.length) {
-                                return Align(
-                                  alignment: Alignment.centerLeft,
-                                  child: Container(
-                                    margin: const EdgeInsets.only(bottom: 8),
-                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white,
-                                      borderRadius: BorderRadius.circular(12),
-                                      border: Border.all(color: Colors.grey.shade200),
-                                    ),
-                                    child: const SizedBox(
-                                      width: 16, height: 16,
-                                      child: CircularProgressIndicator(strokeWidth: 2),
-                                    ),
-                                  ),
-                                );
-                              }
-                              final msg = _messages[i];
-                              final isUser = msg.role == 'user';
-                              return Align(
-                                alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
-                                child: Container(
-                                  margin: const EdgeInsets.only(bottom: 8),
-                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                  constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.85),
-                                  decoration: BoxDecoration(
-                                    color: isUser ? _cDark : Colors.white,
-                                    borderRadius: BorderRadius.circular(12),
-                                    border: isUser ? null : Border.all(color: Colors.grey.shade200),
-                                  ),
-                                  child: Text(
-                                    msg.content,
-                                    style: TextStyle(
-                                      fontSize: 13,
-                                      color: isUser ? Colors.white : Colors.black87,
-                                      height: 1.4,
-                                    ),
-                                  ),
-                                ),
-                              );
-                            },
-                          )),
-                          ]),
-                        ),
+                          ),
+                        ],
+                      ),
+                    )),
+                    // Compatibility warnings
+                    ..._compatibilityWarnings(inhabitants, waterType).map((w) => Container(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: w.icon == '🚨' ? const Color(0xFFFFEBEE) : const Color(0xFFFFF8E1),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: w.icon == '🚨' ? Colors.red.shade200 : Colors.orange.shade200,
                         ),
                       ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(w.icon, style: const TextStyle(fontSize: 16)),
+                          const SizedBox(width: 8),
+                          Expanded(child: Text(w.message,
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: w.icon == '🚨' ? Colors.red.shade800 : Colors.orange.shade900,
+                                height: 1.4,
+                              ))),
+                        ],
+                      ),
+                    )),
+                    // Plants section
+                    if (plants.isNotEmpty) ...[
+                      const Padding(
+                        padding: EdgeInsets.only(top: 8, bottom: 8),
+                        child: Text('PLANTS',
+                            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.grey, letterSpacing: 0.8)),
+                      ),
+                      ...plants.map((p) => Container(
+                        margin: const EdgeInsets.only(bottom: 6),
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          border: Border.all(color: Colors.grey.shade200),
+                          borderRadius: BorderRadius.circular(12),
+                          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 6, offset: const Offset(0, 2))],
+                        ),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 36, height: 36,
+                              decoration: BoxDecoration(color: _cMint, borderRadius: BorderRadius.circular(8)),
+                              alignment: Alignment.center,
+                              child: const Text('🌿', style: TextStyle(fontSize: 18)),
+                            ),
+                            const SizedBox(width: 10),
+                            Text(_titleCase(p), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                          ],
+                        ),
+                      )),
+                    ],
                   ],
                 ),
         ),
-        Builder(builder: (context) {
-          if (_chatExpanded) return const SizedBox.shrink();
-          final warnings = _compatibilityWarnings(widget.inhabitants, widget.waterType);
-          if (warnings.isEmpty) return const SizedBox.shrink();
-          return Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Padding(
-                  padding: EdgeInsets.only(bottom: 8),
-                  child: Text('Compatibility Notes',
-                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.black54,
-                          letterSpacing: 0.3)),
-                ),
-                ...warnings.map((w) => Container(
-                  margin: const EdgeInsets.only(bottom: 8),
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: w.icon == '🚨' ? const Color(0xFFFFEBEE) : const Color(0xFFFFF8E1),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(
-                      color: w.icon == '🚨' ? Colors.red.shade200 : Colors.orange.shade200,
-                    ),
-                  ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(w.icon, style: const TextStyle(fontSize: 16)),
-                      const SizedBox(width: 8),
-                      Expanded(child: Text(w.message,
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: w.icon == '🚨' ? Colors.red.shade800 : Colors.orange.shade900,
-                            height: 1.4,
-                          ))),
-                    ],
-                  ),
-                )),
-              ],
-            ),
-          );
-        }),
-        // Plants section
-        Builder(builder: (context) {
-          if (_chatExpanded || widget.plants.isEmpty) return const SizedBox.shrink();
-          return Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Padding(
-                  padding: EdgeInsets.only(bottom: 8),
-                  child: Text('PLANTS',
-                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.grey, letterSpacing: 0.8)),
-                ),
-                ...widget.plants.map((p) => Container(
-                  margin: const EdgeInsets.only(bottom: 6),
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    border: Border.all(color: Colors.grey.shade200),
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 6, offset: const Offset(0, 2))],
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 36, height: 36,
-                        decoration: BoxDecoration(color: _cMint, borderRadius: BorderRadius.circular(8)),
-                        alignment: Alignment.center,
-                        child: const Text('🌿', style: TextStyle(fontSize: 18)),
-                      ),
-                      const SizedBox(width: 10),
-                      Text(_titleCase(p), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                    ],
-                  ),
-                )),
-              ],
-            ),
-          );
-        }),
-        // Chat input row
-        Padding(
-          padding: const EdgeInsets.fromLTRB(24, 0, 12, 4),
-          child: Row(children: [
-            Expanded(
-              child: TextField(
-                controller: _textCtrl,
-                textInputAction: TextInputAction.send,
-                onSubmitted: (_) => _send(),
-                onTap: () {
-                  if (!_chatExpanded) setState(() => _chatExpanded = true);
-                },
-                decoration: InputDecoration(
-                  hintText: 'Forget anyone, tell us!',
-                  hintStyle: TextStyle(color: Colors.grey.shade400, fontSize: 13),
-                  prefixIcon: Padding(
-                    padding: const EdgeInsets.only(left: 12, right: 4),
-                    child: Icon(Icons.auto_awesome, size: 16, color: Colors.grey.shade400),
-                  ),
-                  prefixIconConstraints: const BoxConstraints(minWidth: 0, minHeight: 0),
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(24),
-                    borderSide: BorderSide(color: _cMid, width: 1.5),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(24),
-                    borderSide: BorderSide(color: _cDark, width: 2),
-                  ),
-                  isDense: true,
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            SizedBox(
-              width: 38, height: 38,
-              child: IconButton.filled(
-                onPressed: _sending ? null : _send,
-                icon: const Icon(Icons.send_rounded, size: 18),
-                style: IconButton.styleFrom(
-                  backgroundColor: _cDark,
-                  foregroundColor: Colors.white,
-                  shape: const CircleBorder(),
-                ),
-              ),
-            ),
-          ]),
-        ),
-        _obNextButton(label: 'Continue', onPressed: widget.onNext),
+        _obNextButton(label: 'Continue', onPressed: onNext),
         const SizedBox(height: 8),
       ],
     );
@@ -3827,9 +3553,15 @@ class _ObWaterQualityPage extends StatefulWidget {
   final double gallons;
   final WaterType waterType;
   final List<({String name, String type, int count})> inhabitants;
+  final List<String> plants;
+  final Map<String, dynamic> equipment;
   final VoidCallback onNext;
   final void Function(Map<String, dynamic> task)? onReminderTask;
   final void Function(String csvContent)? onCsvPending;
+  final void Function(List<({String name, String type, int count})> added)? onInhabitantsAdded;
+  final void Function(List<String> names)? onInhabitantsRemoved;
+  final void Function(List<String> added)? onPlantsAdded;
+  final String? tankId;
   final String experience;
   final bool isActive;
   final bool finishing;
@@ -3839,9 +3571,15 @@ class _ObWaterQualityPage extends StatefulWidget {
     required this.gallons,
     required this.waterType,
     required this.inhabitants,
+    this.plants = const [],
+    this.equipment = const {},
     required this.onNext,
     this.onReminderTask,
     this.onCsvPending,
+    this.onInhabitantsAdded,
+    this.onInhabitantsRemoved,
+    this.onPlantsAdded,
+    this.tankId,
     this.experience = 'beginner',
     this.isActive = false,
     this.finishing = false,
@@ -3851,7 +3589,11 @@ class _ObWaterQualityPage extends StatefulWidget {
   State<_ObWaterQualityPage> createState() => _ObWaterQualityPageState();
 }
 
-class _ObWaterQualityPageState extends State<_ObWaterQualityPage> {
+class _ObWaterQualityPageState extends State<_ObWaterQualityPage>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
   final _textCtrl = TextEditingController();
   final _scrollCtrl = ScrollController();
   bool _sending = false;
@@ -4015,7 +3757,142 @@ class _ObWaterQualityPageState extends State<_ObWaterQualityPage> {
         'inhabitants': widget.inhabitants
             .map((i) => '${i.count > 1 ? "${i.count}x " : ""}${i.name}')
             .toList(),
+        if (widget.plants.isNotEmpty) 'plants': widget.plants,
+        if (widget.equipment.isNotEmpty) 'equipment': widget.equipment,
       };
+
+      // Fire log-parse in parallel with chat (extracts measurements, actions, notes)
+      final now = DateTime.now();
+      final clientDate = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+      final recentContext = _messages
+          .take(6)
+          .map((m) => '${m.role}: ${m.content}')
+          .join('\n');
+      Future<void> parseAndSaveLog() async {
+        if (widget.tankId == null) return;
+        try {
+          final parseResp = await http
+              .post(Uri.parse('$_baseUrl/parse/tank-log'),
+                  headers: _apiHeaders(),
+                  body: jsonEncode({
+                    'text': text,
+                    if (recentContext.isNotEmpty) 'context': recentContext,
+                    'client_date': clientDate,
+                  }))
+              .timeout(const Duration(seconds: 20));
+          if (parseResp.statusCode == 200) {
+            final parsed = jsonDecode(parseResp.body);
+            final logEntries = (parsed is Map && parsed['logs'] is List)
+                ? (parsed['logs'] as List).cast<Map<String, dynamic>>()
+                : <Map<String, dynamic>>[];
+            // Detect tap water mentions
+            final isTapWater = RegExp(
+              r'\btap\s+water\b|\bfrom\s+the\s+tap\b|\bsource\s+water\b|\bfaucet\b|\bmunicipal\s+water\b',
+              caseSensitive: false,
+            ).hasMatch(text);
+            if (isTapWater) {
+              for (final entry in logEntries) {
+                entry['source'] = 'tap_water';
+              }
+            }
+            for (final entry in logEntries) {
+              final hasMeasurements = (entry['measurements'] as Map?)?.isNotEmpty == true;
+              final hasActions = (entry['actions'] as List?)?.isNotEmpty == true;
+              final hasNotes = (entry['notes'] as List?)?.isNotEmpty == true;
+              if (!hasMeasurements && !hasActions && !hasNotes) continue;
+              entry.remove('tasks');
+              final dateStr = entry['date'] as String?;
+              final logDate = (dateStr != null ? DateTime.tryParse(dateStr) : null) ?? now;
+              final journalDate = '${logDate.year}-${logDate.month.toString().padLeft(2, '0')}-${logDate.day.toString().padLeft(2, '0')}';
+              // Save audit log
+              await TankStore.instance.addLog(
+                tankId: widget.tankId!,
+                rawText: logEntries.length == 1 ? text : '',
+                parsedJson: jsonEncode(entry),
+                date: logDate,
+              );
+              // Save measurements
+              if (hasMeasurements) {
+                final existing = await TankStore.instance.journalForDate(widget.tankId!, journalDate);
+                final measEntry = existing.where((e) => e.category == 'measurements').toList();
+                Map<String, dynamic> measurements = {};
+                if (measEntry.isNotEmpty) {
+                  try { measurements = Map<String, dynamic>.from(jsonDecode(measEntry.first.data) as Map); } catch (_) {}
+                }
+                measurements.addAll((entry['measurements'] as Map).cast<String, dynamic>());
+                await TankStore.instance.upsertJournal(
+                  tankId: widget.tankId!, date: journalDate, category: 'measurements', data: jsonEncode(measurements),
+                );
+              }
+              // Save actions
+              if (hasActions) {
+                final existing = await TankStore.instance.journalForDate(widget.tankId!, journalDate);
+                final actEntry = existing.where((e) => e.category == 'actions').toList();
+                List<String> actions = [];
+                if (actEntry.isNotEmpty) {
+                  try { actions = (jsonDecode(actEntry.first.data) as List).cast<String>(); } catch (_) {}
+                }
+                for (final a in (entry['actions'] as List).cast<String>()) {
+                  if (!actions.contains(a)) actions.add(a);
+                }
+                await TankStore.instance.upsertJournal(
+                  tankId: widget.tankId!, date: journalDate, category: 'actions', data: jsonEncode(actions),
+                );
+              }
+              // Save notes
+              if (hasNotes) {
+                final existing = await TankStore.instance.journalForDate(widget.tankId!, journalDate);
+                final noteEntry = existing.where((e) => e.category == 'notes').toList();
+                List<String> notes = [];
+                if (noteEntry.isNotEmpty) {
+                  try { notes = (jsonDecode(noteEntry.first.data) as List).cast<String>(); } catch (_) {}
+                }
+                for (final n in (entry['notes'] as List).cast<String>()) {
+                  if (!notes.contains(n)) notes.add(n);
+                }
+                await TankStore.instance.upsertJournal(
+                  tankId: widget.tankId!, date: journalDate, category: 'notes', data: jsonEncode(notes),
+                );
+              }
+            }
+            // Update tap water profile if tap water was mentioned
+            if (isTapWater) {
+              const logToTapKey = {
+                'pH': 'ph', 'GH': 'gh', 'KH': 'kh', 'ammonia': 'ammonia',
+                'nitrite': 'nitrite', 'nitrate': 'nitrate', 'TDS': 'tds', 'tds': 'tds',
+                'calcium': 'calcium', 'Calcium': 'calcium', 'potassium': 'potassium', 'Potassium': 'potassium',
+              };
+              final tapData = <String, dynamic>{};
+              for (final entry in logEntries) {
+                final measurements = entry['measurements'];
+                if (measurements is Map) {
+                  for (final kv in measurements.entries) {
+                    final tapKey = logToTapKey[kv.key];
+                    if (tapKey != null && kv.value != null) tapData[tapKey] = kv.value;
+                  }
+                }
+              }
+              if (tapData.isNotEmpty) {
+                final jsonStr = jsonEncode(tapData);
+                await TankStore.instance.saveTapWater(widget.tankId!, jsonStr);
+                debugPrint('[Onboard/TapWater] parse-extracted: $tapData');
+              }
+            }
+          }
+        } catch (e) {
+          debugPrint('[Onboard/ParseLog] error: $e');
+        }
+      }
+
+      // Only fire log-parse for messages that likely contain loggable data
+      // (measurements, water changes, dosing, observations) — not conversational chat.
+      final _hasLoggableContent = RegExp(
+        r'\d'                                        // contains a number (measurements)
+        r'|(?:water\s+change|dosed|added .+ salt|added .+ buffer|trimmed|cleaned|fed|replaced|refilled)'  // actions
+        r'|(?:cloudy|murky|algae|died|sick|bloat|ich|fungus|fin rot|stress|lethargic)',                    // observations
+        caseSensitive: false,
+      ).hasMatch(text);
+      final logFuture = _hasLoggableContent ? parseAndSaveLog() : Future<void>.value();
       final resp = await http
           .post(
             Uri.parse('$_baseUrl/chat/tank'),
@@ -4026,30 +3903,56 @@ class _ObWaterQualityPageState extends State<_ObWaterQualityPage> {
               'message': text,
               'history': history,
               'recent_logs': <Map>[],
-              'system_context': widget.experience == 'beginner'
-                  ? 'ONBOARDING CONTEXT — Water Quality page (BEGINNER). Follow this exact conversational flow, one question at a time:\n'
-                    '1. You already asked: "Is your tank already filled with water?"\n'
-                    '2. If the user says NO or not yet: ask ONLY "Would you like suggestions on the best next steps to get started?"\n'
-                    '3. If they want next steps: give a brief numbered list of setup steps (substrate, dechlorinated water, filter, heater, cycle the tank). Then ask if they have a water test kit.\n'
-                    '4. If the user says YES the tank is filled: ask if they have tested the water yet.\n'
-                    '5. If they say they have a test kit OR have already tested: respond with something like "Great! The most important tests to run right now are ammonia, nitrite, nitrate, and pH — these four tell you the most about your tank\'s health. Just add your results in any of the chat windows and I\'ll log them for you."\n'
-                    '6. If the user says they do NOT have a test kit: recommend the API Master Test Kit by name as the best all-in-one option for new tank owners, and explain it covers ammonia, nitrite, nitrate, and pH. Then encourage them to pick one up soon.\n'
-                    '7. When the user shares test results: interpret each value clearly, flag anything concerning, and encourage them to keep logging results regularly in Aquaria so you can track trends.\n'
-                    '8. After covering test kits or sharing results (steps 5–7), ask: "Would you like me to set up a regular reminder to test and log your water parameters? Weekly is a great habit for most tanks." — then wait for the answer.\n'
-                    '9. If they say yes: confirm with something like "Done — I\'ll remind you weekly to test your water. You can always adjust this from the app." Then let them know they are all set.\n'
-                    '10. If they say no: acknowledge and let them know they can set reminders any time in any of the chat windows.\n'
-                    '11. At appropriate moments, reinforce that regular testing and reporting is the best way to catch problems early — and remind them they can share results in any of the chat windows at any time.\n'
+              'system_context': (() {
+                final parts = <String>[];
+                if (widget.tankName.isNotEmpty) parts.add('Tank name: "${widget.tankName}"');
+                if (widget.gallons > 0) parts.add('Size: ${widget.gallons} gallons');
+                parts.add('Water type: ${widget.waterType.label}');
+                if (widget.inhabitants.isNotEmpty) {
+                  final inhStr = widget.inhabitants.map((i) => '${i.count > 1 ? "${i.count}x " : ""}${i.name} (${i.type})').join(', ');
+                  parts.add('Inhabitants: $inhStr');
+                }
+                if (widget.plants.isNotEmpty) parts.add('Plants: ${widget.plants.join(", ")}');
+                if (widget.equipment.isNotEmpty) {
+                  final eqStr = widget.equipment.entries.map((e) => '${e.key}: ${e.value}').join(', ');
+                  parts.add('Equipment: $eqStr');
+                }
+                final tankSummary = parts.isNotEmpty
+                    ? 'TANK DETAILS ALREADY PROVIDED — you KNOW these facts, do NOT ask about them again: ${parts.join(". ")}. '
+                    : '';
+                return tankSummary;
+              })() + (widget.experience == 'beginner'
+                  ? 'ONBOARDING CONTEXT — Meet Ariel page (BEGINNER). '
+                    'INHABITANT RULE: When the user mentions an inhabitant (fish, coral, invert, plant) during onboarding, ADD IT IMMEDIATELY. Do NOT ask "should I add it?" or "I don\'t see it in your profile." Just confirm: "Added [name]!" Only ask clarifying questions if genuinely needed (e.g. "how many?" or species disambiguation). '
+                    'IMPORTANT: Do NOT assume the tank is already set up, filled, or cycled just because the user selected inhabitants or a tank name. Many beginners are planning ahead before they even have a tank. '
+                    'When the user asks a broad question like "where should we start?" or "what should I do?", ask clarifying questions first. For example: '
+                    '"Are you still planning your tank, or do you already have one set up?" '
+                    'Tailor your guidance based on their actual stage:\n'
+                    '- PLANNING stage (no tank yet): Help with choosing equipment, tank size, substrate, etc. Walk them through what they need before filling.\n'
+                    '- SETUP stage (have tank, not filled/cycled): Guide them through filling, dechlorinating, cycling. Ask if they have a filter, heater, etc.\n'
+                    '- FILLED stage (tank has water): Ask if they have tested the water yet.\n'
+                    '- MIGRATING from another app or spreadsheet: Let them know they can import a CSV using the Import Data button below, or just paste their historical data right into any of the chat windows and you\'ll log it.\n'
+                    '- CYCLED/ESTABLISHED stage: Help with monitoring — suggest logging parameters.\n'
+                    'When the user shares test results: interpret each value clearly, flag anything concerning, and encourage them to keep logging results regularly so you can track trends.\n'
+                    'If they need a test kit: recommend the API Master Test Kit as a great all-in-one option covering ammonia, nitrite, nitrate, and pH.\n'
+                    'At appropriate moments, offer to set up a recurring reminder to test water parameters.\n'
                     'LANGUAGE RULE: Never say "here", "in this chat", or "below" when referring to where the user can enter information. Always say "in any of the chat windows" or "just let me know in any of the chat windows".\n'
                     'Keep every reply short and friendly. One question per response — no exceptions.'
-                  : 'ONBOARDING CONTEXT — Water Quality page (EXPERIENCED keeper). The user already has an established tank. Do NOT explain basics like cycling, what ammonia is, or why testing matters — they know.\n'
-                    '1. You already asked: "Have you tested your water recently? Drop your latest numbers here and I\'ll log them."\n'
-                    '2. When the user shares test results: log them, briefly note anything out of range, and mention any trends worth watching. Keep it concise — no hand-holding.\n'
-                    '3. If they don\'t have numbers right now: that\'s fine — let them know they can drop results in any of the chat windows anytime.\n'
-                    '4. After logging results (or if they skip): ask if they\'d like a recurring reminder to log parameters. Suggest weekly or biweekly.\n'
-                    '5. If they say yes: confirm and let them know they\'re all set.\n'
-                    '6. If they say no: acknowledge and move on.\n'
+                  : 'ONBOARDING CONTEXT — Meet Ariel page (EXPERIENCED keeper). '
+                    'INHABITANT RULE: When the user mentions an inhabitant (fish, coral, invert, plant) during onboarding, ADD IT IMMEDIATELY. Do NOT ask "should I add it?" or "I don\'t see it in your profile." Just confirm: "Added [name]!" Only ask clarifying questions if genuinely needed (e.g. "how many?" or species disambiguation). '
+                    'The user has aquarium experience but do NOT assume they already have a tank set up. They may be planning a new build. '
+                    'Do NOT explain basics like cycling, what ammonia is, or why testing matters — they know.\n'
+                    'IMPORTANT: When the user asks a broad question like "where should we start?" or "what should I do?", ask clarifying questions first. For example: '
+                    '"Are you setting up a new tank or migrating an existing one?" '
+                    'Tailor your guidance based on their actual stage:\n'
+                    '- PLANNING/NEW BUILD: Help with equipment choices, stocking plan, cycling strategy. Keep it peer-level — skip the basics.\n'
+                    '- MIGRATING from another app or spreadsheet: Let them know they can import a CSV using the Import Data button below, or just paste their historical data right into any of the chat windows and you\'ll log it.\n'
+                    '- ESTABLISHED TANK: Jump to water parameters — ask if they have recent test results to log.\n'
+                    'When the user shares test results: log them, briefly note anything out of range, and mention any trends worth watching. Keep it concise.\n'
+                    'If they don\'t have numbers right now: let them know they can drop results in any of the chat windows anytime.\n'
+                    'At appropriate moments, offer to set up a recurring reminder to log parameters. Suggest weekly or biweekly.\n'
                     'LANGUAGE RULE: Never say "here", "in this chat", or "below". Always say "in any of the chat windows".\n'
-                    'Keep replies concise and peer-level. One question per response — no exceptions.',
+                    'Keep replies concise and peer-level. One question per response — no exceptions.'),
             }),
           )
           .timeout(const Duration(seconds: 30));
@@ -4068,7 +3971,70 @@ class _ObWaterQualityPageState extends State<_ObWaterQualityPage> {
             if (t is Map<String, dynamic>) widget.onReminderTask!(t);
           }
         }
+        // Process new inhabitants from chat response
+        if (data is Map && data['new_inhabitant'] != null && widget.onInhabitantsAdded != null) {
+          final inhData = data['new_inhabitant'] as Map<String, dynamic>;
+          final inhList = (inhData['inhabitants'] as List?) ?? [];
+          final existingNames = widget.inhabitants.map((i) => i.name.toLowerCase()).toSet();
+          final added = <({String name, String type, int count})>[];
+          for (final inh in inhList) {
+            if (inh is Map && inh['name'] != null) {
+              final name = inh['name'].toString();
+              if (!existingNames.contains(name.toLowerCase())) {
+                existingNames.add(name.toLowerCase());
+                added.add((
+                  name: name,
+                  type: inh['type']?.toString() ?? 'fish',
+                  count: (inh['count'] as num?)?.toInt() ?? 1,
+                ));
+              }
+            }
+          }
+          if (added.isNotEmpty) widget.onInhabitantsAdded!(added);
+        }
+        // Process inhabitant removals
+        if (data is Map && data['remove_inhabitants'] != null && widget.onInhabitantsRemoved != null) {
+          final remData = data['remove_inhabitants'] as Map<String, dynamic>;
+          final remList = (remData['inhabitants'] as List?) ?? [];
+          final names = <String>[];
+          for (final inh in remList) {
+            if (inh is Map && inh['name'] != null) {
+              names.add(inh['name'].toString().toLowerCase());
+            }
+          }
+          if (names.isNotEmpty) widget.onInhabitantsRemoved!(names);
+        }
+        // Process new plants
+        if (data is Map && data['new_plants'] != null && widget.onPlantsAdded != null) {
+          final plantData = data['new_plants'] as Map<String, dynamic>;
+          final plantList = (plantData['plants'] as List?) ?? [];
+          final existingPlants = widget.plants.map((p) => p.toLowerCase()).toSet();
+          final added = <String>[];
+          for (final p in plantList) {
+            final name = (p is Map ? p['name']?.toString() : p?.toString()) ?? '';
+            if (name.isNotEmpty && !existingPlants.contains(name.toLowerCase())) {
+              existingPlants.add(name.toLowerCase());
+              added.add(name);
+            }
+          }
+          if (added.isNotEmpty) widget.onPlantsAdded!(added);
+        }
+        // Apply tap water profile updates
+        if (data is Map && data['tap_water_update'] != null && widget.tankId != null) {
+          try {
+            final tapUpdate = data['tap_water_update'] as Map<String, dynamic>;
+            if (tapUpdate.isNotEmpty) {
+              final jsonStr = jsonEncode(tapUpdate);
+              await TankStore.instance.saveTapWater(widget.tankId!, jsonStr);
+              debugPrint('[Onboard/TapWater] updated: $tapUpdate');
+            }
+          } catch (e) {
+            debugPrint('[Onboard/TapWater] ERROR: $e');
+          }
+        }
       }
+      // Ensure log parsing completes
+      await logFuture;
     } catch (_) {
       if (mounted) {
         setState(() => _messages.add((
@@ -4103,6 +4069,7 @@ class _ObWaterQualityPageState extends State<_ObWaterQualityPage> {
 
   @override
   Widget build(BuildContext context) {
+    super.build(context);
     return Column(
       children: [
         const _ObLogoBar(),
@@ -7197,11 +7164,7 @@ class _AddTankFlowScreenState extends State<AddTankFlowScreen> {
                     inhabitants: _inhabitants,
                     plants: _plants,
                     waterType: _waterType,
-                    tankName: _tankNameCtrl.text,
-                    gallons: _gallons,
                     onNext: _goNext,
-                    onInhabitantsAdded: (added) => setState(() => _inhabitants = [..._inhabitants, ...added]),
-                    onInhabitantsRemoved: (names) => setState(() => _inhabitants = _inhabitants.where((i) => !names.contains(i.name.toLowerCase())).toList()),
                   ),
                   _ObCongratsPage(
                     experience: 'beginner',
@@ -9820,6 +9783,27 @@ class _ChatSheetState extends State<_ChatSheet> {
             }
           } catch (e) {
             debugPrint('[Chat/MeasCorrection] ERROR: $e');
+          }
+        }
+
+        // Apply tap water profile updates
+        if (data is Map && data['tap_water_update'] != null && _selectedTank != null) {
+          try {
+            final tapUpdate = data['tap_water_update'] as Map<String, dynamic>;
+            if (tapUpdate.isNotEmpty) {
+              // Merge with existing tap water profile
+              Map<String, dynamic> existing = {};
+              if (_tapWaterJson != null) {
+                try { existing = Map<String, dynamic>.from(jsonDecode(_tapWaterJson!) as Map); } catch (_) {}
+              }
+              existing.addAll(tapUpdate);
+              final jsonStr = jsonEncode(existing);
+              await TankStore.instance.saveTapWater(_selectedTank!.id, jsonStr);
+              if (mounted) setState(() => _tapWaterJson = jsonStr);
+              debugPrint('[Chat/TapWater] updated: $existing');
+            }
+          } catch (e) {
+            debugPrint('[Chat/TapWater] ERROR: $e');
           }
         }
 

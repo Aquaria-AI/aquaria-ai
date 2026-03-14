@@ -1485,6 +1485,7 @@ Rules:
 - type: "fish" | "invertebrate" | "coral" | "polyp" | "anemone"
 - count: integer. Use the count the user specified. Default to 1 if not mentioned.
 - Only include inhabitants the user explicitly said to add — not ones already in the tank profile.
+- Do NOT include plants. Plants are tracked separately. Examples of plants to EXCLUDE: java fern, java moss, anubias, amazon sword, water sprite, water wisteria, hornwort, duckweed, frogbit, monte carlo, dwarf hairgrass, vallisneria, cryptocoryne, bucephalandra, marimo, moss ball, pogostemon, rotala, ludwigia, cabomba, elodea, salvinia, riccia, tiger lotus. If it's a plant, return {"inhabitants": []}.
 - If the conversation is just a question or clarification with no clear species to add, return {"inhabitants": []}"""
 
 _REMOVE_INHABITANT_EXTRACT_PROMPT = """Based on this conversation, extract the inhabitant(s) the user wants to REMOVE from their tank profile.
@@ -2444,6 +2445,57 @@ def chat_tank(request: Request, req: ChatRequest, user_id: str = Depends(_get_us
             except Exception as e:
                 print(f"[Chat/MeasCorrection] error: {e}")
 
+        # Extract tap water parameters
+        tap_water_update = None
+        convo_text = (req.message + " " + reply).lower()
+        tap_mentioned = "tap water" in convo_text or "tap" in convo_text and any(
+            k in convo_text for k in ["ammonia", "nitrate", "nitrite", "ph", "gh", "kh", "chlorine", "chloramine", "phosphate", "silicate", "tds"]
+        )
+        # Also trigger when user answers a question about their tap water (e.g. "no ammonia", "it's 7.2")
+        history_asked_tap = any(
+            "tap" in (m.get("content", "")).lower() and m.get("role") == "assistant"
+            for m in (req.history or [])[-3:]
+        )
+        should_extract_tap = tap_mentioned or history_asked_tap
+
+        if should_extract_tap:
+            convo = "\n".join(
+                f"{m['role'].upper()}: {m['content']}"
+                for m in (req.history or [])
+                if m.get("role") in ("user", "assistant")
+            )
+            convo += f"\nUSER: {req.message}\nASSISTANT: {reply}"
+            try:
+                tap_response = _chat(client,
+                    model="claude-haiku-4-5",
+                    max_tokens=256,
+                    system=(
+                        "Extract any tap water parameter values mentioned in this conversation. "
+                        "The user may state values directly (e.g. 'my tap pH is 7.4') or indirectly "
+                        "(e.g. 'no ammonia in my tap' means ammonia=0, 'it doesn't have nitrates' means nitrate=0). "
+                        "Return ONLY a JSON object with parameter keys and numeric values. "
+                        "Use these exact keys where applicable: ph, gh, kh, ammonia, nitrite, nitrate, "
+                        "phosphate, silicate, tds, chlorine, chloramine, copper, iron, temp. "
+                        "For GH/KH, use dGH/dKH numeric values. For temp, use Fahrenheit. "
+                        "If no tap water parameters can be extracted, return an empty object: {}\n"
+                        "Examples:\n"
+                        '- "my tap has no ammonia" → {"ammonia": 0}\n'
+                        '- "tap pH is 7.6 and GH is about 12" → {"ph": 7.6, "gh": 12}\n'
+                        '- "no nitrates or ammonia in my tap water" → {"ammonia": 0, "nitrate": 0}\n'
+                        "Return ONLY the JSON object, no explanation."
+                    ),
+                    messages=[{"role": "user", "content": convo}],
+                )
+                raw = tap_response.content[0].text.strip()
+                raw = re.sub(r"^```(?:json)?\s*", "", raw)
+                raw = re.sub(r"\s*```$", "", raw).strip()
+                parsed = json.loads(raw)
+                if parsed and isinstance(parsed, dict) and len(parsed) > 0:
+                    tap_water_update = parsed
+                    print(f"[TapWater] extracted: {tap_water_update}")
+            except Exception as e:
+                print(f"[Chat/TapWater] error: {e}")
+
         return {
             "response": reply,
             "tasks": extracted_tasks,
@@ -2453,6 +2505,7 @@ def chat_tank(request: Request, req: ChatRequest, user_id: str = Depends(_get_us
             "new_plants": new_plants,
             "rename_plant": rename_plant,
             "measurement_correction": measurement_correction,
+            "tap_water_update": tap_water_update,
             "_debug": {
                 "should_extract": should_extract_tasks,
                 "reply_confirms": reply_confirms_task_set,
