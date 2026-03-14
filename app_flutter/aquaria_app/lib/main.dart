@@ -859,29 +859,50 @@ Future<void> _showDiscordShareFlow(BuildContext context, String photoStoragePath
   final botInviteUrl = guildsData['bot_invite_url'] as String? ?? '';
 
   if (guilds.isEmpty) {
-    if (context.mounted) {
-      showDialog(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('No shared servers'),
-          content: const Text(
-            'The Aquaria bot needs to be in the same server as you. '
-            'Invite the bot to a server, then try again.',
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-            if (botInviteUrl.isNotEmpty)
-              TextButton(
-                onPressed: () {
-                  Navigator.pop(ctx);
-                  launchUrl(Uri.parse(botInviteUrl), mode: LaunchMode.externalApplication);
-                },
-                child: const Text('Invite Bot'),
-              ),
-          ],
+    if (!context.mounted) return;
+    final invited = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Add Aquaria bot to a server'),
+        content: const Text(
+          'To share photos, the Aquaria bot needs to be in one of your Discord servers. '
+          'Tap below to invite it, then come back here.',
         ),
-      );
-    }
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          if (botInviteUrl.isNotEmpty)
+            TextButton(
+              onPressed: () async {
+                await launchUrl(Uri.parse(botInviteUrl), mode: LaunchMode.externalApplication);
+                if (ctx.mounted) Navigator.pop(ctx, true);
+              },
+              child: const Text('Invite Bot'),
+            ),
+        ],
+      ),
+    );
+    if (invited != true || !context.mounted) return;
+    // Show a follow-up dialog telling user to continue
+    final retry = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Bot invited?'),
+        content: const Text(
+          'Once you\'ve added the Aquaria bot to your server in Discord, tap Continue to share your photo.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF5865F2)),
+            child: const Text('Continue'),
+          ),
+        ],
+      ),
+    );
+    if (retry != true || !context.mounted) return;
+    // Retry the share flow from the top
+    _showDiscordShareFlow(context, photoStoragePath);
     return;
   }
 
