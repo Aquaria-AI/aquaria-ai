@@ -324,6 +324,7 @@ def _search_knowledge(message: str, water_type: str, species: List[str], max_res
 class ParseRequest(BaseModel):
     text: str
     context: Optional[str] = None  # Recent conversation context for resolving ambiguous references
+    client_date: Optional[str] = None  # Device-local date (YYYY-MM-DD) — preferred over server date
 
 
 class AdviseRequest(BaseModel):
@@ -823,7 +824,7 @@ def _parse_with_regex(text: str) -> List[Dict[str, Any]]:
 @limiter.limit("30/minute")
 def parse_tank_log(request: Request, req: ParseRequest, user_id: str = Depends(_get_user_id)):
     text = (req.text or "").strip()
-    today = date.today().isoformat()
+    today = req.client_date or date.today().isoformat()
     logs = _parse_with_llm(text, today, context=req.context)
     if logs is None:
         logs = _parse_with_regex(text)

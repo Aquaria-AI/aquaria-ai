@@ -5836,7 +5836,7 @@ class _AddTaskSheetState extends State<_AddTaskSheet> {
           color: Colors.white,
           borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
         ),
-        padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(context).viewInsets.bottom + MediaQuery.of(context).padding.bottom + 32),
+        padding: EdgeInsets.fromLTRB(16, MediaQuery.of(context).padding.top + 16, 16, MediaQuery.of(context).viewInsets.bottom + MediaQuery.of(context).padding.bottom + 32),
         child: SingleChildScrollView(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -5959,7 +5959,7 @@ class _AddNoteSheetState extends State<_AddNoteSheet> {
           color: Colors.white,
           borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
         ),
-        padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(context).viewInsets.bottom + MediaQuery.of(context).padding.bottom + 32),
+        padding: EdgeInsets.fromLTRB(16, MediaQuery.of(context).padding.top + 16, 16, MediaQuery.of(context).viewInsets.bottom + MediaQuery.of(context).padding.bottom + 32),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
@@ -8998,6 +8998,7 @@ class _ChatSheetState extends State<_ChatSheet> {
                 body: jsonEncode({
                   'text': text,
                   if (recentContext.isNotEmpty) 'context': recentContext,
+                  'client_date': '${logDateSnapshot.year}-${logDateSnapshot.month.toString().padLeft(2, '0')}-${logDateSnapshot.day.toString().padLeft(2, '0')}',
                 }))
             .timeout(const Duration(seconds: 20));
         debugPrint('[ParseLog] Response status=${resp.statusCode}, body=${resp.body}');
@@ -9827,7 +9828,7 @@ class _AddMeasurementSheetState extends State<_AddMeasurementSheet> {
           color: Colors.white,
           borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
         ),
-        padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(context).viewInsets.bottom + MediaQuery.of(context).padding.bottom + 32),
+        padding: EdgeInsets.fromLTRB(16, MediaQuery.of(context).padding.top + 16, 16, MediaQuery.of(context).viewInsets.bottom + MediaQuery.of(context).padding.bottom + 32),
         child: SingleChildScrollView(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -10020,7 +10021,7 @@ class _LogEditSheetState extends State<_LogEditSheet> {
           color: Colors.white,
           borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
         ),
-        padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(context).viewInsets.bottom + MediaQuery.of(context).padding.bottom + 32),
+        padding: EdgeInsets.fromLTRB(16, MediaQuery.of(context).padding.top + 16, 16, MediaQuery.of(context).viewInsets.bottom + MediaQuery.of(context).padding.bottom + 32),
         child: SingleChildScrollView(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -12582,10 +12583,12 @@ class _DailyLogsScreenState extends State<DailyLogsScreen> {
   }
 
   String _dayLabel(DateTime dt) {
-    final d = dt.toLocal();
+    final d = DateTime(dt.year, dt.month, dt.day);
     final now = DateTime.now();
-    if (d.year == now.year && d.month == now.month && d.day == now.day) return 'Today';
-    if (d.year == now.year && d.month == now.month && d.day == now.day - 1) return 'Yesterday';
+    final today = DateTime(now.year, now.month, now.day);
+    final yesterday = today.subtract(const Duration(days: 1));
+    if (d == today) return 'Today';
+    if (d == yesterday) return 'Yesterday';
     return '${_weekdays[d.weekday - 1]}, ${_months[d.month - 1]} ${d.day}';
   }
 
