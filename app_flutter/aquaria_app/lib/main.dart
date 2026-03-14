@@ -16582,8 +16582,8 @@ class _CommunityScreenState extends State<_CommunityScreen> {
   }
 
   Future<void> _createPost() async {
-    // Pick image source
-    final source = await showModalBottomSheet<ImageSource>(
+    // Pick image source — camera, gallery, or from tank photos
+    final choice = await showModalBottomSheet<String>(
       context: context,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
       builder: (ctx) => SafeArea(
@@ -16593,21 +16593,123 @@ class _CommunityScreenState extends State<_CommunityScreen> {
             ListTile(
               leading: const Icon(Icons.camera_alt),
               title: const Text('Take Photo'),
-              onTap: () => Navigator.of(ctx).pop(ImageSource.camera),
+              onTap: () => Navigator.of(ctx).pop('camera'),
             ),
             ListTile(
               leading: const Icon(Icons.photo_library),
               title: const Text('Choose from Gallery'),
-              onTap: () => Navigator.of(ctx).pop(ImageSource.gallery),
+              onTap: () => Navigator.of(ctx).pop('gallery'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_album_outlined),
+              title: const Text('From Tank Photos'),
+              onTap: () => Navigator.of(ctx).pop('tank'),
             ),
           ],
         ),
       ),
     );
-    if (source == null || !mounted) return;
+    if (choice == null || !mounted) return;
 
-    final picked = await ImagePicker().pickImage(source: source, imageQuality: 80);
-    if (picked == null || !mounted) return;
+    String? pickedPath;
+
+    if (choice == 'tank') {
+      // Pick from tank photos — choose tank first if multiple
+      final tanks = TankStore.instance.tanks;
+      if (tanks.isEmpty) {
+        _showTopSnack(context, 'No tanks found');
+        return;
+      }
+      TankModel tank;
+      if (tanks.length == 1) {
+        tank = tanks.first;
+      } else {
+        final selected = await showModalBottomSheet<TankModel>(
+          context: context,
+          shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+          builder: (ctx) => SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+                  child: Text('Pick a tank', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                ),
+                ...tanks.map((t) => ListTile(
+                  leading: const Icon(Icons.water_drop_outlined, color: _cDark),
+                  title: Text(t.name),
+                  subtitle: Text('${t.gallons}g ${t.waterType.label}'),
+                  onTap: () => Navigator.pop(ctx, t),
+                )),
+              ],
+            ),
+          ),
+        );
+        if (selected == null || !mounted) return;
+        tank = selected;
+      }
+      // Load photos for the selected tank
+      final photos = await TankStore.instance.photosFor(tank.id);
+      if (photos.isEmpty) {
+        if (mounted) _showTopSnack(context, 'No photos in ${tank.name}');
+        return;
+      }
+      if (!mounted) return;
+      // Show photo grid picker
+      final photo = await showModalBottomSheet<db.TankPhoto>(
+        context: context,
+        isScrollControlled: true,
+        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+        builder: (ctx) => DraggableScrollableSheet(
+          initialChildSize: 0.6,
+          maxChildSize: 0.9,
+          minChildSize: 0.3,
+          expand: false,
+          builder: (_, scrollCtrl) => Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: Text('${tank.name} — Photos', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              ),
+              Expanded(
+                child: GridView.builder(
+                  controller: scrollCtrl,
+                  padding: const EdgeInsets.all(8),
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 3, mainAxisSpacing: 4, crossAxisSpacing: 4,
+                  ),
+                  itemCount: photos.length,
+                  itemBuilder: (_, i) {
+                    final p = photos[i];
+                    return GestureDetector(
+                      onTap: () => Navigator.pop(ctx, p),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(6),
+                        child: Image.file(File(p.filePath), fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => Container(color: Colors.grey.shade200,
+                            child: const Icon(Icons.broken_image, color: Colors.grey)),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+      if (photo == null || !mounted) return;
+      pickedPath = photo.filePath;
+    } else {
+      final source = choice == 'camera' ? ImageSource.camera : ImageSource.gallery;
+      final picked = await ImagePicker().pickImage(source: source, imageQuality: 80);
+      if (picked == null || !mounted) return;
+      pickedPath = picked.path;
+    }
+
+    if (pickedPath == null || !mounted) return;
+    final picked = XFile(pickedPath);
 
     // Show caption dialog
     final caption = await showDialog<String>(
