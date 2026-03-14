@@ -1151,7 +1151,7 @@ Your full capabilities include:
 - Setting aquarium-related reminders and tasks (water changes, testing schedules, dosing, etc.)
 - Creating new tank profiles when the user wants to add a tank
 - Answering aquarium questions and giving advice
-- Summarizing tank health from recent logs
+- Summarizing tank health from recent journal entries
 Do NOT tell the user you cannot do any of the above. These are all things you can and should do.
 
 ABSOLUTE RULE — always follow this first, before anything else:
@@ -1196,7 +1196,7 @@ When the user's notes or actions mention corrective measures taken AFTER measure
 
 You have access to:
 - Tank info (name, size, water type, inhabitants, plants)
-- Recent log entries for context
+- Recent journal entries for context (measurements, actions, and notes)
 - The conversation history
 
 Use these reference ranges as GUIDELINES when assessing whether a parameter is low, normal, or high. Apply the freshwater or saltwater set based on the tank's water type. IMPORTANT: These are general defaults. When specific fish or plant species are known, their preferred ranges carry slightly more weight than these guidelines. If a species preference conflicts with the general range, prioritize the species preference and note the distinction.
@@ -1309,7 +1309,7 @@ Add your next test results in any of the chat windows and I'll track the trend f
 
 TESTING & REPORTING ENCOURAGEMENT:
 When it is natural to do so — such as when a user mentions a health concern, a new fish, a water change, or any parameter — gently encourage them to test their water and report the results. Specific guidance:
-- If the user reports a problem (sick fish, cloudy water, algae, odd behavior) and no recent test results are in the log, suggest they run ammonia, nitrite, nitrate, and pH tests and share the numbers.
+- If the user reports a problem (sick fish, cloudy water, algae, odd behavior) and no recent test results are in the journal, suggest they run ammonia, nitrite, nitrate, and pH tests and share the numbers.
 - If the user hasn't logged test results recently and the conversation is about tank health, remind them that regular testing is the best early-warning system and ask if they've tested lately.
 - When a user shares test results, always confirm the values look good or flag any issues, and encourage them to keep logging results so trends can be tracked over time.
 - Do not push testing every single reply — only when it's genuinely relevant to the conversation.
@@ -1824,7 +1824,7 @@ def chat_tank(request: Request, req: ChatRequest, user_id: str = Depends(_get_us
 
     if req.recent_logs:
         recent = "\n".join(f"- {l}" for l in req.recent_logs[:10])
-        tank_context += f"Recent log entries (last 2 weeks):\n{recent}\n"
+        tank_context += f"Recent journal entries (last 2 weeks):\n{recent}\n"
 
     # Mandate that Ariel always considers the full tank context
     tank_context += (
@@ -1835,7 +1835,7 @@ def chat_tank(request: Request, req: ChatRequest, user_id: str = Depends(_get_us
         "3. PLANTS: Whether the tank has live plants and which species. Planted tanks have different parameter priorities.\n"
         "4. TAP WATER PROFILE: If provided, factor tap water parameters into all water chemistry advice. Every water change moves tank values toward tap water, not toward zero.\n"
         "5. EQUIPMENT: What filtration, lighting, CO2, protein skimmer, heater, etc. the tank has. Equipment determines what advice is practical — don't suggest adjustments to equipment the user doesn't have.\n"
-        "6. RECENT MEASUREMENTS & OBSERVATIONS: Any log entries from the last 2 weeks. Reference specific values when relevant.\n"
+        "6. RECENT JOURNAL ENTRIES: Any journal entries from the last 2 weeks including measurements, actions, and notes. ALWAYS check these entries before making any claim about when the user last did something (water change, test, dosing, etc.). If the journal shows a recent water change, do NOT say it has been a while.\n"
         "7. USER EXPERIENCE LEVEL: Beginner, intermediate, or advanced — adjust depth and tone accordingly.\n"
         "8. INHABITANT PLAUSIBILITY: If the user mentions an animal or plant that does NOT match the tank's water type "
         "(e.g. an octopus in a freshwater tank, a discus in a saltwater tank, a coral in a freshwater tank), "
@@ -1866,7 +1866,7 @@ def chat_tank(request: Request, req: ChatRequest, user_id: str = Depends(_get_us
             hp_parts.append(f"Trends: {trends}")
         if hp_parts:
             tank_context += "Tank health profile:\n" + "\n".join(f"  - {p}" for p in hp_parts) + "\n"
-            tank_context += "Use this to proactively mention if the user hasn't tested recently or if a trend is concerning. Be natural, not robotic.\n"
+            tank_context += "IMPORTANT: Always cross-reference this profile with the recent journal entries above. Do NOT contradict what the journal shows. If the journal shows a recent water change or action, the health profile confirms it — never claim otherwise. Be natural, not robotic.\n"
 
     # User behavior patterns — testing habits and follow-through
     if req.behavior_profile:
