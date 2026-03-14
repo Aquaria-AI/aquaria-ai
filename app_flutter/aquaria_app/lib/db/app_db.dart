@@ -541,6 +541,15 @@ class AppDb extends _$AppDb {
     );
   }
 
+  Future<void> updateTaskFields(int id, {String? description, Value<String?>? dueDate, Value<int?>? repeatDays}) async {
+    final companion = TasksCompanion(
+      description: description != null ? Value(description) : const Value.absent(),
+      dueDate: dueDate ?? const Value.absent(),
+      repeatDays: repeatDays ?? const Value.absent(),
+    );
+    await (update(tasks)..where((r) => r.id.equals(id))).write(companion);
+  }
+
   Future<void> setTaskPaused(int id, bool paused) async {
     await (update(tasks)..where((r) => r.id.equals(id))).write(
       TasksCompanion(isPaused: Value(paused)),

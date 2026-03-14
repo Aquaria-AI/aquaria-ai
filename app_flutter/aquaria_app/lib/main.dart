@@ -20,6 +20,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:gal/gal.dart';
 
+import 'package:drift/drift.dart' show Value;
 import 'db/app_db.dart' as db;
 import 'models/tank.dart';
 import 'screens/auth_screen.dart';
@@ -354,6 +355,34 @@ class _NotificationBellIconState extends State<_NotificationBellIcon> {
                         contentPadding: EdgeInsets.zero,
                         title: Text(item.task.description, style: const TextStyle(fontSize: 13)),
                         subtitle: Text(item.tank.name, style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                        onTap: () async {
+                          Navigator.pop(ctx);
+                          final result = await showModalBottomSheet<({String desc, String? dueDate, int? repeatDays, bool markComplete, bool completeAndStopRecurring, bool dismiss, bool dismissAndStopRecurring})>(
+                            context: context,
+                            isScrollControlled: true,
+                            shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+                            builder: (_) => _AddTaskSheet(tankName: item.tank.name, existing: item.task),
+                          );
+                          if (result != null && result.desc.isNotEmpty) {
+                            if (result.completeAndStopRecurring) {
+                              await TankStore.instance.completeAndStopRecurring(item.task.id);
+                            } else if (result.dismissAndStopRecurring) {
+                              await TankStore.instance.dismissAndStopRecurring(item.task.id);
+                            } else if (result.dismiss) {
+                              await TankStore.instance.dismissTaskById(item.task.id);
+                            } else if (result.markComplete) {
+                              await TankStore.instance.completeTaskById(item.task.id);
+                            } else {
+                              await TankStore.instance.updateTask(
+                                item.task.id,
+                                description: result.desc,
+                                dueDate: Value(result.dueDate),
+                                repeatDays: Value(result.repeatDays),
+                              );
+                            }
+                            _loadTasks();
+                          }
+                        },
                       );
                     },
                   ),
@@ -1426,6 +1455,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           data: jsonEncode(merged),
         );
       }
+      TankStore.instance.invalidateSummary(tankId);
     } catch (_) {}
   }
 
@@ -4728,6 +4758,7 @@ class _AquariaAppState extends State<AquariaApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      debugShowCheckedModeBanner: false,
       title: 'Aquaria',
       navigatorKey: _navigatorKey,
       theme: ThemeData(
@@ -5229,7 +5260,7 @@ class _TankListScreenState extends State<TankListScreen> {
   Future<void> _showAddTaskDialog(TankModel tank) async {
     await Future.delayed(Duration.zero);
     if (!mounted) return;
-    final result = await showModalBottomSheet<({String desc, String? dueDate, int? repeatDays, bool markComplete})>(
+    final result = await showModalBottomSheet<({String desc, String? dueDate, int? repeatDays, bool markComplete, bool completeAndStopRecurring, bool dismiss, bool dismissAndStopRecurring})>(
       context: context,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
@@ -5276,6 +5307,52 @@ class _TankListScreenState extends State<TankListScreen> {
       }
       await _refresh();
       _showTopSnack(context, result.markComplete ? 'Task completed & logged' : 'Task added');
+    }
+  }
+
+  Future<void> _showEditTaskDialog(TankModel tank, db.Task task, {VoidCallback? onDone}) async {
+    await Future.delayed(Duration.zero);
+    if (!mounted) return;
+    final result = await showModalBottomSheet<({String desc, String? dueDate, int? repeatDays, bool markComplete, bool completeAndStopRecurring, bool dismiss, bool dismissAndStopRecurring})>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => _AddTaskSheet(tankName: tank.name, existing: task),
+    );
+    if (result != null && result.desc.isNotEmpty && mounted) {
+      if (result.completeAndStopRecurring) {
+        await TankStore.instance.completeAndStopRecurring(task.id);
+        await _refresh();
+        onDone?.call();
+        _showTopSnack(context, 'Task completed — recurrence stopped');
+      } else if (result.dismissAndStopRecurring) {
+        await TankStore.instance.dismissAndStopRecurring(task.id);
+        await _refresh();
+        onDone?.call();
+        _showTopSnack(context, 'Task dismissed — recurrence stopped');
+      } else if (result.dismiss) {
+        await TankStore.instance.dismissTaskById(task.id);
+        await _refresh();
+        onDone?.call();
+        _showTopSnack(context, 'Task dismissed');
+      } else if (result.markComplete) {
+        await TankStore.instance.completeTaskById(task.id);
+        await _refresh();
+        onDone?.call();
+        _showTopSnack(context, 'Task completed');
+      } else {
+        await TankStore.instance.updateTask(
+          task.id,
+          description: result.desc,
+          dueDate: Value(result.dueDate),
+          repeatDays: Value(result.repeatDays),
+        );
+        await _refresh();
+        onDone?.call();
+        _showTopSnack(context, 'Task updated');
+      }
     }
   }
 
@@ -5448,6 +5525,11 @@ class _TankListScreenState extends State<TankListScreen> {
                           final isRecurring = item.task.repeatDays != null && item.task.repeatDays! > 0;
                           return ListTile(
                             dense: true,
+                            onTap: () async {
+                              Navigator.pop(ctx);
+                              await Future.delayed(const Duration(milliseconds: 300));
+                              _showEditTaskDialog(item.tank, item.task);
+                            },
                             leading: Icon(
                               isRecurring ? Icons.repeat : Icons.task_alt,
                               size: 18,
@@ -6032,10 +6114,12 @@ class _NotificationsCard extends StatefulWidget {
   final List<TankModel> tanks;
   final Map<String, List<db.Task>> tasksByTank;
   final VoidCallback onDismissed;
+  final void Function(TankModel tank, db.Task task)? onTapTask;
   const _NotificationsCard({
     required this.tanks,
     required this.tasksByTank,
     required this.onDismissed,
+    this.onTapTask,
   });
 
   @override
@@ -6153,37 +6237,39 @@ class _NotificationsCardState extends State<_NotificationsCard> {
                 final dueLabel = (rawDue != null && rawDue.isNotEmpty) ? _fmtDue(rawDue) : null;
                 final isRecurring = item.task.repeatDays != null && item.task.repeatDays! > 0;
                 final isFuture = _isFutureTask(item.task);
-                return Padding(
-                  padding: const EdgeInsets.fromLTRB(14, 8, 4, 8),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      if (isRecurring)
-                        const Padding(
-                          padding: EdgeInsets.only(right: 4, top: 1),
-                          child: Icon(Icons.repeat, size: 13, color: Color(0xFF8D6E63)),
-                        ),
-                      Expanded(
-                        child: RichText(
-                          text: TextSpan(
-                            style: const TextStyle(fontSize: 13, color: Colors.black87, height: 1.4),
-                            children: [
-                              TextSpan(
-                                text: '${item.tank.name}  ',
-                                style: const TextStyle(fontWeight: FontWeight.w600),
-                              ),
-                              TextSpan(text: label),
-                              if (dueLabel != null)
+                return InkWell(
+                  onTap: widget.onTapTask != null ? () => widget.onTapTask!(item.tank, item.task) : null,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 8, 4, 8),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (isRecurring)
+                          const Padding(
+                            padding: EdgeInsets.only(right: 4, top: 1),
+                            child: Icon(Icons.repeat, size: 13, color: Color(0xFF8D6E63)),
+                          ),
+                        Expanded(
+                          child: RichText(
+                            text: TextSpan(
+                              style: const TextStyle(fontSize: 13, color: Colors.black87, height: 1.4),
+                              children: [
                                 TextSpan(
-                                  text: ' — $dueLabel',
-                                  style: TextStyle(
-                                    color: isFuture ? const Color(0xFF6D8B74) : const Color(0xFF8D6E63),
-                                  ),
+                                  text: '${item.tank.name}  ',
+                                  style: const TextStyle(fontWeight: FontWeight.w600),
                                 ),
-                            ],
+                                TextSpan(text: label),
+                                if (dueLabel != null)
+                                  TextSpan(
+                                    text: ' — $dueLabel',
+                                    style: TextStyle(
+                                      color: isFuture ? const Color(0xFF6D8B74) : const Color(0xFF8D6E63),
+                                    ),
+                                  ),
+                              ],
+                            ),
                           ),
                         ),
-                      ),
                       // Complete (checkmark) button — always available
                       IconButton(
                         onPressed: () => _onComplete(item.task),
@@ -6204,7 +6290,8 @@ class _NotificationsCardState extends State<_NotificationsCard> {
                         splashRadius: 16,
                         tooltip: 'Dismiss',
                       ),
-                    ],
+                      ],
+                    ),
                   ),
                 );
               }).toList(),
@@ -6298,16 +6385,18 @@ class _DailyTipDialog extends StatelessWidget {
 // ─────────────────────────────────────────────
 class _AddTaskSheet extends StatefulWidget {
   final String tankName;
-  const _AddTaskSheet({required this.tankName});
+  final db.Task? existing; // non-null when editing
+  const _AddTaskSheet({required this.tankName, this.existing});
   @override
   State<_AddTaskSheet> createState() => _AddTaskSheetState();
 }
 
 class _AddTaskSheetState extends State<_AddTaskSheet> {
-  final _descCtrl = TextEditingController();
+  late final TextEditingController _descCtrl;
   DateTime? _dueDate;
   int? _repeatDays;
   bool _markComplete = false;
+  bool get _isEditing => widget.existing != null;
 
   static const _repeatOptions = <int?, String>{
     null: 'No repeat',
@@ -6316,6 +6405,17 @@ class _AddTaskSheetState extends State<_AddTaskSheet> {
     14: 'Every 2 weeks',
     30: 'Monthly',
   };
+
+  @override
+  void initState() {
+    super.initState();
+    final e = widget.existing;
+    _descCtrl = TextEditingController(text: e?.description ?? '');
+    if (e?.dueDate != null && e!.dueDate!.isNotEmpty) {
+      _dueDate = DateTime.tryParse(e.dueDate!);
+    }
+    _repeatDays = e?.repeatDays;
+  }
 
   @override
   void dispose() {
@@ -6353,6 +6453,9 @@ class _AddTaskSheetState extends State<_AddTaskSheet> {
       dueDate: dueStr,
       repeatDays: _repeatDays,
       markComplete: _isFutureDue ? false : _markComplete,
+      completeAndStopRecurring: false,
+      dismiss: false,
+      dismissAndStopRecurring: false,
     ));
   }
 
@@ -6377,7 +6480,7 @@ class _AddTaskSheetState extends State<_AddTaskSheet> {
             children: [
               Row(children: [
                 Expanded(
-                  child: Text('Add Task — ${widget.tankName}',
+                  child: Text(_isEditing ? 'Edit Task — ${widget.tankName}' : 'Add Task — ${widget.tankName}',
                     style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
               ),
               TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
@@ -6385,7 +6488,7 @@ class _AddTaskSheetState extends State<_AddTaskSheet> {
               FilledButton(
                 onPressed: _save,
                 style: FilledButton.styleFrom(backgroundColor: _cMid),
-                child: Text(_markComplete && !_isFutureDue ? 'Complete' : 'Add'),
+                child: Text(_isEditing ? 'Save' : (_markComplete && !_isFutureDue ? 'Complete' : 'Add')),
               ),
             ]),
             const Divider(height: 24),
@@ -6432,17 +6535,113 @@ class _AddTaskSheetState extends State<_AddTaskSheet> {
               onChanged: (v) => setState(() => _repeatDays = v),
             ),
             const SizedBox(height: 12),
-            CheckboxListTile(
-              value: _isFutureDue ? false : _markComplete,
-              onChanged: _isFutureDue ? null : (v) => setState(() => _markComplete = v ?? false),
-              title: const Text('Mark as completed now', style: TextStyle(fontSize: 14)),
-              subtitle: _isFutureDue
-                  ? const Text('Future tasks cannot be completed', style: TextStyle(fontSize: 12, color: Colors.grey))
-                  : const Text('Logs as an action immediately', style: TextStyle(fontSize: 12, color: Colors.grey)),
-              controlAffinity: ListTileControlAffinity.leading,
-              contentPadding: EdgeInsets.zero,
-              dense: true,
-            ),
+            if (!_isEditing)
+              CheckboxListTile(
+                value: _isFutureDue ? false : _markComplete,
+                onChanged: _isFutureDue ? null : (v) => setState(() => _markComplete = v ?? false),
+                title: const Text('Mark as completed now', style: TextStyle(fontSize: 14)),
+                subtitle: _isFutureDue
+                    ? const Text('Future tasks cannot be completed', style: TextStyle(fontSize: 12, color: Colors.grey))
+                    : const Text('Logs as an action immediately', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                controlAffinity: ListTileControlAffinity.leading,
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+              ),
+            if (_isEditing) ...[
+              const Divider(height: 24),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  icon: const Icon(Icons.check_circle_outline, size: 18),
+                  label: const Text('Complete Task'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF4CAF50),
+                  ),
+                  onPressed: () {
+                    Navigator.pop(context, (
+                      desc: _descCtrl.text.trim().isEmpty ? widget.existing!.description : _descCtrl.text.trim(),
+                      dueDate: null as String?,
+                      repeatDays: widget.existing!.repeatDays,
+                      markComplete: true,
+                      completeAndStopRecurring: false,
+                      dismiss: false,
+                      dismissAndStopRecurring: false,
+                    ));
+                  },
+                ),
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  icon: const Icon(Icons.remove_circle_outline, size: 18),
+                  label: const Text('Dismiss'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.grey[700],
+                    side: BorderSide(color: Colors.grey[400]!),
+                  ),
+                  onPressed: () {
+                    Navigator.pop(context, (
+                      desc: _descCtrl.text.trim().isEmpty ? widget.existing!.description : _descCtrl.text.trim(),
+                      dueDate: null as String?,
+                      repeatDays: widget.existing!.repeatDays,
+                      markComplete: false,
+                      completeAndStopRecurring: false,
+                      dismiss: true,
+                      dismissAndStopRecurring: false,
+                    ));
+                  },
+                ),
+              ),
+              if (widget.existing!.repeatDays != null && widget.existing!.repeatDays! > 0) ...[
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    icon: const Icon(Icons.stop_circle_outlined, size: 18),
+                    label: const Text('Complete & Stop Recurring'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFFE65100),
+                      side: const BorderSide(color: Color(0xFFE65100)),
+                    ),
+                    onPressed: () {
+                      Navigator.pop(context, (
+                        desc: _descCtrl.text.trim().isEmpty ? widget.existing!.description : _descCtrl.text.trim(),
+                        dueDate: null as String?,
+                        repeatDays: null as int?,
+                        markComplete: true,
+                        completeAndStopRecurring: true,
+                        dismiss: false,
+                        dismissAndStopRecurring: false,
+                      ));
+                    },
+                  ),
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    icon: const Icon(Icons.cancel_outlined, size: 18),
+                    label: const Text('Dismiss & Stop Recurring'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.red[700],
+                      side: BorderSide(color: Colors.red[300]!),
+                    ),
+                    onPressed: () {
+                      Navigator.pop(context, (
+                        desc: _descCtrl.text.trim().isEmpty ? widget.existing!.description : _descCtrl.text.trim(),
+                        dueDate: null as String?,
+                        repeatDays: null as int?,
+                        markComplete: false,
+                        completeAndStopRecurring: false,
+                        dismiss: false,
+                        dismissAndStopRecurring: true,
+                      ));
+                    },
+                  ),
+                ),
+              ],
+            ],
           ],
         ),
       ),
@@ -7687,7 +7886,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
   Future<void> _showAddTaskDialog() async {
     await Future.delayed(Duration.zero);
     if (!mounted) return;
-    final result = await showModalBottomSheet<({String desc, String? dueDate, int? repeatDays, bool markComplete})>(
+    final result = await showModalBottomSheet<({String desc, String? dueDate, int? repeatDays, bool markComplete, bool completeAndStopRecurring, bool dismiss, bool dismissAndStopRecurring})>(
       context: context,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
@@ -7734,6 +7933,47 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
       }
       await _load();
       _showTopSnack(context, result.markComplete ? 'Task completed & logged' : 'Task added');
+    }
+  }
+
+  Future<void> _showEditTaskSheet(TankModel tank, db.Task task, {VoidCallback? onDone}) async {
+    await Future.delayed(Duration.zero);
+    if (!mounted) return;
+    final result = await showModalBottomSheet<({String desc, String? dueDate, int? repeatDays, bool markComplete, bool completeAndStopRecurring, bool dismiss, bool dismissAndStopRecurring})>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => _AddTaskSheet(tankName: tank.name, existing: task),
+    );
+    if (result != null && result.desc.isNotEmpty && mounted) {
+      if (result.completeAndStopRecurring) {
+        await TankStore.instance.completeAndStopRecurring(task.id);
+      } else if (result.dismissAndStopRecurring) {
+        await TankStore.instance.dismissAndStopRecurring(task.id);
+      } else if (result.dismiss) {
+        await TankStore.instance.dismissTaskById(task.id);
+      } else if (result.markComplete) {
+        await TankStore.instance.completeTaskById(task.id);
+      } else {
+        await TankStore.instance.updateTask(
+          task.id,
+          description: result.desc,
+          dueDate: Value(result.dueDate),
+          repeatDays: Value(result.repeatDays),
+        );
+      }
+      final fresh = await TankStore.instance.tasksForTank(_tank.id);
+      if (!mounted) return;
+      setState(() => _tasks = fresh);
+      onDone?.call();
+      final msg = result.completeAndStopRecurring ? 'Task completed — recurrence stopped'
+          : result.dismissAndStopRecurring ? 'Task dismissed — recurrence stopped'
+          : result.dismiss ? 'Task dismissed'
+          : result.markComplete ? 'Task completed'
+          : 'Task updated';
+      _showTopSnack(context, msg);
     }
   }
 
@@ -7935,6 +8175,13 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
   }
 
   Future<void> _loadSuggestions() async {
+    // Use cached suggestions if journal hasn't changed and cache is fresh
+    final cachedSugg = TankStore.instance.getCachedSuggestions(_tank.id, _journal);
+    if (cachedSugg != null) {
+      if (mounted) setState(() { _suggestions = cachedSugg.suggestions; _suggestionsLoading = false; });
+      return;
+    }
+
     setState(() => _suggestionsLoading = true);
     try {
       final twoWeeksAgo = DateTime.now().subtract(const Duration(days: 14));
@@ -7998,8 +8245,10 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
         final data = jsonDecode(resp.body) as Map<String, dynamic>;
         final raw = data['suggestions'] as List<dynamic>?;
         if (raw != null) {
+          final parsed = raw.map((s) => s.toString()).toList();
+          TankStore.instance.cacheSuggestions(_tank.id, parsed, _journal);
           setState(() {
-            _suggestions = raw.map((s) => s.toString()).toList();
+            _suggestions = parsed;
             _alertLevel = (data['alert_level'] as String?) ?? 'none';
           });
         }
@@ -8014,7 +8263,8 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
   /// Returns {canonical → (value, date, deduced)} in preferred display order.
   Map<String, ({String value, DateTime date, bool deduced})> _latestMeasurements() {
     const order = ['ammonia', 'nitrite', 'nitrate', 'ph', 'kh', 'gh',
-                   'phosphate', 'potassium', 'calcium', 'magnesium', 'ca_mg_ratio', 'co2', 'temp', 'salinity'];
+                   'phosphate', 'potassium', 'calcium', 'magnesium', 'ca_mg_ratio', 'co2', 'temp', 'salinity',
+                   'tds', 'iron', 'copper'];
     final raw = <String, ({String value, DateTime date, bool deduced})>{};
     final twoWeeksAgo = DateTime.now().subtract(const Duration(days: 14));
     final twoWeeksKey = '${twoWeeksAgo.year}-${twoWeeksAgo.month.toString().padLeft(2,'0')}-${twoWeeksAgo.day.toString().padLeft(2,'0')}';
@@ -8276,6 +8526,11 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
                           final isRecurring = task.repeatDays != null && task.repeatDays! > 0;
                           return ListTile(
                             dense: true,
+                            onTap: () async {
+                              Navigator.pop(ctx);
+                              await Future.delayed(const Duration(milliseconds: 300));
+                              _showEditTaskSheet(_tank, task, onDone: () { _load(); });
+                            },
                             leading: Icon(
                               isRecurring ? Icons.repeat : Icons.task_alt,
                               size: 18,
@@ -8614,68 +8869,82 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
                         final today = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
                         return due.isAfter(today);
                       })();
-                      return Padding(
-                        padding: const EdgeInsets.fromLTRB(14, 2, 4, 2),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.center,
-                          children: [
-                            if (isRecurring)
-                              const Padding(
-                                padding: EdgeInsets.only(right: 4, top: 1),
-                                child: Icon(Icons.repeat, size: 13, color: Color(0xFF8D6E63)),
-                              ),
-                            Expanded(
-                              child: RichText(
-                                text: TextSpan(
-                                  style: const TextStyle(fontSize: 13, color: Colors.black87, height: 1.4),
-                                  children: [
-                                    TextSpan(text: label),
-                                    if (dueLabel != null)
-                                      TextSpan(
-                                        text: ' — $dueLabel',
-                                        style: TextStyle(
-                                          color: isFuture ? const Color(0xFF6D8B74) : const Color(0xFF8D6E63),
+                      return InkWell(
+                        onTap: () async {
+                          await _showEditTaskSheet(_tank, task);
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(14, 2, 4, 2),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              if (isRecurring)
+                                const Padding(
+                                  padding: EdgeInsets.only(right: 4, top: 1),
+                                  child: Icon(Icons.repeat, size: 13, color: Color(0xFF8D6E63)),
+                                ),
+                              Expanded(
+                                child: RichText(
+                                  text: TextSpan(
+                                    style: const TextStyle(fontSize: 13, color: Colors.black87, height: 1.4),
+                                    children: [
+                                      TextSpan(text: label),
+                                      if (dueLabel != null)
+                                        TextSpan(
+                                          text: ' — $dueLabel',
+                                          style: TextStyle(
+                                            color: isFuture ? const Color(0xFF6D8B74) : const Color(0xFF8D6E63),
+                                          ),
                                         ),
-                                      ),
-                                  ],
+                                    ],
+                                  ),
                                 ),
                               ),
-                            ),
-                            IconButton(
-                              onPressed: () async {
-                                await TankStore.instance.completeTaskById(task.id);
-                                await _load();
-                              },
-                              icon: const Icon(Icons.check_circle_outline, size: 18, color: Color(0xFF4CAF50)),
-                              iconSize: 18,
-                              padding: EdgeInsets.zero,
-                              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                              splashRadius: 16,
-                              tooltip: 'Mark complete',
-                            ),
                             IconButton(
                               onPressed: () {
-                                showDialog<bool>(
+                                final isRecurring = task.repeatDays != null && task.repeatDays! > 0;
+                                showDialog<String>(
                                   context: context,
                                   builder: (ctx) => AlertDialog(
-                                    title: const Text('Dismiss task?'),
-                                    content: Text(task.description),
+                                    title: Text(task.description),
+                                    content: const Text('What would you like to do?'),
                                     actions: [
                                       TextButton(
-                                        onPressed: () => Navigator.pop(ctx, false),
+                                        onPressed: () => Navigator.pop(ctx, 'cancel'),
                                         child: const Text('Cancel'),
                                       ),
                                       TextButton(
-                                        onPressed: () => Navigator.pop(ctx, true),
+                                        onPressed: () => Navigator.pop(ctx, 'dismiss'),
                                         child: const Text('Dismiss'),
+                                      ),
+                                      if (isRecurring)
+                                        TextButton(
+                                          onPressed: () => Navigator.pop(ctx, 'stop'),
+                                          child: const Text('Stop Recurring'),
+                                        ),
+                                      FilledButton(
+                                        onPressed: () => Navigator.pop(ctx, 'complete'),
+                                        child: const Text('Complete'),
                                       ),
                                     ],
                                   ),
-                                ).then((dismiss) async {
-                                  if (dismiss == true) {
-                                    await TankStore.instance.dismissTaskById(task.id);
-                                    await _load();
+                                ).then((action) async {
+                                  if (action == 'complete') {
+                                    await TankStore.instance.completeTaskById(task.id);
+                                  } else if (action == 'dismiss') {
+                                    if (isRecurring) {
+                                      await TankStore.instance.completeTaskById(task.id);
+                                    } else {
+                                      await TankStore.instance.dismissTaskById(task.id);
+                                    }
+                                  } else if (action == 'stop') {
+                                    await TankStore.instance.completeAndStopRecurring(task.id);
+                                  } else {
+                                    return;
                                   }
+                                  final fresh = await TankStore.instance.tasksForTank(_tank.id);
+                                  if (!mounted) return;
+                                  setState(() => _tasks = fresh);
                                 });
                               },
                               icon: const Icon(Icons.close, size: 16, color: Color(0xFF8D6E63)),
@@ -8684,8 +8953,9 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
                               constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
                               splashRadius: 16,
                               tooltip: 'Dismiss',
-                            ),
-                          ],
+                              ),
+                            ],
+                          ),
                         ),
                       );
                     }),
@@ -12622,6 +12892,9 @@ class _CsvImportScreenState extends State<_CsvImportScreen> {
       );
       count++;
     }
+    if (count > 0) {
+      TankStore.instance.invalidateSummary(widget.tank.id);
+    }
     setState(() { _importing = false; _importedCount = count; });
     if (count > 0 && mounted) {
       _showTopSnack(context, 'Imported $count entries!', backgroundColor: _cDark);
@@ -13343,7 +13616,7 @@ class _DailyLogsScreenState extends State<DailyLogsScreen> {
   Future<void> _showAddTaskDialog() async {
     await Future.delayed(Duration.zero);
     if (!mounted) return;
-    final result = await showModalBottomSheet<({String desc, String? dueDate, int? repeatDays, bool markComplete})>(
+    final result = await showModalBottomSheet<({String desc, String? dueDate, int? repeatDays, bool markComplete, bool completeAndStopRecurring, bool dismiss, bool dismissAndStopRecurring})>(
       context: context,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
@@ -14153,6 +14426,9 @@ const _paramAliases = <String, String>{
   'mg': 'magnesium', 'magnesium': 'magnesium', 'magnesium_calc': 'magnesium',
   'ca_mg_ratio': 'ca_mg_ratio',
   'phosphate': 'phosphate', 'po4': 'phosphate',
+  'tds': 'tds',
+  'iron': 'iron', 'fe': 'iron',
+  'copper': 'copper', 'cu': 'copper',
   'temp': 'temp', 'temperature': 'temp',
   'salinity': 'salinity',
   'co2': 'co2', 'carbon dioxide': 'co2',

@@ -517,7 +517,39 @@ class TankStore {
     );
   }
 
-  void invalidateSummary(String tankId) => _summaryCache.remove(tankId);
+  void invalidateSummary(String tankId) {
+    _summaryCache.remove(tankId);
+    _suggestionsCache.remove(tankId);
+  }
+
+  // ----------------------------------------------------------------
+  // AI suggestions cache
+  // ----------------------------------------------------------------
+  final Map<String, _SuggestionsCache> _suggestionsCache = {};
+
+  _SuggestionsCache? getCachedSuggestions(String tankId, List<db.JournalEntry> currentJournal) {
+    final cache = _suggestionsCache[tankId];
+    if (cache == null) return null;
+    final latestUpdatedAt = currentJournal.isNotEmpty
+        ? currentJournal.map((j) => j.updatedAt).reduce((a, b) => a.isAfter(b) ? a : b)
+        : null;
+    final stale = DateTime.now().difference(cache.generatedAt).inDays >= 6;
+    final journalChanged = cache.entryCount != currentJournal.length ||
+        cache.latestEntryUpdatedAt != latestUpdatedAt;
+    if (stale || journalChanged) return null;
+    return cache;
+  }
+
+  void cacheSuggestions(String tankId, List<String> suggestions, List<db.JournalEntry> journal) {
+    _suggestionsCache[tankId] = _SuggestionsCache(
+      suggestions: suggestions,
+      entryCount: journal.length,
+      latestEntryUpdatedAt: journal.isNotEmpty
+          ? journal.map((j) => j.updatedAt).reduce((a, b) => a.isAfter(b) ? a : b)
+          : null,
+      generatedAt: DateTime.now(),
+    );
+  }
 
   // ----------------------------------------------------------------
   // Dismissed tasks (legacy)
@@ -608,7 +640,13 @@ class TankStore {
 
     // Auto-create next occurrence for recurring tasks (skip if paused)
     if (task != null && task.repeatDays != null && task.repeatDays! > 0 && !task.isPaused) {
-      final nextDue = DateTime.now().add(Duration(days: task.repeatDays!));
+      final now = DateTime.now();
+      final baseDue = (task.dueDate != null && task.dueDate!.isNotEmpty)
+          ? DateTime.tryParse(task.dueDate!) ?? now
+          : now;
+      var nextDue = baseDue.add(Duration(days: task.repeatDays!));
+      final tomorrow = DateTime(now.year, now.month, now.day).add(const Duration(days: 1));
+      if (nextDue.isBefore(tomorrow)) nextDue = tomorrow;
       final nextDueStr = '${nextDue.year}-${nextDue.month.toString().padLeft(2, '0')}-${nextDue.day.toString().padLeft(2, '0')}';
       await addTask(
         tankId: task.tankId,
@@ -656,8 +694,6 @@ class TankStore {
     if (!actions.contains(task.description)) actions.add(task.description);
     await upsertJournal(tankId: task.tankId, date: dateKey, category: 'actions', data: jsonEncode(actions));
 
-    invalidateSummary(task.tankId);
-
     // Cloud sync
     _cloudSync(() => SupabaseService.dismissTaskByKey(
       tankId: task.tankId,
@@ -665,18 +701,33 @@ class TankStore {
       createdAt: task.createdAt,
     ));
 
+    // Dismiss any other open tasks with the same description (cleanup duplicates)
+    final siblings = await _db.tasksForTank(task.tankId);
+    for (final s in siblings) {
+      if (s.id != id && s.description.trim().toLowerCase() == task.description.trim().toLowerCase() && !s.isDismissed) {
+        await _db.dismissTaskById(s.id);
+      }
+    }
+
     // Auto-create next occurrence for recurring tasks (skip if paused)
     if (task.repeatDays != null && task.repeatDays! > 0 && !task.isPaused) {
-      final nextDue = now.add(Duration(days: task.repeatDays!));
+      // Base next due on the task's original due date, not today
+      final baseDue = (task.dueDate != null && task.dueDate!.isNotEmpty)
+          ? DateTime.tryParse(task.dueDate!) ?? now
+          : now;
+      var nextDue = baseDue.add(Duration(days: task.repeatDays!));
+      // Ensure next due is at least tomorrow
+      final tomorrow = DateTime(now.year, now.month, now.day).add(const Duration(days: 1));
+      if (nextDue.isBefore(tomorrow)) nextDue = tomorrow;
       final nextDueStr = '${nextDue.year}-${nextDue.month.toString().padLeft(2, '0')}-${nextDue.day.toString().padLeft(2, '0')}';
-      await addTask(
+      await _db.insertTask(db.TasksCompanion.insert(
         tankId: task.tankId,
         description: task.description,
-        dueDate: nextDueStr,
-        priority: task.priority,
-        source: task.source,
-        repeatDays: task.repeatDays,
-      );
+        dueDate: Value(nextDueStr),
+        priority: Value(task.priority),
+        source: Value(task.source),
+        repeatDays: Value(task.repeatDays),
+      ));
     }
   }
 
@@ -737,6 +788,22 @@ class TankStore {
 
   Future<void> updateTaskFrequency(int id, int newRepeatDays) async {
     await _db.updateTaskRepeatDays(id, newRepeatDays);
+  }
+
+  Future<void> updateTask(int id, {String? description, Value<String?>? dueDate, Value<int?>? repeatDays}) async {
+    await _db.updateTaskFields(id, description: description, dueDate: dueDate, repeatDays: repeatDays);
+  }
+
+  /// Complete the task and remove its recurrence so no next occurrence is created.
+  Future<void> completeAndStopRecurring(int id) async {
+    // Clear repeatDays first so completeTaskById won't create a next occurrence
+    await _db.updateTaskFields(id, repeatDays: const Value(null));
+    await completeTaskById(id);
+  }
+
+  Future<void> dismissAndStopRecurring(int id) async {
+    await _db.updateTaskFields(id, repeatDays: const Value(null));
+    await dismissTaskById(id);
   }
 
   Future<void> toggleTaskPaused(int id, bool paused) async {
@@ -1181,6 +1248,20 @@ class _SummaryCache {
 
   const _SummaryCache({
     required this.text,
+    required this.entryCount,
+    required this.latestEntryUpdatedAt,
+    required this.generatedAt,
+  });
+}
+
+class _SuggestionsCache {
+  final List<String> suggestions;
+  final int entryCount;
+  final DateTime? latestEntryUpdatedAt;
+  final DateTime generatedAt;
+
+  const _SuggestionsCache({
+    required this.suggestions,
     required this.entryCount,
     required this.latestEntryUpdatedAt,
     required this.generatedAt,
