@@ -14900,9 +14900,55 @@ class _PhotoDetailScreenState extends State<_PhotoDetailScreen> {
             )
           else
             IconButton(
-              icon: const Icon(Icons.groups_outlined),
-              tooltip: 'Share to Community',
-              onPressed: _shareToCommunity,
+              icon: const Icon(Icons.share),
+              tooltip: 'Share',
+              onPressed: () {
+                showModalBottomSheet(
+                  context: context,
+                  shape: const RoundedRectangleBorder(
+                    borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+                  ),
+                  builder: (ctx) => SafeArea(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Padding(
+                          padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+                          child: Text('Share Photo', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                        ),
+                        ListTile(
+                          leading: const Icon(Icons.groups_outlined, color: Color(0xFF1FA2A8)),
+                          title: const Text('Aquaria Community'),
+                          subtitle: const Text('Share to the in-app community feed'),
+                          onTap: () { Navigator.pop(ctx); _shareToCommunity(); },
+                        ),
+                        ListTile(
+                          leading: const Icon(Icons.discord, color: Color(0xFF5865F2)),
+                          title: const Text('Discord'),
+                          subtitle: const Text('Share to a Discord server'),
+                          onTap: () async {
+                            Navigator.pop(ctx);
+                            // Upload to Supabase storage first, then share to Discord
+                            setState(() => _sharing = true);
+                            try {
+                              final storagePath = await SupabaseService.uploadCommunityPhoto(widget.photo.filePath);
+                              if (mounted) {
+                                setState(() => _sharing = false);
+                                _showDiscordShareFlow(context, storagePath);
+                              }
+                            } catch (e) {
+                              if (mounted) {
+                                setState(() => _sharing = false);
+                                _showTopSnack(context, 'Failed to upload: $e');
+                              }
+                            }
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
             ),
           IconButton(
             icon: const Icon(Icons.delete_outline),
