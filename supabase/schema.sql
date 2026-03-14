@@ -323,6 +323,46 @@ left join (
   group by user_id
 ) flags_cast on flags_cast.user_id = u.id;
 
+-- API usage — tracks Anthropic API token usage and cost per call
+create table if not exists public.api_usage (
+  id bigint generated always as identity primary key,
+  model text not null,
+  input_tokens int not null default 0,
+  output_tokens int not null default 0,
+  cost_usd numeric(10,6) not null default 0,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_api_usage_created_at on public.api_usage(created_at desc);
+
+alter table public.api_usage enable row level security;
+
+-- Only service role (backend) can insert; admin can read
+create policy "Admin can view api usage"
+  on public.api_usage for select using (
+    auth.uid() = (select id from auth.users where email = 'admin@aquaria-ai.com' limit 1)
+  );
+
+-- App sessions — one row per user per day for DAU tracking
+create table if not exists public.app_sessions (
+  id bigint generated always as identity primary key,
+  user_id uuid references auth.users(id) on delete cascade not null,
+  date date not null default current_date,
+  created_at timestamptz not null default now(),
+  unique(user_id, date)
+);
+
+create index if not exists idx_app_sessions_date on public.app_sessions(date desc);
+
+alter table public.app_sessions enable row level security;
+
+create policy "Users can insert own sessions"
+  on public.app_sessions for insert with check (auth.uid() = user_id);
+create policy "Admin can view all sessions"
+  on public.app_sessions for select using (
+    auth.uid() = (select id from auth.users where email = 'admin@aquaria-ai.com' limit 1)
+  );
+
 -- Feedback — user-submitted feedback with ticket management
 create table if not exists public.feedback (
   id bigint generated always as identity primary key,

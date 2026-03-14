@@ -142,12 +142,60 @@ def _chat(client: anthropic.Anthropic, **kwargs):
     """Call client.messages.create with retry on 529 overloaded errors."""
     for attempt in range(4):
         try:
-            return client.messages.create(**kwargs)
+            response = client.messages.create(**kwargs)
+            _log_api_usage(response)
+            return response
         except anthropic.APIStatusError as e:
             if e.status_code == 529 and attempt < 3:
                 time.sleep(2 ** attempt)
                 continue
             raise
+
+
+# Cost per million tokens (as of 2025)
+_COST_PER_M = {
+    "claude-haiku-4-5": {"input": 0.80, "output": 4.00},
+    "claude-sonnet-4-20250514": {"input": 3.00, "output": 15.00},
+}
+
+
+def _log_api_usage(response):
+    """Log API token usage and cost to Supabase."""
+    if not _SUPABASE_SERVICE_KEY:
+        return
+    try:
+        model = response.model or ""
+        input_tokens = response.usage.input_tokens
+        output_tokens = response.usage.output_tokens
+        # Find matching cost rates (prefix match for model variants)
+        rates = None
+        for key, val in _COST_PER_M.items():
+            if key in model or model.startswith(key):
+                rates = val
+                break
+        if rates is None:
+            rates = {"input": 3.00, "output": 15.00}  # default to sonnet pricing
+        cost = (input_tokens * rates["input"] + output_tokens * rates["output"]) / 1_000_000
+        payload = json.dumps({
+            "model": model,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cost_usd": round(cost, 6),
+        }).encode()
+        req = urllib.request.Request(
+            f"{_SUPABASE_URL}/rest/v1/api_usage",
+            data=payload,
+            headers={
+                "apikey": _SUPABASE_SERVICE_KEY,
+                "Authorization": f"Bearer {_SUPABASE_SERVICE_KEY}",
+                "Content-Type": "application/json",
+                "Prefer": "return=minimal",
+            },
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=5)
+    except Exception as e:
+        print(f"[APIUsage] log error: {e}", flush=True)
 
 
 # ─── Knowledge base (RAG) ────────────────────────────────────────────────────
