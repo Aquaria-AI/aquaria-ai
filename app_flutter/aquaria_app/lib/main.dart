@@ -10606,9 +10606,17 @@ class _ChatSheetState extends State<_ChatSheet> {
                         GestureDetector(
                           onTap: () {
                             _ChatCache.clear(_cacheKey);
-                            setState(() => _chatMessages = [
-                              _ChatMessage(role: 'assistant', content: 'Hey! I\'m Ariel — ask me anything about your tanks or log an entry.'),
-                            ]);
+                            setState(() {
+                              _chatMessages = [
+                                _ChatMessage(role: 'assistant', content: 'Hey! I\'m Ariel — ask me anything about your tanks or log an entry.'),
+                              ];
+                              // Reset tank selection so the next conversation starts fresh
+                              // (only for home-page chat where no tank was pre-selected)
+                              if (widget.initialTank == null) {
+                                _selectedTank = null;
+                                _cacheKey = null;
+                              }
+                            });
                           },
                           child: const Padding(
                             padding: EdgeInsets.only(right: 12),
