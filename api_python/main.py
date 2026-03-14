@@ -3368,7 +3368,7 @@ def discord_share(request: Request, req: DiscordShareRequest, user_id: str = Dep
 
     # Build the embed message content
     caption = req.caption.strip()
-    credit = "📸 Shared via [**Aquaria**](https://aquaria-ai.com) — AI-powered aquarium companion"
+    credit = f"📸 Shared by **{discord_username}** via [**Aquaria**](https://aquaria-ai.com) — AI-powered aquarium companion"
     content = f"**{req.title}**"
     if caption:
         content += f"\n{caption}"
