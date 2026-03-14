@@ -1316,6 +1316,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   bool _finishing = false;
   final List<Map<String, dynamic>> _pendingTasks = [];
   String? _pendingCsvContent;
+  Map<int, String?>? _pendingCsvMapping;
+  int? _pendingCsvDateCol;
   String? _createdTankId;
 
   /// Create (or update) the tank in the DB so Meet Ariel can operate on a real tank.
@@ -1349,18 +1351,33 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   Future<void> _importCsvForTank(String tankId, String csvContent) async {
     try {
-      final rows = const CsvToListConverter(eol: '\n').convert(csvContent);
-      if (rows.length < 2) return;
-      final headers = rows.first.map((e) => e.toString().trim()).toList();
-      int? dateCol;
+      final allRows = const CsvToListConverter(eol: '\n').convert(csvContent);
+      if (allRows.length < 2) return;
+
+      // Use user-confirmed mapping if available, otherwise auto-detect
+      int? dateCol = _pendingCsvDateCol;
       final paramMapping = <int, String>{};
-      for (int i = 0; i < headers.length; i++) {
-        final h = headers[i].toLowerCase().trim();
-        if (h == 'date' || h == 'timestamp' || h == 'time') {
-          dateCol = i;
-        } else {
-          final mapped = _CsvImportScreenState._matchHeader(h);
-          if (mapped != null) paramMapping[i] = mapped;
+
+      // Find the real header row (skip junk rows at the top)
+      final headerIdx = _pendingCsvMapping != null ? 0 : _CsvImportScreenState._findHeaderRow(allRows);
+      final rows = allRows.sublist(headerIdx);
+      if (rows.length < 2) return;
+
+      if (_pendingCsvMapping != null) {
+        for (final e in _pendingCsvMapping!.entries) {
+          if (e.value != null) paramMapping[e.key] = e.value!;
+        }
+      } else {
+        final headers = rows.first.map((e) => e.toString().trim()).toList();
+        for (int i = 0; i < headers.length; i++) {
+          final h = headers[i].toLowerCase().trim();
+          if (h == 'date' || h == 'timestamp' || h == 'time' ||
+              h.contains('date') || h == 'day' || h == 'logged') {
+            dateCol ??= i;
+          } else {
+            final mapped = _CsvImportScreenState._matchHeader(h);
+            if (mapped != null) paramMapping[i] = mapped;
+          }
         }
       }
       if (paramMapping.isEmpty) return;
@@ -1526,7 +1543,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     equipment: _equipment,
                     onNext: _finish,
                     onReminderTask: (t) => _pendingTasks.add(t),
-                    onCsvPending: (content) => _pendingCsvContent = content,
+                    onCsvPending: (content, {Map<int, String?>? mapping, int? dateCol}) {
+                      _pendingCsvContent = content;
+                      _pendingCsvMapping = mapping;
+                      _pendingCsvDateCol = dateCol;
+                    },
                     onInhabitantsAdded: (added) => setState(() => _inhabitants = [..._inhabitants, ...added]),
                     onInhabitantsRemoved: (names) => setState(() => _inhabitants = _inhabitants.where((i) => !names.contains(i.name.toLowerCase())).toList()),
                     onPlantsAdded: (added) => setState(() => _plants = [..._plants, ...added]),
@@ -3058,22 +3079,28 @@ class _ObInhabitantsPageState extends State<_ObInhabitantsPage> {
   @override
   void didUpdateWidget(covariant _ObInhabitantsPage old) {
     super.didUpdateWidget(old);
-    // Sync inhabitants added externally (e.g. via Meet Ariel chat)
-    final currentNames = _inhs.map((i) => i.name.text.trim().toLowerCase()).toSet();
-    for (final inh in widget.initialInhabitants) {
-      if (!currentNames.contains(inh.name.toLowerCase())) {
-        _inhs.add(_InhEdit(nameText: inh.name, type: inh.type, count: inh.count));
-        currentNames.add(inh.name.toLowerCase());
+    // Sync inhabitants/plants added externally — deferred to avoid build scope conflicts
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      bool changed = false;
+      final currentNames = _inhs.map((i) => i.name.text.trim().toLowerCase()).toSet();
+      for (final inh in widget.initialInhabitants) {
+        if (!currentNames.contains(inh.name.toLowerCase())) {
+          _inhs.add(_InhEdit(nameText: inh.name, type: inh.type, count: inh.count));
+          currentNames.add(inh.name.toLowerCase());
+          changed = true;
+        }
       }
-    }
-    // Sync plants added externally
-    final currentPlants = _plts.map((p) => p.name.text.trim().toLowerCase()).toSet();
-    for (final plant in widget.initialPlants) {
-      if (!currentPlants.contains(plant.toLowerCase())) {
-        _plts.add(_PlantEdit(nameText: plant));
-        currentPlants.add(plant.toLowerCase());
+      final currentPlants = _plts.map((p) => p.name.text.trim().toLowerCase()).toSet();
+      for (final plant in widget.initialPlants) {
+        if (!currentPlants.contains(plant.toLowerCase())) {
+          _plts.add(_PlantEdit(nameText: plant));
+          currentPlants.add(plant.toLowerCase());
+          changed = true;
+        }
       }
-    }
+      if (changed) setState(() {});
+    });
   }
 
   @override
@@ -3608,7 +3635,7 @@ class _ObWaterQualityPage extends StatefulWidget {
   final Map<String, dynamic> equipment;
   final VoidCallback onNext;
   final void Function(Map<String, dynamic> task)? onReminderTask;
-  final void Function(String csvContent)? onCsvPending;
+  final void Function(String csvContent, {Map<int, String?>? mapping, int? dateCol})? onCsvPending;
   final void Function(List<({String name, String type, int count})> added)? onInhabitantsAdded;
   final void Function(List<String> names)? onInhabitantsRemoved;
   final void Function(List<String> added)? onPlantsAdded;
@@ -3763,18 +3790,63 @@ class _ObWaterQualityPageState extends State<_ObWaterQualityPage>
       } else {
         throw Exception('No file data available');
       }
-      final rows = const CsvToListConverter(eol: '\n').convert(content);
-      if (rows.length < 2) {
+      final allRows = const CsvToListConverter(eol: '\n').convert(content);
+      if (allRows.length < 2) {
         if (mounted) {
           _showTopSnack(context, 'CSV must have a header row and at least one data row.');
         }
         return;
       }
-      // Store the CSV content for import after tank is created
+
+      // Find the real header row (skip junk rows at the top)
+      final headerIdx = _CsvImportScreenState._findHeaderRow(allRows);
+      final rows = allRows.sublist(headerIdx);
+      if (rows.length < 2) {
+        if (mounted) {
+          _showTopSnack(context, 'Could not find a recognizable header row.');
+        }
+        return;
+      }
+      debugPrint('[CSV/Onboard] detected header at row $headerIdx');
+
+      // Parse headers and auto-detect mapping
+      final headers = rows.first.map((e) => e.toString().trim()).toList();
+      final mapping = <int, String?>{};
+      int? dateCol;
+      for (int i = 0; i < headers.length; i++) {
+        final h = headers[i].toLowerCase().replaceAll(RegExp(r'\s*\(.*?\)\s*'), '').trim();
+        if (h == 'date' || h == 'timestamp' || h == 'time' ||
+            h.contains('date') || h == 'day' || h == 'logged') {
+          dateCol ??= i;
+        } else {
+          mapping[i] = _CsvImportScreenState._matchHeader(h);
+        }
+      }
+
+      if (!mounted) return;
+
+      // Show column mapping screen
+      final confirmed = await Navigator.of(context).push<Map<String, dynamic>>(
+        MaterialPageRoute(
+          builder: (_) => _CsvMappingScreen(
+            headers: headers,
+            rows: rows.sublist(1),
+            initialMapping: mapping,
+            dateColIndex: dateCol,
+          ),
+        ),
+      );
+
+      if (confirmed == null || !mounted) return;
+
+      // Pass the CSV content and confirmed mapping to onboarding state via callback
+      final confirmedMapping = confirmed['mapping'] as Map<int, String?>;
+      final confirmedDateCol = confirmed['dateCol'] as int?;
       _pendingCsvContent = content;
-      widget.onCsvPending?.call(content);
+      widget.onCsvPending?.call(content, mapping: confirmedMapping, dateCol: confirmedDateCol);
+      final dataRows = rows.length - 1;
       if (mounted) {
-        _showTopSnack(context, '${rows.length - 1} rows ready to import after setup.', backgroundColor: _cDark);
+        _showTopSnack(context, '$dataRows rows ready to import after setup.', backgroundColor: _cDark);
       }
     } catch (e) {
       if (mounted) {
@@ -4938,40 +5010,53 @@ class _TankListScreenState extends State<TankListScreen> {
     });
 
     try {
-      if (SupabaseService.isLoggedIn) {
-        await TankStore.instance.pullFromCloud();
-      }
+      // Load local data first so the UI renders immediately
       await TankStore.instance.load();
+
+      // Show local data right away, then load extras in parallel
+      if (mounted) setState(() => _loading = false);
+
       await Future.wait([
         _loadAllTasks(),
         _loadAllInhabitantTypes(),
-        if (SupabaseService.isLoggedIn)
+        if (SupabaseService.isLoggedIn) ...[
+          // Cloud sync in background — don't block the UI
+          TankStore.instance.pullFromCloud().then((_) async {
+            await TankStore.instance.load();
+            if (mounted) {
+              await Future.wait([_loadAllTasks(), _loadAllInhabitantTypes()]);
+            }
+          }).catchError((_) {}),
           SupabaseService.countMyReactions().then((count) {
             if (mounted) setState(() => _communityReactionCount = count);
           }).catchError((_) {}),
+        ],
       ]);
     } catch (e) {
       _error = e.toString();
+      if (mounted) setState(() => _loading = false);
     }
-
-    if (!mounted) return;
-    setState(() => _loading = false);
   }
 
   Future<void> _loadAllTasks() async {
+    final tanks = TankStore.instance.tanks;
+    final futures = tanks.map((tank) async {
+      final logs = await TankStore.instance.logsFor(tank.id);
+      final tasks = await TankStore.instance.tasksForTank(tank.id);
+      return (id: tank.id, logs: logs, tasks: tasks);
+    });
+    final results = await Future.wait(futures);
     final result = <String, List<db.Task>>{};
     final noLogs = <String>{};
     DateTime? latestLog;
-    for (final tank in TankStore.instance.tanks) {
-      final logs = await TankStore.instance.logsFor(tank.id);
-      if (logs.isEmpty) {
-        noLogs.add(tank.id);
+    for (final r in results) {
+      if (r.logs.isEmpty) {
+        noLogs.add(r.id);
       } else {
-        final newest = logs.first.createdAt; // logs are newest-first
+        final newest = r.logs.first.createdAt;
         if (latestLog == null || newest.isAfter(latestLog)) latestLog = newest;
       }
-      final tasks = await TankStore.instance.tasksForTank(tank.id);
-      if (tasks.isNotEmpty) result[tank.id] = tasks;
+      if (r.tasks.isNotEmpty) result[r.id] = r.tasks;
     }
     if (mounted) setState(() { _tasksByTank = result; _lastLogDate = latestLog; _tanksWithoutLogs = noLogs; });
   }
@@ -4980,23 +5065,27 @@ class _TankListScreenState extends State<TankListScreen> {
   static const _typeEmoji = {'fish': '🐟', 'invertebrate': '🦐', 'coral': '🪸', 'polyp': '🪼', 'anemone': '🌺'};
 
   Future<void> _loadAllInhabitantTypes() async {
+    final tanks = TankStore.instance.tanks;
+    final results = await Future.wait(tanks.map((tank) async {
+      final inhs = await TankStore.instance.inhabitantsFor(tank.id);
+      final plts = await TankStore.instance.plantsFor(tank.id);
+      return (tank: tank, inhs: inhs, plts: plts);
+    }));
     final types = <String, Set<String>>{};
     final plants = <String, bool>{};
     final noInhab = <String>{};
     final hasWarnings = <String>{};
     final allNames = <String>{};
-    for (final tank in TankStore.instance.tanks) {
-      final inhs = await TankStore.instance.inhabitantsFor(tank.id);
-      final plts = await TankStore.instance.plantsFor(tank.id);
-      types[tank.id] = inhs.map((i) => i.type ?? 'fish').toSet();
-      plants[tank.id] = plts.isNotEmpty;
-      for (final i in inhs) { allNames.add(i.name.toLowerCase()); }
-      if (inhs.isEmpty) {
-        noInhab.add(tank.id);
+    for (final r in results) {
+      types[r.tank.id] = r.inhs.map((i) => i.type ?? 'fish').toSet();
+      plants[r.tank.id] = r.plts.isNotEmpty;
+      for (final i in r.inhs) { allNames.add(i.name.toLowerCase()); }
+      if (r.inhs.isEmpty) {
+        noInhab.add(r.tank.id);
       } else {
-        final mapped = inhs.map((i) => (name: i.name, type: i.type ?? 'fish', count: i.count)).toList();
-        if (_compatibilityWarnings(mapped, tank.waterType, plants: plts.map((p) => p.name).toList()).isNotEmpty) {
-          hasWarnings.add(tank.id);
+        final mapped = r.inhs.map((i) => (name: i.name, type: i.type ?? 'fish', count: i.count)).toList();
+        if (_compatibilityWarnings(mapped, r.tank.waterType, plants: r.plts.map((p) => p.name).toList()).isNotEmpty) {
+          hasWarnings.add(r.tank.id);
         }
       }
     }
@@ -7483,6 +7572,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
   List<String> _suggestions = [];
   bool _suggestionsLoading = false;
   String _alertLevel = 'none'; // 'none', 'yellow', 'red'
+  Set<String> _reminderSuggestions = {};
   bool _actionsExpanded = false;
   String _experience = 'beginner';
   String? _equipmentJson;
@@ -8710,7 +8800,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
                               child: Text(s, style: const TextStyle(fontSize: 13, color: Colors.black87, height: 1.4)),
                             ),
                             GestureDetector(
-                              onTap: () async {
+                              onTap: _reminderSuggestions.contains(s) ? null : () async {
                                 final tomorrow = DateTime.now().add(const Duration(days: 1));
                                 final dueDate = '${tomorrow.year}-${tomorrow.month.toString().padLeft(2, '0')}-${tomorrow.day.toString().padLeft(2, '0')}';
                                 await TankStore.instance.addTask(
@@ -8720,7 +8810,12 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
                                   priority: 'normal',
                                   source: 'ai',
                                 );
+                                final tasks = await TankStore.instance.tasksForTank(_tank.id);
                                 if (mounted) {
+                                  setState(() {
+                                    _tasks = tasks;
+                                    _reminderSuggestions.add(s);
+                                  });
                                   ScaffoldMessenger.of(context).showSnackBar(
                                     SnackBar(
                                       content: const Text('Reminder set for tomorrow'),
@@ -8733,7 +8828,11 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
                               },
                               child: Padding(
                                 padding: const EdgeInsets.only(left: 8),
-                                child: Icon(Icons.notification_add_outlined, size: 16, color: Colors.grey.shade400),
+                                child: Icon(
+                                  _reminderSuggestions.contains(s) ? Icons.notifications_active : Icons.notification_add_outlined,
+                                  size: 16,
+                                  color: _reminderSuggestions.contains(s) ? const Color(0xFFE65100) : Colors.grey.shade400,
+                                ),
                               ),
                             ),
                           ],
@@ -9770,17 +9869,28 @@ class _ChatSheetState extends State<_ChatSheet> {
           try {
             final inhData = data['new_inhabitant'] as Map<String, dynamic>;
             final inhList = (inhData['inhabitants'] as List?) ?? [];
+            final existingInhabs = (await TankStore.instance.inhabitantsFor(_selectedTank!.id))
+                .map((i) => i.name.toLowerCase())
+                .toSet();
+            int added = 0;
             for (final inh in inhList) {
               if (inh is Map && inh['name'] != null) {
-                await TankStore.instance.addInhabitant(
-                  tankId: _selectedTank!.id,
-                  name: inh['name'].toString(),
-                  type: inh['type']?.toString(),
-                  count: (inh['count'] as num?)?.toInt() ?? 1,
-                );
+                final name = inh['name'].toString();
+                if (!existingInhabs.contains(name.toLowerCase())) {
+                  await TankStore.instance.addInhabitant(
+                    tankId: _selectedTank!.id,
+                    name: name,
+                    type: inh['type']?.toString(),
+                    count: (inh['count'] as num?)?.toInt() ?? 1,
+                  );
+                  existingInhabs.add(name.toLowerCase());
+                  added++;
+                } else {
+                  debugPrint('[Chat/InhabAdd] skipped duplicate: $name');
+                }
               }
             }
-            if (inhList.isNotEmpty) {
+            if (added > 0) {
               TankStore.instance.invalidateSummary(_selectedTank!.id);
               await _loadTankData(_selectedTank!);
               if (mounted) widget.onLogsChanged();
@@ -9797,16 +9907,20 @@ class _ChatSheetState extends State<_ChatSheet> {
             final plantData = data['new_plants'] as Map<String, dynamic>;
             final plantList = (plantData['plants'] as List?) ?? [];
             debugPrint('[Chat/PlantAdd] plantList (${plantList.length}): $plantList');
+            final existingPlants = (await TankStore.instance.plantsFor(_selectedTank!.id))
+                .map((p) => p.name.toLowerCase())
+                .toSet();
             int added = 0;
             for (final plant in plantList) {
-              if (plant is String && plant.isNotEmpty) {
+              if (plant is String && plant.isNotEmpty && !existingPlants.contains(plant.toLowerCase())) {
                 await TankStore.instance.addPlant(
                   tankId: _selectedTank!.id,
                   name: plant,
                 );
+                existingPlants.add(plant.toLowerCase());
                 added++;
               } else {
-                debugPrint('[Chat/PlantAdd] skipped non-string plant: $plant (${plant.runtimeType})');
+                debugPrint('[Chat/PlantAdd] skipped (duplicate or invalid): $plant');
               }
             }
             debugPrint('[Chat/PlantAdd] saved $added plants to tank ${_selectedTank!.name}');
@@ -9838,6 +9952,32 @@ class _ChatSheetState extends State<_ChatSheet> {
               if (mounted) widget.onLogsChanged();
             }
           } catch (_) {}
+        }
+
+        // Remove plants if AI confirmed removal
+        if (data is Map && data['remove_plants'] != null && _selectedTank != null) {
+          try {
+            final remData = data['remove_plants'] as Map<String, dynamic>;
+            final remList = (remData['plants'] as List?) ?? [];
+            int removed = 0;
+            for (final plant in remList) {
+              if (plant is String && plant.isNotEmpty) {
+                await TankStore.instance.removePlant(
+                  tankId: _selectedTank!.id,
+                  name: plant,
+                );
+                removed++;
+              }
+            }
+            if (removed > 0) {
+              TankStore.instance.invalidateSummary(_selectedTank!.id);
+              await _loadTankData(_selectedTank!);
+              if (mounted) widget.onLogsChanged();
+              debugPrint('[Chat/PlantRemove] removed $removed plants');
+            }
+          } catch (e) {
+            debugPrint('[Chat/PlantRemove] ERROR: $e');
+          }
         }
 
         // Apply measurement correction if AI confirmed one
@@ -11260,7 +11400,7 @@ class _TankDetailScreenState extends State<TankDetailScreen> {
       ),
     );
 
-    await showDialog<void>(
+    final result = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Tap Water Profile'),
@@ -11290,12 +11430,7 @@ class _TankDetailScreenState extends State<TankDetailScreen> {
         ),
         actions: [
           TextButton(
-            onPressed: () async {
-              await TankStore.instance.saveTapWater(widget.tank.id, null);
-              final nav = Navigator.of(ctx);
-              if (mounted) setState(() => _tapWaterJson = null);
-              if (ctx.mounted) nav.pop();
-            },
+            onPressed: () => Navigator.of(ctx).pop('__clear__'),
             child: const Text('Clear', style: TextStyle(color: Colors.red)),
           ),
           TextButton(
@@ -11303,7 +11438,7 @@ class _TankDetailScreenState extends State<TankDetailScreen> {
             child: const Text('Cancel'),
           ),
           FilledButton(
-            onPressed: () async {
+            onPressed: () {
               final data = <String, dynamic>{};
               for (int i = 0; i < fields.length; i++) {
                 final v = controllers[i].text.trim();
@@ -11313,10 +11448,7 @@ class _TankDetailScreenState extends State<TankDetailScreen> {
                 }
               }
               final jsonStr = data.isNotEmpty ? jsonEncode(data) : null;
-              await TankStore.instance.saveTapWater(widget.tank.id, jsonStr);
-              final nav = Navigator.of(ctx);
-              if (mounted) setState(() => _tapWaterJson = jsonStr);
-              if (ctx.mounted) nav.pop();
+              Navigator.of(ctx).pop(jsonStr ?? '__clear__');
             },
             child: const Text('Save'),
           ),
@@ -11325,6 +11457,12 @@ class _TankDetailScreenState extends State<TankDetailScreen> {
     );
 
     for (final c in controllers) c.dispose();
+
+    if (result != null && mounted) {
+      final newJson = result == '__clear__' ? null : result;
+      await TankStore.instance.saveTapWater(widget.tank.id, newJson);
+      if (mounted) setState(() => _tapWaterJson = newJson);
+    }
   }
 
   Future<void> _openEdit() async {
@@ -11620,7 +11758,7 @@ class _TapWaterProfileScreenState extends State<TapWaterProfileScreen> {
       _fields.length,
       (i) => TextEditingController(text: existing[_keys[i]] != null ? '${existing[_keys[i]]}' : ''),
     );
-    await showDialog<void>(
+    final result = await showDialog<String?>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Tap Water Profile'),
@@ -11650,12 +11788,7 @@ class _TapWaterProfileScreenState extends State<TapWaterProfileScreen> {
         ),
         actions: [
           TextButton(
-            onPressed: () async {
-              await TankStore.instance.saveTapWater(widget.tank.id, null);
-              final nav = Navigator.of(ctx);
-              if (mounted) setState(() => _tapWaterJson = null);
-              if (ctx.mounted) nav.pop();
-            },
+            onPressed: () => Navigator.of(ctx).pop('__clear__'),
             child: const Text('Clear', style: TextStyle(color: Colors.red)),
           ),
           TextButton(
@@ -11663,7 +11796,7 @@ class _TapWaterProfileScreenState extends State<TapWaterProfileScreen> {
             child: const Text('Cancel'),
           ),
           FilledButton(
-            onPressed: () async {
+            onPressed: () {
               final data = <String, dynamic>{};
               for (int i = 0; i < _fields.length; i++) {
                 final v = controllers[i].text.trim();
@@ -11673,10 +11806,7 @@ class _TapWaterProfileScreenState extends State<TapWaterProfileScreen> {
                 }
               }
               final jsonStr = data.isNotEmpty ? jsonEncode(data) : null;
-              await TankStore.instance.saveTapWater(widget.tank.id, jsonStr);
-              final nav = Navigator.of(ctx);
-              if (mounted) setState(() => _tapWaterJson = jsonStr);
-              if (ctx.mounted) nav.pop();
+              Navigator.of(ctx).pop(jsonStr ?? '__clear__');
             },
             child: const Text('Save'),
           ),
@@ -11684,6 +11814,11 @@ class _TapWaterProfileScreenState extends State<TapWaterProfileScreen> {
       ),
     );
     for (final c in controllers) c.dispose();
+    if (result != null && mounted) {
+      final newJson = result == '__clear__' ? null : result;
+      await TankStore.instance.saveTapWater(widget.tank.id, newJson);
+      if (mounted) setState(() => _tapWaterJson = newJson);
+    }
   }
 
   @override
@@ -11800,31 +11935,10 @@ class _InhabitantsScreenState extends State<InhabitantsScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
                   child: Text(
                     '${widget.tank.name} — Inhabitants',
                     style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: _cDark),
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-                  child: OutlinedButton.icon(
-                    icon: const Icon(Icons.edit, size: 18),
-                    label: const Text('Edit Inhabitants'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: _cDark,
-                      side: const BorderSide(color: _cMid),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 24),
-                    ),
-                    onPressed: () async {
-                      await Navigator.of(context).push(MaterialPageRoute(
-                        builder: (_) => EditInhabitantsScreen(
-                          tank: widget.tank,
-                          onSaved: _load,
-                        ),
-                      ));
-                    },
                   ),
                 ),
                 Expanded(
@@ -11833,7 +11947,7 @@ class _InhabitantsScreenState extends State<InhabitantsScreen> {
                   child: Padding(
                     padding: const EdgeInsets.all(32),
                     child: Column(
-                      mainAxisSize: MainAxisSize.min,
+                      mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         const Text('No inhabitants logged yet.', style: TextStyle(color: Colors.grey)),
                         const SizedBox(height: 20),
@@ -12108,6 +12222,129 @@ String? _matchPlantCatalogue(String input) {
   return null;
 }
 
+// ── CSV Column Mapping screen (used during onboarding) ───────────────────────
+
+class _CsvMappingScreen extends StatefulWidget {
+  final List<String> headers;
+  final List<List<dynamic>> rows;
+  final Map<int, String?> initialMapping;
+  final int? dateColIndex;
+
+  const _CsvMappingScreen({
+    required this.headers,
+    required this.rows,
+    required this.initialMapping,
+    this.dateColIndex,
+  });
+
+  @override
+  State<_CsvMappingScreen> createState() => _CsvMappingScreenState();
+}
+
+class _CsvMappingScreenState extends State<_CsvMappingScreen> {
+  late Map<int, String?> _mapping;
+  late int? _dateColIndex;
+
+  @override
+  void initState() {
+    super.initState();
+    _mapping = Map.of(widget.initialMapping);
+    _dateColIndex = widget.dateColIndex;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final previewRows = widget.rows.take(3).toList();
+    final mappedCount = _mapping.values.where((v) => v != null).length;
+    return Scaffold(
+      backgroundColor: Colors.white,
+      appBar: AppBar(
+        title: const Text('Map Columns', style: TextStyle(color: _cDark, fontWeight: FontWeight.bold, fontSize: 17)),
+        backgroundColor: Colors.white,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        surfaceTintColor: Colors.white,
+        iconTheme: const IconThemeData(color: _cDark),
+      ),
+      body: Column(
+        children: [
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                Text(
+                  '${widget.rows.length} rows found. Map your columns to parameters:',
+                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 12),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Row(
+                    children: [
+                      Expanded(flex: 2, child: Text('CSV COLUMN', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.grey.shade500, letterSpacing: 0.8))),
+                      const SizedBox(width: 24),
+                      Expanded(flex: 2, child: Text('MAP TO', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.grey.shade500, letterSpacing: 0.8))),
+                    ],
+                  ),
+                ),
+                const Divider(height: 1),
+                _MappingRow(
+                  header: _dateColIndex != null ? widget.headers[_dateColIndex!] : '(no date column)',
+                  assignedValue: _dateColIndex != null ? 'Date' : null,
+                  isDate: true,
+                  onChanged: null,
+                ),
+                const Divider(height: 1),
+                ...List.generate(widget.headers.length, (i) {
+                  if (i == _dateColIndex) return const SizedBox.shrink();
+                  return Column(
+                    children: [
+                      _MappingRow(
+                        header: widget.headers[i],
+                        assignedValue: _mapping[i],
+                        isDate: false,
+                        preview: previewRows.map((r) => i < r.length ? r[i].toString() : '').join(', '),
+                        onChanged: (val) => setState(() => _mapping[i] = val),
+                      ),
+                      const Divider(height: 1),
+                    ],
+                  );
+                }),
+              ],
+            ),
+          ),
+          Container(
+            padding: EdgeInsets.fromLTRB(16, 12, 16, 12 + MediaQuery.of(context).viewPadding.bottom),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              border: Border(top: BorderSide(color: Colors.grey.shade200)),
+            ),
+            child: SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                onPressed: mappedCount == 0 ? null : () {
+                  Navigator.of(context).pop({
+                    'mapping': _mapping,
+                    'dateCol': _dateColIndex,
+                  });
+                },
+                style: FilledButton.styleFrom(
+                  backgroundColor: _cDark,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+                child: Text(mappedCount == 0
+                    ? 'Map at least one column'
+                    : 'Confirm ${widget.rows.length} Rows'),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 // ── CSV Import screen ────────────────────────────────────────────────────────
 
 class _CsvImportScreen extends StatefulWidget {
@@ -12133,6 +12370,65 @@ class _CsvImportScreenState extends State<_CsvImportScreen> {
     'temp', 'salinity', 'phosphate', 'calcium', 'magnesium',
     'potassium', 'tds', 'alkalinity', 'copper', 'iron',
   ];
+
+  /// Scan rows to find the actual header row. Returns the index of the first
+  /// row where at least 2 cells match known parameter names or "date".
+  /// Falls back to 0 if no row scores high enough.
+  static int _findHeaderRow(List<List<dynamic>> rows) {
+    const dateWords = {'date', 'timestamp', 'time', 'day', 'logged'};
+    // Strict aliases — only unambiguous names that won't false-positive on data
+    const strictAliases = {
+      'ph', 'p.h.', 'ph level',
+      'nh3', 'nh4', 'ammonia', 'nh3/nh4', 'amm',
+      'no2', 'nitrite', 'nite',
+      'no3', 'nitrate', 'nate',
+      'gh', 'general hardness',
+      'kh', 'carbonate hardness',
+      'temp', 'temperature', 'water temp',
+      'sal', 'salinity',
+      'po4', 'phosphate', 'phos',
+      'calcium', 'ca',
+      'magnesium', 'mg',
+      'potassium',
+      'tds',
+      'alk', 'alkalinity',
+      'copper', 'cu',
+      'iron', 'fe',
+    };
+    int bestRow = 0;
+    int bestScore = 0;
+    for (int r = 0; r < rows.length && r < 30; r++) {
+      final row = rows[r];
+      // Skip rows where most cells are numbers (data rows, not headers)
+      int numericCells = 0;
+      for (final cell in row) {
+        if (num.tryParse(cell.toString().trim().replaceAll(RegExp(r'[,\s]'), '')) != null) {
+          numericCells++;
+        }
+      }
+      if (row.length > 2 && numericCells > row.length * 0.6) continue;
+
+      int dateMatches = 0;
+      int paramMatches = 0;
+      for (final cell in row) {
+        final h = cell.toString().replaceAll(RegExp(r'\s*\(.*?\)\s*'), '').trim().toLowerCase();
+        if (h.isEmpty) continue;
+        if (dateWords.contains(h) || h.contains('date')) {
+          dateMatches++;
+        } else if (strictAliases.contains(h)) {
+          paramMatches++;
+        }
+      }
+      final score = dateMatches + paramMatches;
+      // Need a date column + at least 1 param, or 3+ params
+      if ((dateMatches >= 1 && paramMatches >= 1 && score > bestScore) ||
+          (paramMatches >= 3 && score > bestScore)) {
+        bestRow = r;
+        bestScore = score;
+      }
+    }
+    return bestRow;
+  }
 
   static const _headerAliases = {
     'ph': 'ph', 'p.h.': 'ph', 'ph level': 'ph',
@@ -12199,11 +12495,18 @@ class _CsvImportScreenState extends State<_CsvImportScreen> {
         throw Exception('No file data available');
       }
       debugPrint('[CSV] content length: ${content.length}');
-      final rows = const CsvToListConverter(eol: '\n').convert(content);
-      if (rows.length < 2) {
+      final allRows = const CsvToListConverter(eol: '\n').convert(content);
+      if (allRows.length < 2) {
         setState(() => _error = 'CSV must have a header row and at least one data row.');
         return;
       }
+      final headerIdx = _findHeaderRow(allRows);
+      final rows = allRows.sublist(headerIdx);
+      if (rows.length < 2) {
+        setState(() => _error = 'Could not find enough data rows after the header.');
+        return;
+      }
+      debugPrint('[CSV] detected header at row $headerIdx');
       final headers = rows.first.map((e) => e.toString().trim()).toList();
       final mapping = <int, String?>{};
       int? dateCol;
@@ -12211,7 +12514,7 @@ class _CsvImportScreenState extends State<_CsvImportScreen> {
         final h = headers[i].toLowerCase().replaceAll(RegExp(r'\s*\(.*?\)\s*'), '').trim();
         if (h == 'date' || h == 'timestamp' || h == 'time' ||
             h.contains('date') || h == 'day' || h == 'logged') {
-          dateCol ??= i; // take first date-like column
+          dateCol ??= i;
         } else {
           mapping[i] = _matchHeader(h);
         }

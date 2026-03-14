@@ -818,6 +818,20 @@ class TankStore {
     });
   }
 
+  Future<void> removePlant({
+    required String tankId,
+    required String name,
+  }) async {
+    await _db.deletePlantByName(tankId, name);
+    _cloudSync(() async {
+      final all = await _db.plantsForTank(tankId);
+      await SupabaseService.replacePlants(
+        tankId,
+        all.map((p) => p.name).toList(),
+      );
+    });
+  }
+
   Future<void> renamePlant({
     required String tankId,
     required String oldName,

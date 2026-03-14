@@ -1183,6 +1183,8 @@ Your full capabilities include:
 - Logging water parameters, observations, actions, and notes
 - Setting aquarium-related reminders and tasks (water changes, testing schedules, dosing, etc.)
 - Creating new tank profiles when the user wants to add a tank
+- Updating the user's tap water profile when they share tap water test results or parameters (e.g. "my tap water pH is 7.6", "no ammonia in my tap", "tap GH is 10")
+- Adding and removing plants and inhabitants from the tank profile
 - Answering aquarium questions and giving advice
 - Summarizing tank health from recent journal entries
 Do NOT tell the user you cannot do any of the above. These are all things you can and should do.
@@ -1361,7 +1363,7 @@ If a "Tap water profile" is provided in the tank context, you MUST factor it int
 - If tap water has chlorine or chloramine, always remind about water conditioner when discussing water changes.
 - When the user asks about adjusting any parameter, compare their tank value to their tap water value and explain what a water change will actually do (move it toward tap, not fix it).
 - If the user's tank parameter is already close to their tap water value, explain that water changes alone won't improve it further — they need additives, buffers, or RO water.
-- If no tap water profile is present and the conversation involves water chemistry, gently suggest the user test their tap water and add the results on the tank details page so advice can be more accurate.
+- If no tap water profile is present and the conversation involves water chemistry, gently suggest the user test their tap water and share the results in chat — you can update their tap water profile directly.
 
 CONTINUOUS LEARNING:
 When a tank health profile is provided in the context, use it to give proactive, personalized guidance:
@@ -1560,6 +1562,17 @@ Rules:
 - If the user listed plants they have (e.g. "I have java fern and anubias") and the assistant confirmed adding them, include those plants.
 - If the conversation is just a question or clarification with no clear plant to add, return {"plants": []}"""
 
+
+_REMOVE_PLANT_EXTRACT_PROMPT = """Based on this conversation, extract the plant(s) the user wants to REMOVE from their tank profile.
+
+Return ONLY valid JSON — no markdown, no explanation:
+{"plants": ["Java Fern", "Anubias Nana"]}
+
+Rules:
+- Use the plant name as closely as the user mentioned it. Capitalize properly using Title Case.
+- Include plants the user explicitly asked to remove, delete, or get rid of.
+- If the user says "remove duplicates" or "remove the duplicate plants/entries", identify which plants appear multiple times in the tank profile and return ALL instances of those plant names — the app will handle deduplication.
+- If the conversation is just a question or clarification with no clear plant to remove, return {"plants": []}"""
 
 _RENAME_PLANT_EXTRACT_PROMPT = """Based on this conversation, extract the plant name correction the user requested.
 
@@ -2355,7 +2368,13 @@ def chat_tank(request: Request, req: ChatRequest, user_id: str = Depends(_get_us
         ])
         history_has_plant_offer = _history_has_plant_add_offer(req.history or [])[0]
 
-        should_extract_plants = (
+        # Suppress plant add when user is asking to remove/delete plants
+        user_removing_plants = bool(re.search(
+            r"\b(remove|delete|take out|get rid of|drop|clean up)\b.{0,50}\b(plant|plants|duplicate|duplicates|entry|entries)\b",
+            req.message, re.IGNORECASE,
+        ))
+
+        should_extract_plants = not user_removing_plants and (
             (_is_affirmation(req.message) and history_has_plant_offer)
             or reply_confirms_plant_added
             or user_explicit_plant_add
@@ -2386,6 +2405,51 @@ def chat_tank(request: Request, req: ChatRequest, user_id: str = Depends(_get_us
                     print(f"[PlantExtract] extracted plants: {new_plants}")
             except Exception as e:
                 print(f"[Chat/PlantExtract] error: {e}")
+
+        # Extract plant removal — triggered when user asks to remove/delete plants
+        remove_plants = None
+
+        reply_confirms_plant_removed = any(k in reply_lower for k in [
+            "removed", "i've removed", "i have removed", "deleted",
+            "i've deleted", "i have deleted", "taken out",
+            "cleaned up", "deduplicated", "removed the duplicate",
+            "removed duplicate",
+        ]) and any(k in reply_lower for k in ["plant", "your plant list", "entry", "entries", "duplicate"])
+
+        user_requests_plant_removal = bool(re.search(
+            r"\b(remove|delete|take out|get rid of|drop|clean up)\b.{0,50}\b(plant|plants|duplicate|duplicates|entry|entries)\b",
+            req.message, re.IGNORECASE,
+        ))
+
+        should_extract_plant_removal = (
+            reply_confirms_plant_removed
+            or user_requests_plant_removal
+        ) and plants  # only if there are existing plants
+
+        if should_extract_plant_removal:
+            convo = "\n".join(
+                f"{m['role'].upper()}: {m['content']}"
+                for m in (req.history or [])
+                if m.get("role") in ("user", "assistant")
+            )
+            convo += f"\nUSER: {req.message}\nASSISTANT: {reply}"
+            convo += f"\n\nCurrent plants in tank: {', '.join(plants)}"
+            try:
+                rem_response = _chat(client,
+                    model="claude-haiku-4-5",
+                    max_tokens=256,
+                    system=_REMOVE_PLANT_EXTRACT_PROMPT,
+                    messages=[{"role": "user", "content": convo}],
+                )
+                raw = rem_response.content[0].text.strip()
+                raw = re.sub(r"^```(?:json)?\s*", "", raw)
+                raw = re.sub(r"\s*```$", "", raw).strip()
+                parsed = json.loads(raw)
+                if parsed.get("plants"):
+                    remove_plants = parsed
+                    print(f"[PlantRemove] extracted: {remove_plants}")
+            except Exception as e:
+                print(f"[Chat/PlantRemove] error: {e}")
 
         # Extract plant rename — triggered when AI confirms a name correction
         rename_plant = None
@@ -2543,6 +2607,7 @@ def chat_tank(request: Request, req: ChatRequest, user_id: str = Depends(_get_us
             "new_inhabitant": new_inhabitant,
             "remove_inhabitants": remove_inhabitants,
             "new_plants": new_plants,
+            "remove_plants": remove_plants,
             "rename_plant": rename_plant,
             "measurement_correction": measurement_correction,
             "tap_water_update": tap_water_update,

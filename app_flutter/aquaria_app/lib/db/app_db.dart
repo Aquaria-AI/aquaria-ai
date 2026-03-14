@@ -306,6 +306,11 @@ class AppDb extends _$AppDb {
   Future<void> insertPlant(PlantsCompanion entry) =>
       into(plants).insert(entry);
 
+  Future<int> deletePlantByName(String tankId, String name) {
+    return (delete(plants)..where((r) =>
+        r.tankId.equals(tankId) & r.name.equals(name))).go();
+  }
+
   Future<int> renamePlant(String tankId, String oldName, String newName) {
     return (update(plants)..where((r) =>
         r.tankId.equals(tankId) & r.name.equals(oldName)))
