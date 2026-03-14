@@ -5335,6 +5335,12 @@ class _TankListScreenState extends State<TankListScreen> {
                                               );
                                               _refresh();
                                               break;
+                                            case 'tap_water':
+                                              await Navigator.of(context).push(
+                                                MaterialPageRoute(builder: (_) => TapWaterProfileScreen(tank: t)),
+                                              );
+                                              _refresh();
+                                              break;
                                             case 'archive':
                                               await _archiveTank(t.id);
                                               break;
@@ -5344,6 +5350,10 @@ class _TankListScreenState extends State<TankListScreen> {
                                           PopupMenuItem<String>(
                                             value: 'edit',
                                             child: Text('Tank Details'),
+                                          ),
+                                          PopupMenuItem<String>(
+                                            value: 'tap_water',
+                                            child: Text('Tap Water Profile'),
                                           ),
                                           PopupMenuItem<String>(
                                             value: 'archive',
@@ -9086,6 +9096,9 @@ class _ChatSheetState extends State<_ChatSheet> {
             if (i == logEntries.length - 1 && mounted) setState(() => _logDate = logDate);
           }
           if (mounted) widget.onLogsChanged();
+          // Refresh chat's own journal data so calculated params
+          // (magnesium_calc, ca_mg_ratio) are available in context
+          if (mounted) await _loadTankData(tankSnapshot);
 
           // If tap water, also update the tap water profile
           if (isTapWater) {
@@ -10769,8 +10782,9 @@ class _TankDetailScreenState extends State<TankDetailScreen> {
           TextButton(
             onPressed: () async {
               await TankStore.instance.saveTapWater(widget.tank.id, null);
-              if (ctx.mounted) Navigator.of(ctx).pop();
+              final nav = Navigator.of(ctx);
               if (mounted) setState(() => _tapWaterJson = null);
+              if (ctx.mounted) nav.pop();
             },
             child: const Text('Clear', style: TextStyle(color: Colors.red)),
           ),
@@ -10790,8 +10804,9 @@ class _TankDetailScreenState extends State<TankDetailScreen> {
               }
               final jsonStr = data.isNotEmpty ? jsonEncode(data) : null;
               await TankStore.instance.saveTapWater(widget.tank.id, jsonStr);
-              if (ctx.mounted) Navigator.of(ctx).pop();
+              final nav = Navigator.of(ctx);
               if (mounted) setState(() => _tapWaterJson = jsonStr);
+              if (ctx.mounted) nav.pop();
             },
             child: const Text('Save'),
           ),
@@ -11127,8 +11142,9 @@ class _TapWaterProfileScreenState extends State<TapWaterProfileScreen> {
           TextButton(
             onPressed: () async {
               await TankStore.instance.saveTapWater(widget.tank.id, null);
-              if (ctx.mounted) Navigator.of(ctx).pop();
+              final nav = Navigator.of(ctx);
               if (mounted) setState(() => _tapWaterJson = null);
+              if (ctx.mounted) nav.pop();
             },
             child: const Text('Clear', style: TextStyle(color: Colors.red)),
           ),
@@ -11148,8 +11164,9 @@ class _TapWaterProfileScreenState extends State<TapWaterProfileScreen> {
               }
               final jsonStr = data.isNotEmpty ? jsonEncode(data) : null;
               await TankStore.instance.saveTapWater(widget.tank.id, jsonStr);
-              if (ctx.mounted) Navigator.of(ctx).pop();
+              final nav = Navigator.of(ctx);
               if (mounted) setState(() => _tapWaterJson = jsonStr);
+              if (ctx.mounted) nav.pop();
             },
             child: const Text('Save'),
           ),

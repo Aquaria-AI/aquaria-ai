@@ -625,6 +625,9 @@ _LOG_SYSTEM_PROMPT = """You parse aquarium tank journal entries into three categ
 RELEVANCE RULE — apply before anything else:
 Only log content that is directly related to the aquarium hobby: water parameters, fish/plant/coral/invertebrate health and behavior, tank equipment, feeding, maintenance, dosing, or scheduling aquarium-related tasks. If the user's message has nothing to do with their aquarium (e.g. personal reminders, jokes, unrelated life events), return all-empty output immediately.
 
+QUESTIONS ARE NEVER LOGGABLE — this overrides all other rules:
+If the user's message (or any sentence within it) is a question — asking for advice, asking about a product, wondering about a cause, requesting information, or exploring hypotheticals — do NOT log ANY part of it as a measurement, note, or action. Numbers mentioned in questions are hypothetical, not actual readings. For example, "what would my Ca:Mg ratio be if I change GH to 10?" must NOT log GH=10 as a measurement. Questions are conversation with the assistant, not journal data. Only log STATEMENTS of fact: things the user observed, measured, or did. When a message mixes statements and questions, log only the statement parts and discard the questions entirely — including any numbers within the question.
+
 CATEGORY RULES — read carefully:
 
 "actions" — Things the user physically did to the tank. Must involve the user performing an activity.
@@ -632,6 +635,7 @@ CATEGORY RULES — read carefully:
   When NO quantity is given, still log the action in short form: "did a water change" → "Water change", "cleaned the filter" → "Cleaned filter", "moved plants" → "Moved plants", "fed fish" → "Fed fish", "trimmed plants" → "Trimmed plants".
   YES: "5ml Prime", "20% water change", "Water change", "Cleaned filter", "Fed fish", "Trimmed plants", "Moved plants", "Topped off with RO water"
   NO: general condition statements, descriptions of what the tank looks/smells like, things the user noticed
+  NO: questions — if the user is ASKING whether they did something, asking about a product, or phrasing something as a question (contains "?", starts with "do", "does", "could", "can", "would", "should", "is", "are", "how", "why", "what"), it is NOT an action. Questions are conversation, not loggable data.
 
 "notes" — Anything the user noticed: visual, olfactory, behavioral, or general condition. Includes deaths, smells, appearances, and qualitative trends described. When a qualitative statement is made with a number, record the qualitative part as an observation and the number as a measurement (see below).
 
@@ -642,7 +646,11 @@ CATEGORY RULES — read carefully:
   YES: "GH went crazy", "GH went wild", "pH spiked", "ammonia shot up to" — phrases that combine a qualitative description AND a number: put the qualitative part in notes AND extract the number into measurements
   NO: things the user did (those go in actions).
   NO: number measurements (those go in measurements).
-  NO: questions, requests for advice, or anything phrased as a question directed at the assistant — never put a question into notes.
+  NO: questions, requests for advice, or anything phrased as a question directed at the assistant — NEVER put a question into notes or actions. If the text contains "?", or starts with/contains question words (how, why, what, could, can, would, should, do, does, is, are), it is a question — not a note. Examples of what must NOT be logged:
+    "how much potassium can fluval stratum leach?" → NOT a note (it's a question)
+    "could potassium precipitate out of the water column?" → NOT a note (it's a question)
+    "do fertilizer tabs contain potassium too?" → NOT an action (it's a question)
+    "I was dosing potassium more than necessary. could it sit in the gravel?" → The first sentence is a note ("Was dosing potassium more than necessary"). The question part must be dropped.
 
 "measurements" — Numeric values for known parameters. A number must be explicitly present in the text.
   If a measurement references a past event without a specific date (e.g. "previously raised ca:mg to 4:1", "last week GH was 10"), still extract the measurement. If a relative time is given (e.g. "last week"), compute the date as YYYY-MM-DD relative to today. If no time reference is given but the phrasing implies a past measurement (e.g. "previously", "before"), set the date to null — the chat assistant will ask the user for the date.
@@ -1278,12 +1286,17 @@ PLANTED TANK DIAGNOSTICS — apply whenever the tank is planted or has live plan
 
 GH / Calcium / Magnesium relationship:
 - GH measures TOTAL calcium + magnesium hardness combined. 1 dGH ≈ 17.85 ppm CaCO₃.
-- Magnesium is NOT directly testable with standard freshwater kits. It is calculated from GH and Ca: Mg (ppm) ≈ (GH in ppm CaCO₃ - Ca in ppm × 2.5) / 4.12. The app calculates Mg automatically when both GH and Ca are logged for the same day.
+- Magnesium is NOT directly testable with standard freshwater kits. It is calculated from GH and Ca. The app calculates Mg and the Ca:Mg ratio automatically when both GH and Ca are logged for the same day.
 - NEVER suggest "testing magnesium" or "retesting Mg". Instead, advise the user to test GH and Ca at the same time and log both results — the app will calculate Mg and the Ca:Mg ratio automatically.
-- If the calculated Mg is zero or negative, flag a potential testing inconsistency.
-- CRITICAL: Always evaluate Ca and Mg using the Ca:Mg RATIO, never raw numbers alone.
+- The app computes Mg and the Ca:Mg ratio precisely and stores them in the journal as "magnesium_calc" and "ca_mg_ratio". When these values are present in the journal entries, ALWAYS use them — do not recalculate.
+- If the user just logged new GH and Ca values in this conversation and the calculated ratio is not yet in the journal, you may estimate it using this formula — but you MUST show your work step by step:
+  1. GH in ppm = GH (dGH) × 17.85
+  2. Mg (ppm) = (GH in ppm − Ca × 2.5) ÷ 4.12
+  3. Ratio = Ca ÷ Mg
+  Always show the intermediate numbers so the user can verify. Acknowledge that the app will calculate the exact value.
+- Use the Ca:Mg RATIO from the journal to evaluate, never raw numbers alone.
   - Ratio 3:1–4:1 → GOOD. Both Ca and Mg are in range. Do NOT flag either as low or high.
-  - Ratio ABOVE 4:1 → Mg is LOW. Always flag this and recommend a magnesium supplement (e.g. Seachem Equilibrium, Epsom salt) for optimal plant health. Example: Ca 70, GH 11 dGH → Mg ≈ 5 ppm → ratio 13:1 — Mg is very low, recommend supplementation.
+  - Ratio ABOVE 4:1 → Mg is LOW. Flag this and recommend a magnesium supplement (e.g. Seachem Equilibrium, Epsom salt) for optimal plant health.
   - Ratio BELOW 3:1 → Ca is LOW relative to Mg. Flag and suggest calcium supplementation.
   - If Mg is zero or negative, flag a potential testing inconsistency.
 
