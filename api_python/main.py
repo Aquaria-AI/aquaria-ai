@@ -1137,11 +1137,25 @@ def tank_suggestions(request: Request, req: SummaryRequest, user_id: str = Depen
         raw = response.content[0].text.strip()
         suggestions = _json.loads(raw)
         if isinstance(suggestions, list):
-            return {"suggestions": [str(s) for s in suggestions[:4]]}
-        return {"suggestions": []}
+            suggestion_list = [str(s) for s in suggestions[:4]]
+            # Determine alert level from suggestion content
+            combined = " ".join(suggestion_list).lower()
+            _red_keywords = ["ammonia", "nitrite", "toxic", "lethal", "emergency", "water change now",
+                             "danger", "fish are at risk", "act now", "urgent"]
+            _yellow_keywords = ["water change", "high nitrate", "low ph", "high ph", "stale",
+                                "hasn't been tested", "overdue", "climbing", "dropping", "drift",
+                                "concern", "watch", "attention", "soon", "out of range", "elevated"]
+            if any(k in combined for k in _red_keywords):
+                alert_level = "red"
+            elif any(k in combined for k in _yellow_keywords):
+                alert_level = "yellow"
+            else:
+                alert_level = "none"
+            return {"suggestions": suggestion_list, "alert_level": alert_level}
+        return {"suggestions": [], "alert_level": "none"}
     except Exception as e:
         print(f"[Suggestions] error: {e}")
-        return {"suggestions": []}
+        return {"suggestions": [], "alert_level": "none"}
 
 
 _CHAT_SYSTEM_PROMPT = """You are Ariel, a knowledgeable aquarium assistant embedded in a tank journal app. Your name is Ariel — use it naturally when introducing yourself, but do not repeat it unnecessarily in every reply. The user can log tank events (measurements, actions, observations) by typing in the chat, and you respond conversationally.
@@ -1490,14 +1504,21 @@ Rules:
 
 _REMOVE_INHABITANT_EXTRACT_PROMPT = """Based on this conversation, extract the inhabitant(s) the user wants to REMOVE from their tank profile.
 
+This includes explicit removals AND corrections/swaps. For example:
+- "remove the guppies" → remove guppies
+- "they weren't neon tetras, they were glofish danios" → remove neon tetras (the NEW species is handled separately)
+- "I meant mollies not guppies" → remove guppies
+- "replace the tetras with barbs" → remove tetras
+- "actually those are danios" → remove whatever the previous species was that's being corrected
+
 Return ONLY valid JSON — no markdown, no explanation:
 {"inhabitants": [{"name": "Guppy", "count": 2}]}
 
 Rules:
 - name: use the name as closely as the user mentioned it. Capitalize properly.
 - count: integer. The number to remove. If the user says "remove guppies" without a count, use -1 to mean "remove all".
-- Only include inhabitants the user explicitly asked to remove or delete.
-- If no removal was requested, return {"inhabitants": []}"""
+- Only include the OLD/incorrect inhabitants being removed or replaced — not the new ones being added.
+- If no removal or correction was requested, return {"inhabitants": []}"""
 
 
 _NEW_TANK_EXTRACT_PROMPT = """Based on this conversation, extract the new tank details into JSON.
@@ -2250,6 +2271,8 @@ def chat_tank(request: Request, req: ChatRequest, user_id: str = Depends(_get_us
             "removed", "i've removed", "i have removed", "taken out",
             "deleted", "i've deleted", "i have deleted",
             "done", "all set", "taken care",
+            "swapped", "replaced", "updated", "changed",
+            "i've swapped", "i've replaced", "i've updated", "i've changed",
         ])
         user_requests_removal = bool(re.search(
             r"\b(remove|delete|take out|get rid of|drop)\b.{0,50}(from|off|out)",
@@ -2258,9 +2281,24 @@ def chat_tank(request: Request, req: ChatRequest, user_id: str = Depends(_get_us
             r"\b(remove|delete|take out|get rid of|drop)\b.{0,30}\b(guppy|guppies|fish|coral|shrimp|snail|tetra|neon|\w+)\b",
             req.message, re.IGNORECASE,
         ))
+        # Detect correction/swap requests ("they weren't X, they were Y", "I meant Y not X", "replace X with Y")
+        user_requests_correction = bool(re.search(
+            r"\b(weren't|weren't|were not|wasn't|wasn't|was not|not .{0,20}, (they|it|actually)|mistake|meant|actually|replace .{0,30} with|swap .{0,30} (for|with)|instead of|wrong|correction)\b",
+            req.message, re.IGNORECASE,
+        ))
 
-        should_extract_removal = (reply_confirms_removal or user_requests_removal) and any(
-            k in (req.message.lower() + " " + reply_lower) for k in ["remove", "delete", "take out", "get rid", "drop"]
+        should_extract_removal = (
+            (reply_confirms_removal or user_requests_removal) and any(
+                k in (req.message.lower() + " " + reply_lower) for k in ["remove", "delete", "take out", "get rid", "drop"]
+            )
+        ) or (
+            (user_requests_correction or reply_confirms_removal) and any(
+                k in (req.message.lower() + " " + reply_lower) for k in [
+                    "swap", "replace", "instead", "weren't", "weren't", "were not",
+                    "wasn't", "wasn't", "was not", "mistake", "meant", "actually",
+                    "not ", "wrong", "correction", "changed", "updated",
+                ]
+            )
         )
         print(f"[InhabitantRemove] triggers: reply_confirms={reply_confirms_removal}, user_requests={user_requests_removal} → should_extract={should_extract_removal}")
 
@@ -2476,7 +2514,8 @@ def chat_tank(request: Request, req: ChatRequest, user_id: str = Depends(_get_us
                         "(e.g. 'no ammonia in my tap' means ammonia=0, 'it doesn't have nitrates' means nitrate=0). "
                         "Return ONLY a JSON object with parameter keys and numeric values. "
                         "Use these exact keys where applicable: ph, gh, kh, ammonia, nitrite, nitrate, "
-                        "phosphate, silicate, tds, chlorine, chloramine, copper, iron, temp. "
+                        "potassium, calcium, magnesium, phosphate, silicate, tds, chlorine, chloramine, copper, iron, temp. "
+                        "The user may refer to potassium as 'K', calcium as 'Ca', magnesium as 'Mg'. "
                         "For GH/KH, use dGH/dKH numeric values. For temp, use Fahrenheit. "
                         "If no tap water parameters can be extracted, return an empty object: {}\n"
                         "Examples:\n"

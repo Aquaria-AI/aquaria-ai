@@ -149,7 +149,9 @@ class _AquariaFooter extends StatelessWidget {
   /// Pass [MediaQuery.of(context).padding.bottom] when not inside a Scaffold
   /// that already handles safe area (e.g. inside a modal sheet).
   final double extraBottomPadding;
-  const _AquariaFooter({this.onAiTap, this.extraBottomPadding = 0});
+  /// Alert level: 'none', 'yellow', or 'red'
+  final String alertLevel;
+  const _AquariaFooter({this.onAiTap, this.extraBottomPadding = 0, this.alertLevel = 'none'});
 
   static const _buttonSize = 68.0;
 
@@ -166,16 +168,44 @@ class _AquariaFooter extends StatelessWidget {
           child: SizedBox(
             width: _buttonSize,
             height: _buttonSize,
-            child: Material(
-              color: const Color(0xFF1FA2A8),
-              shape: const CircleBorder(),
-              elevation: 3,
-              shadowColor: Colors.black38,
-              child: InkWell(
-                customBorder: const CircleBorder(),
-                onTap: onAiTap,
-                child: const Icon(Icons.auto_awesome, color: Colors.white, size: 32),
-              ),
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Material(
+                  color: const Color(0xFF1FA2A8),
+                  shape: const CircleBorder(),
+                  elevation: 3,
+                  shadowColor: Colors.black38,
+                  child: InkWell(
+                    customBorder: const CircleBorder(),
+                    onTap: onAiTap,
+                    child: const SizedBox(
+                      width: _buttonSize,
+                      height: _buttonSize,
+                      child: Icon(Icons.auto_awesome, color: Colors.white, size: 32),
+                    ),
+                  ),
+                ),
+                if (alertLevel != 'none')
+                  Positioned(
+                    top: -2,
+                    right: -2,
+                    child: Container(
+                      width: 20,
+                      height: 20,
+                      decoration: BoxDecoration(
+                        color: alertLevel == 'red' ? Colors.red : Colors.orange,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 2),
+                      ),
+                      child: Icon(
+                        Icons.priority_high,
+                        size: 12,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
         ),
@@ -3881,7 +3911,9 @@ class _ObWaterQualityPageState extends State<_ObWaterQualityPage>
               const logToTapKey = {
                 'pH': 'ph', 'GH': 'gh', 'KH': 'kh', 'ammonia': 'ammonia',
                 'nitrite': 'nitrite', 'nitrate': 'nitrate', 'TDS': 'tds', 'tds': 'tds',
-                'calcium': 'calcium', 'Calcium': 'calcium', 'potassium': 'potassium', 'Potassium': 'potassium',
+                'calcium': 'calcium', 'Calcium': 'calcium', 'Ca': 'calcium',
+                'potassium': 'potassium', 'Potassium': 'potassium', 'K': 'potassium',
+                'magnesium': 'magnesium', 'Magnesium': 'magnesium', 'Mg': 'magnesium',
               };
               final tapData = <String, dynamic>{};
               for (final entry in logEntries) {
@@ -7450,6 +7482,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
   bool _summaryExpanded = false;
   List<String> _suggestions = [];
   bool _suggestionsLoading = false;
+  String _alertLevel = 'none'; // 'none', 'yellow', 'red'
   bool _actionsExpanded = false;
   String _experience = 'beginner';
   String? _equipmentJson;
@@ -7875,7 +7908,10 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
         final data = jsonDecode(resp.body) as Map<String, dynamic>;
         final raw = data['suggestions'] as List<dynamic>?;
         if (raw != null) {
-          setState(() => _suggestions = raw.map((s) => s.toString()).toList());
+          setState(() {
+            _suggestions = raw.map((s) => s.toString()).toList();
+            _alertLevel = (data['alert_level'] as String?) ?? 'none';
+          });
         }
       }
     } catch (e) {
@@ -8272,6 +8308,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
         ),
       ]),
       bottomNavigationBar: _AquariaFooter(
+        alertLevel: _alertLevel,
         onAiTap: () => showModalBottomSheet(
           context: context,
           isScrollControlled: true,
@@ -9522,8 +9559,13 @@ class _ChatSheetState extends State<_ChatSheet> {
               'nitrate': 'nitrate',
               'potassium': 'potassium',
               'Potassium': 'potassium',
+              'K': 'potassium',
               'calcium': 'calcium',
               'Calcium': 'calcium',
+              'Ca': 'calcium',
+              'magnesium': 'magnesium',
+              'Magnesium': 'magnesium',
+              'Mg': 'magnesium',
               'TDS': 'tds',
               'tds': 'tds',
             };
@@ -9620,6 +9662,12 @@ class _ChatSheetState extends State<_ChatSheet> {
                 'behavior_profile': behaviorProfile,
                 'experience_level': _experience,
                 if (_sessionSummaries.isNotEmpty) 'session_summaries': _sessionSummaries,
+                if (_suggestions.isNotEmpty) 'system_context':
+                    'CURRENT AI SUGGESTIONS for this tank (these were generated from the user\'s recent data): '
+                    '${_suggestions.map((s) => "• $s").join("\n")}\n'
+                    'If the user asks you to remind them about the suggestions, or to set up reminders for them, '
+                    'create a task/reminder for each suggestion. '
+                    'If the user asks what they should do or what the suggestions are, reference these.',
               }))
           .timeout(const Duration(seconds: 30));
       if (resp.statusCode == 200 && mounted && !_cancelled) {
