@@ -1,9 +1,11 @@
 import json
 import os
 import re
+import secrets
 import sqlite3
 import time
 from datetime import date, datetime
+from io import BytesIO
 from typing import Any, Dict, List, Optional
 
 import smtplib
@@ -14,10 +16,13 @@ from email import encoders
 
 import anthropic
 import jwt
+import requests as http_requests
 import urllib.request
+from PIL import Image
 from jwt import PyJWKClient
 from fastapi import Depends, FastAPI, Form, Header, HTTPException, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -33,6 +38,19 @@ _SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://jdiwsvealnrzdxofomvz.sup
 _SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 _JWKS_URL = f"{_SUPABASE_URL}/auth/v1/.well-known/jwks.json"
 _jwks_client: PyJWKClient | None = None
+
+# ---------------------------------------------------------------------------
+# Discord integration
+# ---------------------------------------------------------------------------
+_DISCORD_CLIENT_ID = os.environ.get("DISCORD_CLIENT_ID", "")
+_DISCORD_CLIENT_SECRET = os.environ.get("DISCORD_CLIENT_SECRET", "")
+_DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "")
+_DISCORD_REDIRECT_URI = os.environ.get("DISCORD_REDIRECT_URI", "https://aquaria-ai-production.up.railway.app/discord/callback")
+_DISCORD_API = "https://discord.com/api/v10"
+_DISCORD_SCOPES = "identify guilds"
+
+# In-memory store for OAuth state tokens (short-lived, cleared on use)
+_discord_auth_states: dict[str, str] = {}  # state -> user_id
 
 def _get_jwks_client() -> PyJWKClient:
     global _jwks_client
@@ -124,7 +142,7 @@ _ALLOWED_ORIGINS = [
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_ALLOWED_ORIGINS,
-    allow_methods=["POST", "OPTIONS"],
+    allow_methods=["POST", "GET", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
 
@@ -3007,4 +3025,376 @@ async def submit_feedback_upload(
     user_id = _get_user_id(request)
     _save_feedback_supabase(user_id, message, device, file_name, file_bytes)
     threading.Thread(target=_send_feedback_email, args=(message, device, file_bytes, file_name), daemon=True).start()
+
+
+# ---------------------------------------------------------------------------
+# Discord integration endpoints
+# ---------------------------------------------------------------------------
+
+def _supabase_rest(method: str, table: str, *, params: str = "", body: dict | None = None,
+                   prefer: str = "return=representation") -> Any:
+    """Helper to call the Supabase REST API with the service role key."""
+    url = f"{_SUPABASE_URL}/rest/v1/{table}"
+    if params:
+        url += f"?{params}"
+    data = json.dumps(body).encode() if body else None
+    req = urllib.request.Request(url, data=data, method=method, headers={
+        "apikey": _SUPABASE_SERVICE_KEY,
+        "Authorization": f"Bearer {_SUPABASE_SERVICE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": prefer,
+    })
+    try:
+        resp = urllib.request.urlopen(req, timeout=10)
+        raw = resp.read().decode()
+        return json.loads(raw) if raw.strip() else None
+    except urllib.error.HTTPError as e:
+        body_text = e.read().decode() if e.fp else ""
+        print(f"[Supabase] {method} {table} error {e.code}: {body_text}", flush=True)
+        raise
+
+
+def _discord_api(method: str, path: str, *, token: str | None = None,
+                 bot: bool = False, data: dict | None = None,
+                 files: dict | None = None) -> dict | list | None:
+    """Call the Discord API. Uses bot token if bot=True, else user OAuth token."""
+    headers = {}
+    if bot:
+        headers["Authorization"] = f"Bot {_DISCORD_BOT_TOKEN}"
+    elif token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    url = f"{_DISCORD_API}{path}"
+    if files:
+        resp = http_requests.request(method, url, headers=headers, data=data, files=files, timeout=30)
+    elif data is not None:
+        headers["Content-Type"] = "application/json"
+        resp = http_requests.request(method, url, headers=headers, json=data, timeout=15)
+    else:
+        resp = http_requests.request(method, url, headers=headers, timeout=15)
+
+    if resp.status_code == 204:
+        return None
+    if resp.status_code >= 400:
+        print(f"[Discord] {method} {path} → {resp.status_code}: {resp.text}", flush=True)
+        raise HTTPException(status_code=resp.status_code, detail=f"Discord API error: {resp.text}")
+    return resp.json()
+
+
+def _refresh_discord_token(user_id: str) -> str:
+    """Get a valid Discord access token for user, refreshing if expired."""
+    rows = _supabase_rest("GET", "discord_accounts",
+                          params=f"user_id=eq.{user_id}&select=*")
+    if not rows:
+        raise HTTPException(status_code=404, detail="Discord account not linked")
+    row = rows[0]
+    # Check if token is still valid (expire 10s early to be safe)
+    expires_at = row.get("token_expires_at", "")
+    if expires_at:
+        from datetime import timezone
+        exp_dt = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+        if datetime.now(timezone.utc).timestamp() < exp_dt.timestamp() - 10:
+            return row["access_token"]
+
+    # Refresh the token
+    resp = http_requests.post("https://discord.com/api/v10/oauth2/token", data={
+        "grant_type": "refresh_token",
+        "refresh_token": row["refresh_token"],
+        "client_id": _DISCORD_CLIENT_ID,
+        "client_secret": _DISCORD_CLIENT_SECRET,
+    }, headers={"Content-Type": "application/x-www-form-urlencoded"}, timeout=15)
+    if resp.status_code != 200:
+        print(f"[Discord] token refresh failed: {resp.text}", flush=True)
+        raise HTTPException(status_code=401, detail="Discord token refresh failed. Please re-link.")
+    tokens = resp.json()
+    new_expires = datetime.utcnow().isoformat() + "Z"
+    if tokens.get("expires_in"):
+        from datetime import timedelta
+        new_expires = (datetime.utcnow() + timedelta(seconds=tokens["expires_in"])).isoformat() + "Z"
+    # Update stored tokens
+    _supabase_rest("PATCH", "discord_accounts",
+                   params=f"user_id=eq.{user_id}",
+                   body={
+                       "access_token": tokens["access_token"],
+                       "refresh_token": tokens.get("refresh_token", row["refresh_token"]),
+                       "token_expires_at": new_expires,
+                       "updated_at": datetime.utcnow().isoformat() + "Z",
+                   }, prefer="return=minimal")
+    return tokens["access_token"]
+
+
+def _apply_watermark(image_bytes: bytes) -> bytes:
+    """Apply a subtle Aquaria text watermark to the bottom-right of an image."""
+    img = Image.open(BytesIO(image_bytes)).convert("RGBA")
+    from PIL import ImageDraw, ImageFont
+    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    # Scale font size to ~2.5% of image width
+    font_size = max(16, int(img.width * 0.025))
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", font_size)
+    except (OSError, IOError):
+        font = ImageFont.load_default()
+    text = "aquaria.app"
+    bbox = draw.textbbox((0, 0), text, font=font)
+    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    margin = int(img.width * 0.02)
+    x = img.width - tw - margin
+    y = img.height - th - margin
+    # Semi-transparent white text with dark shadow
+    draw.text((x + 1, y + 1), text, fill=(0, 0, 0, 80), font=font)
+    draw.text((x, y), text, fill=(255, 255, 255, 140), font=font)
+    result = Image.alpha_composite(img, overlay).convert("RGB")
+    buf = BytesIO()
+    result.save(buf, format="JPEG", quality=90)
+    return buf.getvalue()
+
+
+# --- OAuth Flow ---
+
+@app.get("/discord/auth-url")
+@limiter.limit("10/minute")
+def discord_auth_url(request: Request, user_id: str = Depends(_get_user_id)):
+    """Generate a Discord OAuth2 authorization URL for the user."""
+    if not _DISCORD_CLIENT_ID:
+        raise HTTPException(status_code=500, detail="Discord integration not configured")
+    state = secrets.token_urlsafe(32)
+    _discord_auth_states[state] = user_id
+    url = (
+        f"https://discord.com/oauth2/authorize"
+        f"?client_id={_DISCORD_CLIENT_ID}"
+        f"&response_type=code"
+        f"&redirect_uri={urllib.request.quote(_DISCORD_REDIRECT_URI, safe='')}"
+        f"&scope={urllib.request.quote(_DISCORD_SCOPES, safe='')}"
+        f"&state={state}"
+        f"&prompt=consent"
+    )
+    return {"url": url}
+
+
+@app.get("/discord/callback")
+def discord_callback(request: Request, code: str = "", state: str = "", error: str = ""):
+    """Handle the OAuth2 callback from Discord."""
+    if error:
+        return HTMLResponse(f"<html><body><h2>Authorization failed</h2><p>{error}</p>"
+                            f"<p>You can close this window.</p></body></html>")
+    user_id = _discord_auth_states.pop(state, None)
+    if not user_id:
+        return HTMLResponse("<html><body><h2>Invalid or expired session</h2>"
+                            "<p>Please try linking Discord again from the app.</p></body></html>")
+
+    # Exchange code for tokens
+    resp = http_requests.post(f"{_DISCORD_API}/oauth2/token", data={
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": _DISCORD_REDIRECT_URI,
+        "client_id": _DISCORD_CLIENT_ID,
+        "client_secret": _DISCORD_CLIENT_SECRET,
+    }, headers={"Content-Type": "application/x-www-form-urlencoded"}, timeout=15)
+    if resp.status_code != 200:
+        print(f"[Discord] token exchange failed: {resp.text}", flush=True)
+        return HTMLResponse("<html><body><h2>Token exchange failed</h2>"
+                            "<p>Please try again.</p></body></html>")
+    tokens = resp.json()
+    access_token = tokens["access_token"]
+    refresh_token = tokens.get("refresh_token", "")
+    expires_in = tokens.get("expires_in", 604800)
+
+    # Get Discord user info
+    me = _discord_api("GET", "/users/@me", token=access_token)
+    discord_username = me.get("username", "unknown")
+    discord_id = me.get("id", "")
+
+    from datetime import timedelta
+    expires_at = (datetime.utcnow() + timedelta(seconds=expires_in)).isoformat() + "Z"
+
+    # Upsert into Supabase
+    _supabase_rest("POST", "discord_accounts",
+                   params="on_conflict=user_id",
+                   body={
+                       "user_id": user_id,
+                       "discord_id": discord_id,
+                       "discord_username": discord_username,
+                       "access_token": access_token,
+                       "refresh_token": refresh_token,
+                       "token_expires_at": expires_at,
+                       "scopes": _DISCORD_SCOPES,
+                       "updated_at": datetime.utcnow().isoformat() + "Z",
+                   }, prefer="resolution=merge-duplicates,return=minimal")
+
+    print(f"[Discord] linked user {user_id} → {discord_username} ({discord_id})", flush=True)
+    return HTMLResponse(
+        "<html><body style='font-family: system-ui; text-align: center; padding: 60px;'>"
+        "<h2>✅ Discord linked!</h2>"
+        f"<p>Connected as <strong>{discord_username}</strong></p>"
+        "<p>You can close this window and return to Aquaria.</p>"
+        "</body></html>"
+    )
+
+
+@app.get("/discord/status")
+@limiter.limit("30/minute")
+def discord_status(request: Request, user_id: str = Depends(_get_user_id)):
+    """Check if the user has linked their Discord account."""
+    try:
+        rows = _supabase_rest("GET", "discord_accounts",
+                              params=f"user_id=eq.{user_id}&select=discord_username,discord_id")
+        if rows:
+            return {"linked": True, "discord_username": rows[0]["discord_username"]}
+    except Exception:
+        pass
+    return {"linked": False}
+
+
+@app.delete("/discord/unlink")
+@limiter.limit("5/minute")
+def discord_unlink(request: Request, user_id: str = Depends(_get_user_id)):
+    """Unlink the user's Discord account."""
+    try:
+        # Revoke the token with Discord
+        rows = _supabase_rest("GET", "discord_accounts",
+                              params=f"user_id=eq.{user_id}&select=access_token")
+        if rows and rows[0].get("access_token"):
+            http_requests.post(f"{_DISCORD_API}/oauth2/token/revoke", data={
+                "token": rows[0]["access_token"],
+                "client_id": _DISCORD_CLIENT_ID,
+                "client_secret": _DISCORD_CLIENT_SECRET,
+            }, headers={"Content-Type": "application/x-www-form-urlencoded"}, timeout=10)
+    except Exception as e:
+        print(f"[Discord] revoke error (non-fatal): {e}", flush=True)
+    # Delete from Supabase
+    try:
+        _supabase_rest("DELETE", "discord_accounts",
+                       params=f"user_id=eq.{user_id}", prefer="return=minimal")
+    except Exception:
+        pass
+    return {"ok": True}
+
+
+# --- Guilds & Channels ---
+
+@app.get("/discord/guilds")
+@limiter.limit("15/minute")
+def discord_guilds(request: Request, user_id: str = Depends(_get_user_id)):
+    """List Discord servers the user is in where the bot is also present."""
+    token = _refresh_discord_token(user_id)
+    user_guilds = _discord_api("GET", "/users/@me/guilds", token=token)
+    # Get guilds the bot is in
+    bot_guilds = _discord_api("GET", "/users/@me/guilds", bot=True)
+    bot_guild_ids = {g["id"] for g in (bot_guilds or [])}
+    # Only return guilds where both user and bot are present
+    shared = []
+    for g in (user_guilds or []):
+        if g["id"] in bot_guild_ids:
+            shared.append({
+                "id": g["id"],
+                "name": g["name"],
+                "icon": g.get("icon"),
+            })
+    return {"guilds": shared, "bot_invite_url": _discord_bot_invite_url()}
+
+
+def _discord_bot_invite_url() -> str:
+    """Generate the URL to invite the Aquaria bot to a server."""
+    # Permissions: Send Messages (2048) + Attach Files (32768) + Embed Links (16384)
+    permissions = 2048 + 32768 + 16384
+    return (f"https://discord.com/oauth2/authorize?client_id={_DISCORD_CLIENT_ID}"
+            f"&permissions={permissions}&scope=bot")
+
+
+@app.get("/discord/channels")
+@limiter.limit("30/minute")
+def discord_channels(request: Request, guild_id: str, user_id: str = Depends(_get_user_id)):
+    """List text channels in a guild where the bot can post."""
+    if not guild_id:
+        raise HTTPException(status_code=400, detail="guild_id is required")
+    # Use the bot token to list channels (more reliable than user token for channel access)
+    channels = _discord_api("GET", f"/guilds/{guild_id}/channels", bot=True)
+    # Filter to text channels (type 0) only
+    text_channels = []
+    for ch in (channels or []):
+        if ch.get("type") == 0:  # GUILD_TEXT
+            text_channels.append({
+                "id": ch["id"],
+                "name": ch["name"],
+                "position": ch.get("position", 0),
+            })
+    text_channels.sort(key=lambda c: c["position"])
+    return {"channels": text_channels}
+
+
+# --- Share Photo ---
+
+class DiscordShareRequest(BaseModel):
+    channel_id: str
+    title: str
+    caption: str = ""
+    photo_storage_path: str  # Supabase storage path e.g. "uid/123456.jpg"
+
+
+@app.post("/discord/share")
+@limiter.limit("10/minute")
+def discord_share(request: Request, req: DiscordShareRequest, user_id: str = Depends(_get_user_id)):
+    """Share a tank photo to a Discord channel via the bot."""
+    if not _DISCORD_BOT_TOKEN:
+        raise HTTPException(status_code=500, detail="Discord bot not configured")
+
+    # Verify user has linked Discord
+    rows = _supabase_rest("GET", "discord_accounts",
+                          params=f"user_id=eq.{user_id}&select=discord_username")
+    if not rows:
+        raise HTTPException(status_code=403, detail="Discord account not linked")
+    discord_username = rows[0]["discord_username"]
+
+    # Download image from Supabase Storage
+    storage_url = f"{_SUPABASE_URL}/storage/v1/object/community-photos/{req.photo_storage_path}"
+    try:
+        img_req = urllib.request.Request(storage_url, headers={
+            "apikey": _SUPABASE_SERVICE_KEY,
+            "Authorization": f"Bearer {_SUPABASE_SERVICE_KEY}",
+        })
+        img_resp = urllib.request.urlopen(img_req, timeout=30)
+        image_bytes = img_resp.read()
+    except Exception as e:
+        print(f"[Discord] image download failed: {e}", flush=True)
+        raise HTTPException(status_code=400, detail="Failed to download image")
+
+    # Apply watermark
+    try:
+        watermarked = _apply_watermark(image_bytes)
+    except Exception as e:
+        print(f"[Discord] watermark failed (using original): {e}", flush=True)
+        watermarked = image_bytes
+
+    # Build the embed message content
+    caption = req.caption.strip()
+    credit = "📸 Shared via **Aquaria** — AI-powered aquarium companion"
+    content = f"**{req.title}**"
+    if caption:
+        content += f"\n{caption}"
+    content += f"\n\n{credit}"
+
+    # Post to Discord channel using the bot
+    result = _discord_api("POST", f"/channels/{req.channel_id}/messages",
+                          bot=True,
+                          data={"content": content},
+                          files={"file": ("aquaria-tank.jpg", watermarked, "image/jpeg")})
+
+    message_id = result.get("id", "") if result else ""
+    channel_id = req.channel_id
+
+    # Log the share
+    try:
+        _supabase_rest("POST", "discord_shares", body={
+            "user_id": user_id,
+            "discord_username": discord_username,
+            "channel_id": channel_id,
+            "message_id": message_id,
+            "title": req.title,
+        }, prefer="return=minimal")
+    except Exception as e:
+        print(f"[Discord] share log error: {e}", flush=True)
+
+    print(f"[Discord] shared by {discord_username} to channel {channel_id}", flush=True)
+    return {"ok": True, "message_id": message_id}
     return {"status": "ok"}

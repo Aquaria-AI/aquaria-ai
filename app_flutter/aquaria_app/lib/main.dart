@@ -446,6 +446,8 @@ AppBar _buildAppBar(BuildContext context, String title, {List<Widget>? actions, 
               Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const OnboardingScreen()),
               );
+            } else if (value == 'discord') {
+              _showDiscordSheet(context);
             } else if (value == 'donate') {
               launchUrl(Uri.parse('https://buy.stripe.com/00wcN6a8f9TM5QKaxw2sM01'), mode: LaunchMode.externalApplication);
             } else if (value == 'sign_out') {
@@ -485,6 +487,8 @@ AppBar _buildAppBar(BuildContext context, String title, {List<Widget>? actions, 
             if (SupabaseService.isLoggedIn)
               const PopupMenuItem(value: 'profile', child: Text('Profile')),
             const PopupMenuItem(value: 'invite', child: Text('Invite Friends')),
+            if (SupabaseService.isLoggedIn)
+              const PopupMenuItem(value: 'discord', child: Text('Discord')),
             if (SupabaseService.userEmail == 'maugliera@gmail.com' || SupabaseService.isAdmin)
               const PopupMenuItem(value: 'onboarding', child: Text('Onboarding')),
             const PopupMenuItem(value: 'feedback', child: Text('Feedback')),
@@ -564,6 +568,434 @@ void _showExperiencePicker(BuildContext context) {
       }
     }
   });
+}
+
+// ---------------------------------------------------------------------------
+// Discord integration
+// ---------------------------------------------------------------------------
+
+void _showDiscordSheet(BuildContext context) {
+  showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+    ),
+    builder: (ctx) => const _DiscordSheet(),
+  );
+}
+
+class _DiscordSheet extends StatefulWidget {
+  const _DiscordSheet();
+  @override
+  State<_DiscordSheet> createState() => _DiscordSheetState();
+}
+
+class _DiscordSheetState extends State<_DiscordSheet> {
+  bool _loading = true;
+  bool _linked = false;
+  String _username = '';
+  String _error = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _checkStatus();
+  }
+
+  Future<void> _checkStatus() async {
+    setState(() { _loading = true; _error = ''; });
+    try {
+      final resp = await http.get(
+        Uri.parse('$_kBaseUrl/discord/status'),
+        headers: _apiHeaders(),
+      ).timeout(const Duration(seconds: 10));
+      if (resp.statusCode == 200) {
+        final data = jsonDecode(resp.body);
+        setState(() {
+          _linked = data['linked'] == true;
+          _username = data['discord_username'] ?? '';
+          _loading = false;
+        });
+      } else {
+        setState(() { _loading = false; _error = 'Failed to check status'; });
+      }
+    } catch (e) {
+      setState(() { _loading = false; _error = 'Connection error'; });
+    }
+  }
+
+  Future<void> _linkDiscord() async {
+    setState(() { _loading = true; _error = ''; });
+    try {
+      final resp = await http.get(
+        Uri.parse('$_kBaseUrl/discord/auth-url'),
+        headers: _apiHeaders(),
+      ).timeout(const Duration(seconds: 10));
+      if (resp.statusCode == 200) {
+        final url = jsonDecode(resp.body)['url'] as String;
+        await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+        // Poll for completion
+        setState(() => _loading = false);
+        _pollForLink();
+      } else {
+        setState(() { _loading = false; _error = 'Failed to start linking'; });
+      }
+    } catch (e) {
+      setState(() { _loading = false; _error = 'Connection error'; });
+    }
+  }
+
+  void _pollForLink() {
+    int attempts = 0;
+    Future.doWhile(() async {
+      await Future.delayed(const Duration(seconds: 3));
+      if (!mounted) return false;
+      attempts++;
+      if (attempts > 40) return false; // 2 min max
+      try {
+        final resp = await http.get(
+          Uri.parse('$_kBaseUrl/discord/status'),
+          headers: _apiHeaders(),
+        ).timeout(const Duration(seconds: 5));
+        if (resp.statusCode == 200) {
+          final data = jsonDecode(resp.body);
+          if (data['linked'] == true) {
+            if (mounted) {
+              setState(() {
+                _linked = true;
+                _username = data['discord_username'] ?? '';
+              });
+              ScaffoldMessenger.of(context)
+                ..clearSnackBars()
+                ..showSnackBar(const SnackBar(content: Text('Discord linked!')));
+            }
+            return false;
+          }
+        }
+      } catch (_) {}
+      return true;
+    });
+  }
+
+  Future<void> _unlinkDiscord() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Unlink Discord?'),
+        content: Text('Disconnect $_username from Aquaria?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Unlink')),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    setState(() => _loading = true);
+    try {
+      await http.delete(
+        Uri.parse('$_kBaseUrl/discord/unlink'),
+        headers: _apiHeaders(),
+      ).timeout(const Duration(seconds: 10));
+      setState(() { _linked = false; _username = ''; _loading = false; });
+    } catch (e) {
+      setState(() { _loading = false; _error = 'Failed to unlink'; });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 20, right: 20, top: 24,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 24,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.discord, color: Color(0xFF5865F2), size: 28),
+              const SizedBox(width: 10),
+              const Text('Discord', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+              const Spacer(),
+              GestureDetector(
+                onTap: () => Navigator.pop(context),
+                child: const Icon(Icons.close, size: 22, color: Colors.grey),
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+          if (_loading)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 24),
+              child: CircularProgressIndicator(),
+            )
+          else if (_error.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              child: Column(children: [
+                Text(_error, style: const TextStyle(color: Colors.red)),
+                const SizedBox(height: 12),
+                ElevatedButton(onPressed: _checkStatus, child: const Text('Retry')),
+              ]),
+            )
+          else if (_linked) ...[
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF0F0FF),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(children: [
+                const Icon(Icons.check_circle, color: Color(0xFF5865F2)),
+                const SizedBox(width: 12),
+                Expanded(child: Text('Connected as $_username',
+                    style: const TextStyle(fontWeight: FontWeight.w500))),
+              ]),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'Share tank photos to Discord from the photo action menu on any tank.',
+              style: TextStyle(fontSize: 13, color: Colors.black54),
+            ),
+            const SizedBox(height: 16),
+            TextButton(
+              onPressed: _unlinkDiscord,
+              child: const Text('Unlink Discord', style: TextStyle(color: Colors.red)),
+            ),
+          ] else ...[
+            const Text(
+              'Link your Discord account to share tank photos directly to your favorite aquarium servers.',
+              style: TextStyle(fontSize: 14, color: Colors.black87),
+            ),
+            const SizedBox(height: 20),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _linkDiscord,
+                icon: const Icon(Icons.link),
+                label: const Text('Link Discord'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF5865F2),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Show Discord share flow: pick server → channel → title → post
+Future<void> _showDiscordShareFlow(BuildContext context, String photoStoragePath) async {
+  final headers = _apiHeaders();
+
+  // Check linked status
+  final statusResp = await http.get(
+    Uri.parse('$_kBaseUrl/discord/status'),
+    headers: headers,
+  ).timeout(const Duration(seconds: 10));
+  if (statusResp.statusCode != 200 || jsonDecode(statusResp.body)['linked'] != true) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(const SnackBar(content: Text('Link your Discord account first (menu → Discord)')));
+    }
+    return;
+  }
+
+  if (!context.mounted) return;
+
+  // Fetch guilds
+  final guildsResp = await http.get(
+    Uri.parse('$_kBaseUrl/discord/guilds'),
+    headers: headers,
+  ).timeout(const Duration(seconds: 10));
+  if (guildsResp.statusCode != 200 || !context.mounted) return;
+  final guildsData = jsonDecode(guildsResp.body);
+  final guilds = (guildsData['guilds'] as List?) ?? [];
+  final botInviteUrl = guildsData['bot_invite_url'] as String? ?? '';
+
+  if (guilds.isEmpty) {
+    if (context.mounted) {
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('No shared servers'),
+          content: const Text(
+            'The Aquaria bot needs to be in the same server as you. '
+            'Invite the bot to a server, then try again.',
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            if (botInviteUrl.isNotEmpty)
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  launchUrl(Uri.parse(botInviteUrl), mode: LaunchMode.externalApplication);
+                },
+                child: const Text('Invite Bot'),
+              ),
+          ],
+        ),
+      );
+    }
+    return;
+  }
+
+  // Pick server
+  final guild = await showModalBottomSheet<Map<String, dynamic>>(
+    context: context,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+    ),
+    builder: (ctx) => Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Pick a server', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 12),
+          ...guilds.map((g) => ListTile(
+            leading: const Icon(Icons.dns, color: Color(0xFF5865F2)),
+            title: Text(g['name'] ?? ''),
+            onTap: () => Navigator.pop(ctx, g),
+          )),
+          if (botInviteUrl.isNotEmpty)
+            ListTile(
+              leading: const Icon(Icons.add, color: Colors.grey),
+              title: const Text('Add bot to another server', style: TextStyle(color: Colors.grey)),
+              onTap: () {
+                Navigator.pop(ctx);
+                launchUrl(Uri.parse(botInviteUrl), mode: LaunchMode.externalApplication);
+              },
+            ),
+        ],
+      ),
+    ),
+  );
+  if (guild == null || !context.mounted) return;
+
+  // Fetch channels
+  final chResp = await http.get(
+    Uri.parse('$_kBaseUrl/discord/channels?guild_id=${guild['id']}'),
+    headers: headers,
+  ).timeout(const Duration(seconds: 10));
+  if (chResp.statusCode != 200 || !context.mounted) return;
+  final channels = (jsonDecode(chResp.body)['channels'] as List?) ?? [];
+
+  if (channels.isEmpty) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(const SnackBar(content: Text('No text channels found in this server')));
+    }
+    return;
+  }
+
+  // Pick channel
+  final channel = await showModalBottomSheet<Map<String, dynamic>>(
+    context: context,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+    ),
+    builder: (ctx) => Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Pick a channel in ${guild['name']}',
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 12),
+          Flexible(
+            child: ListView(
+              shrinkWrap: true,
+              children: channels.map<Widget>((ch) => ListTile(
+                leading: const Text('#', style: TextStyle(fontSize: 18, color: Colors.grey)),
+                title: Text(ch['name'] ?? ''),
+                onTap: () => Navigator.pop(ctx, ch),
+              )).toList(),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+  if (channel == null || !context.mounted) return;
+
+  // Title + caption dialog
+  final titleCtrl = TextEditingController();
+  final captionCtrl = TextEditingController();
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text('Post to #${channel['name']}'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: titleCtrl,
+            decoration: const InputDecoration(labelText: 'Title', hintText: 'My reef tank'),
+            textCapitalization: TextCapitalization.sentences,
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: captionCtrl,
+            decoration: const InputDecoration(labelText: 'Caption (optional)'),
+            textCapitalization: TextCapitalization.sentences,
+            maxLines: 3,
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+        TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Share')),
+      ],
+    ),
+  );
+  if (confirmed != true || titleCtrl.text.trim().isEmpty || !context.mounted) return;
+
+  // Post to Discord
+  ScaffoldMessenger.of(context)
+    ..clearSnackBars()
+    ..showSnackBar(const SnackBar(content: Text('Sharing to Discord...')));
+  try {
+    final shareResp = await http.post(
+      Uri.parse('$_kBaseUrl/discord/share'),
+      headers: headers,
+      body: jsonEncode({
+        'channel_id': channel['id'],
+        'title': titleCtrl.text.trim(),
+        'caption': captionCtrl.text.trim(),
+        'photo_storage_path': photoStoragePath,
+      }),
+    ).timeout(const Duration(seconds: 30));
+    if (context.mounted) {
+      if (shareResp.statusCode == 200) {
+        ScaffoldMessenger.of(context)
+          ..clearSnackBars()
+          ..showSnackBar(const SnackBar(content: Text('Shared to Discord!')));
+      } else {
+        final err = jsonDecode(shareResp.body)['detail'] ?? 'Share failed';
+        ScaffoldMessenger.of(context)
+          ..clearSnackBars()
+          ..showSnackBar(SnackBar(content: Text('Error: $err')));
+      }
+    }
+  } catch (e) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(const SnackBar(content: Text('Failed to share')));
+    }
+  }
 }
 
 void _showFeedbackSheet(BuildContext context) {
@@ -4569,6 +5001,7 @@ Future<void> main() async {
   await TankStore.instance.load();
   // If already logged in from a previous session, pull cloud data
   if (SupabaseService.isLoggedIn) {
+    SupabaseService.logSession();
     TankStore.instance.pullFromCloud().then((_) => TankStore.instance.load());
   }
   try {
@@ -4684,6 +5117,7 @@ class _AppEntryState extends State<_AppEntry> {
   }
 
   Future<void> _onAuthSuccess() async {
+    SupabaseService.logSession();
     // Check if user has accepted current legal terms
     final accepted = await SupabaseService.hasAcceptedCurrentTerms();
     if (!accepted) {
@@ -16488,6 +16922,22 @@ class _CommunityScreenState extends State<_CommunityScreen> {
                                         _timeAgo(post['created_at'] as String),
                                         style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
                                       ),
+                                      if (isAuthor)
+                                        IconButton(
+                                          icon: const Icon(Icons.send, size: 16),
+                                          color: const Color(0xFF5865F2),
+                                          padding: EdgeInsets.zero,
+                                          constraints: const BoxConstraints(),
+                                          tooltip: 'Share to Discord',
+                                          onPressed: () {
+                                            final photoPath = post['photo_url'] as String? ?? '';
+                                            if (photoPath.isNotEmpty) {
+                                              _showDiscordShareFlow(context, photoPath);
+                                            }
+                                          },
+                                        ),
+                                      if (isAuthor)
+                                        const SizedBox(width: 8),
                                       if (isAuthor)
                                         IconButton(
                                           icon: const Icon(Icons.delete_outline, size: 18),
