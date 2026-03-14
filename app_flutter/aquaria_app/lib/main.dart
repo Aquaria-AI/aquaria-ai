@@ -8317,6 +8317,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
             initialTank: _tank,
             allTanks: TankStore.instance.tanks,
             onLogsChanged: _load,
+            suggestions: _suggestions,
           ),
         ).then((_) => _load()),
       ),
@@ -8708,6 +8709,33 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
                             Expanded(
                               child: Text(s, style: const TextStyle(fontSize: 13, color: Colors.black87, height: 1.4)),
                             ),
+                            GestureDetector(
+                              onTap: () async {
+                                final tomorrow = DateTime.now().add(const Duration(days: 1));
+                                final dueDate = '${tomorrow.year}-${tomorrow.month.toString().padLeft(2, '0')}-${tomorrow.day.toString().padLeft(2, '0')}';
+                                await TankStore.instance.addTask(
+                                  tankId: _tank.id,
+                                  description: s,
+                                  dueDate: dueDate,
+                                  priority: 'normal',
+                                  source: 'ai',
+                                );
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: const Text('Reminder set for tomorrow'),
+                                      duration: const Duration(seconds: 2),
+                                      behavior: SnackBarBehavior.floating,
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                    ),
+                                  );
+                                }
+                              },
+                              child: Padding(
+                                padding: const EdgeInsets.only(left: 8),
+                                child: Icon(Icons.notification_add_outlined, size: 16, color: Colors.grey.shade400),
+                              ),
+                            ),
                           ],
                         ),
                       ))
@@ -8991,11 +9019,13 @@ class _ChatSheet extends StatefulWidget {
   final TankModel? initialTank;
   final List<TankModel> allTanks;
   final VoidCallback onLogsChanged;
+  final List<String> suggestions;
 
   const _ChatSheet({
     this.initialTank,
     required this.allTanks,
     required this.onLogsChanged,
+    this.suggestions = const [],
   });
 
   @override
@@ -9662,9 +9692,9 @@ class _ChatSheetState extends State<_ChatSheet> {
                 'behavior_profile': behaviorProfile,
                 'experience_level': _experience,
                 if (_sessionSummaries.isNotEmpty) 'session_summaries': _sessionSummaries,
-                if (_suggestions.isNotEmpty) 'system_context':
+                if (widget.suggestions.isNotEmpty) 'system_context':
                     'CURRENT AI SUGGESTIONS for this tank (these were generated from the user\'s recent data): '
-                    '${_suggestions.map((s) => "• $s").join("\n")}\n'
+                    '${widget.suggestions.map((s) => "• $s").join("\n")}\n'
                     'If the user asks you to remind them about the suggestions, or to set up reminders for them, '
                     'create a task/reminder for each suggestion. '
                     'If the user asks what they should do or what the suggestions are, reference these.',
