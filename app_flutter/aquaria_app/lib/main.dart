@@ -795,18 +795,55 @@ class _DiscordSheetState extends State<_DiscordSheet> {
 Future<void> _showDiscordShareFlow(BuildContext context, String photoStoragePath) async {
   final headers = _apiHeaders();
 
-  // Check linked status
+  // Check linked status — if not linked, start OAuth inline
   final statusResp = await http.get(
     Uri.parse('$_kBaseUrl/discord/status'),
     headers: headers,
   ).timeout(const Duration(seconds: 10));
   if (statusResp.statusCode != 200 || jsonDecode(statusResp.body)['linked'] != true) {
+    if (!context.mounted) return;
+    // Start OAuth flow inline
+    final authResp = await http.get(
+      Uri.parse('$_kBaseUrl/discord/auth-url'),
+      headers: headers,
+    ).timeout(const Duration(seconds: 10));
+    if (authResp.statusCode != 200 || !context.mounted) return;
+    final url = jsonDecode(authResp.body)['url'] as String;
+    await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+    // Poll until linked
     if (context.mounted) {
       ScaffoldMessenger.of(context)
         ..clearSnackBars()
-        ..showSnackBar(const SnackBar(content: Text('Link your Discord account first (menu → Discord)')));
+        ..showSnackBar(const SnackBar(content: Text('Linking Discord — authorize in your browser, then come back...')));
     }
-    return;
+    bool linked = false;
+    for (int i = 0; i < 40; i++) {
+      await Future.delayed(const Duration(seconds: 3));
+      if (!context.mounted) return;
+      try {
+        final poll = await http.get(
+          Uri.parse('$_kBaseUrl/discord/status'),
+          headers: headers,
+        ).timeout(const Duration(seconds: 5));
+        if (poll.statusCode == 200 && jsonDecode(poll.body)['linked'] == true) {
+          linked = true;
+          break;
+        }
+      } catch (_) {}
+    }
+    if (!linked || !context.mounted) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context)
+          ..clearSnackBars()
+          ..showSnackBar(const SnackBar(content: Text('Discord linking timed out. Try again.')));
+      }
+      return;
+    }
+    if (context.mounted) {
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(const SnackBar(content: Text('Discord linked!')));
+    }
   }
 
   if (!context.mounted) return;
