@@ -1273,7 +1273,7 @@ class OnboardingScreen extends StatefulWidget {
 class _OnboardingScreenState extends State<OnboardingScreen> {
   final _pageCtrl = PageController();
   int _page = 0;
-  static const _totalPages = 8;
+  int get _totalPages => _experience == 'beginner' ? 7 : 8;
 
   String _experience = '';
   final _tankNameCtrl = TextEditingController(text: 'New Tank');
@@ -1441,12 +1441,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     onWaterTypeChanged: (v) => setState(() => _waterType = v),
                     onNext: _goNext,
                   ),
-                  _ObEquipmentPage(
-                    waterType: _waterType,
-                    equipment: _equipment,
-                    onChanged: (eq) => setState(() => _equipment = eq),
-                    onNext: _goNext,
-                  ),
+                  if (_experience != 'beginner')
+                    _ObEquipmentPage(
+                      waterType: _waterType,
+                      equipment: _equipment,
+                      onChanged: (eq) => setState(() => _equipment = eq),
+                      onNext: _goNext,
+                    ),
                   _ObInhabitantsPage(
                     initialInhabitants: _inhabitants,
                     waterType: _waterType,
@@ -1458,7 +1459,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   _ObInhabitantSummaryPage(
                     inhabitants: _inhabitants,
                     waterType: _waterType,
+                    tankName: _tankNameCtrl.text,
+                    gallons: _gallons,
                     onNext: _goNext,
+                    onInhabitantsAdded: (added) => setState(() => _inhabitants = [..._inhabitants, ...added]),
+                    onInhabitantsRemoved: (names) => setState(() => _inhabitants = _inhabitants.where((i) => !names.contains(i.name.toLowerCase())).toList()),
                   ),
                   _ObWaterQualityPage(
                     tankName: _tankNameCtrl.text,
@@ -1469,7 +1474,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     onReminderTask: (t) => _pendingTasks.add(t),
                     onCsvPending: (content) => _pendingCsvContent = content,
                     experience: _experience,
-                    isActive: _page == 6,
+                    isActive: _page == (_experience == 'beginner' ? 5 : 6),
                   ),
                   _ObCongratsPage(
                     experience: _experience,
@@ -3313,16 +3318,29 @@ String _speciesDescription(String name, String type) {
 }
 
 // Page 5 — Inhabitant Summary
-class _ObInhabitantSummaryPage extends StatelessWidget {
+class _ObInhabitantSummaryPage extends StatefulWidget {
   final List<({String name, String type, int count})> inhabitants;
   final WaterType waterType;
+  final String tankName;
+  final double gallons;
   final VoidCallback onNext;
+  final void Function(List<({String name, String type, int count})> added)? onInhabitantsAdded;
+  final void Function(List<String> names)? onInhabitantsRemoved;
   const _ObInhabitantSummaryPage({
     required this.inhabitants,
     this.waterType = WaterType.freshwater,
+    this.tankName = '',
+    this.gallons = 0,
     required this.onNext,
+    this.onInhabitantsAdded,
+    this.onInhabitantsRemoved,
   });
 
+  @override
+  State<_ObInhabitantSummaryPage> createState() => _ObInhabitantSummaryPageState();
+}
+
+class _ObInhabitantSummaryPageState extends State<_ObInhabitantSummaryPage> {
   static String _emoji(String type) {
     switch (type) {
       case 'invertebrate': return '🦐';
@@ -3331,6 +3349,129 @@ class _ObInhabitantSummaryPage extends StatelessWidget {
       case 'anemone':      return '🌺';
       default:             return '🐟';
     }
+  }
+
+  final _textCtrl = TextEditingController();
+  final _scrollCtrl = ScrollController();
+  final List<({String role, String content})> _messages = [];
+  bool _sending = false;
+  bool _chatExpanded = false;
+
+  Future<void> _send() async {
+    final text = _textCtrl.text.trim();
+    if (text.isEmpty || _sending) return;
+    _textCtrl.clear();
+    setState(() {
+      if (!_chatExpanded) _chatExpanded = true;
+      _messages.add((role: 'user', content: text));
+      _sending = true;
+    });
+    _scrollToBottom();
+
+    try {
+      final history = _messages.take(_messages.length - 1)
+          .map((m) => {'role': m.role, 'content': m.content})
+          .toList();
+      final inhDesc = widget.inhabitants.isEmpty
+          ? 'No inhabitants added yet.'
+          : widget.inhabitants.map((i) => '${i.count > 1 ? "${i.count}x " : ""}${i.name} (${i.type})').join(', ');
+      final tank = {
+        'name': widget.tankName.isNotEmpty ? widget.tankName : 'my tank',
+        'gallons': widget.gallons,
+        'water_type': widget.waterType.label,
+        'inhabitants': widget.inhabitants
+            .map((i) => '${i.count > 1 ? "${i.count}x " : ""}${i.name}')
+            .toList(),
+      };
+      final resp = await http
+          .post(
+            Uri.parse('$_kBaseUrl/chat/tank'),
+            headers: _apiHeaders(),
+            body: jsonEncode({
+              'tank': tank,
+              'available_tanks': <String>[],
+              'message': text,
+              'history': history,
+              'recent_logs': <Map>[],
+              'system_context':
+                  'ONBOARDING CONTEXT — Meet Your Crew page. The user is reviewing their inhabitants list and may want to add or remove inhabitants. '
+                  'CURRENT INHABITANTS LIST (this is the source of truth): $inhDesc. '
+                  'Use this list to answer any questions about what is currently in the tank. '
+                  'Help them add or remove inhabitants by name. Confirm what you added or removed. Keep replies short and friendly.',
+            }),
+          )
+          .timeout(const Duration(seconds: 30));
+      if (resp.statusCode == 200 && mounted) {
+        final data = jsonDecode(resp.body);
+        final reply = (data is Map
+                ? data['response'] ?? data['message'] ?? data.toString()
+                : resp.body)
+            as String;
+        setState(() => _messages.add((role: 'assistant', content: reply)));
+        _scrollToBottom();
+        // Process new inhabitants from chat response (deduplicate against existing)
+        if (data is Map && data['new_inhabitant'] != null && widget.onInhabitantsAdded != null) {
+          final inhData = data['new_inhabitant'] as Map<String, dynamic>;
+          final inhList = (inhData['inhabitants'] as List?) ?? [];
+          final existingNames = widget.inhabitants.map((i) => i.name.toLowerCase()).toSet();
+          final added = <({String name, String type, int count})>[];
+          for (final inh in inhList) {
+            if (inh is Map && inh['name'] != null) {
+              final name = inh['name'].toString();
+              if (!existingNames.contains(name.toLowerCase())) {
+                existingNames.add(name.toLowerCase());
+                added.add((
+                  name: name,
+                  type: inh['type']?.toString() ?? 'fish',
+                  count: (inh['count'] as num?)?.toInt() ?? 1,
+                ));
+              }
+            }
+          }
+          if (added.isNotEmpty) widget.onInhabitantsAdded!(added);
+        }
+        // Process inhabitant removals
+        if (data is Map && data['remove_inhabitants'] != null && widget.onInhabitantsRemoved != null) {
+          final remData = data['remove_inhabitants'] as Map<String, dynamic>;
+          final remList = (remData['inhabitants'] as List?) ?? [];
+          final names = <String>[];
+          for (final inh in remList) {
+            if (inh is Map && inh['name'] != null) {
+              names.add(inh['name'].toString().toLowerCase());
+            }
+          }
+          if (names.isNotEmpty) widget.onInhabitantsRemoved!(names);
+        }
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _messages.add((
+          role: 'assistant',
+          content: "Sorry, I couldn't reach the server right now. You can add them from the home screen later!",
+        )));
+      }
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollCtrl.hasClients) {
+        _scrollCtrl.animateTo(
+          _scrollCtrl.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _textCtrl.dispose();
+    _scrollCtrl.dispose();
+    super.dispose();
   }
 
   @override
@@ -3346,7 +3487,7 @@ class _ObInhabitantSummaryPage extends StatelessWidget {
           ),
         ),
         Expanded(
-          child: inhabitants.isEmpty
+          child: widget.inhabitants.isEmpty && !_chatExpanded
               ? Center(
                   child: Padding(
                     padding: const EdgeInsets.all(32),
@@ -3357,59 +3498,151 @@ class _ObInhabitantSummaryPage extends StatelessWidget {
                         SizedBox(height: 16),
                         Text('No inhabitants added yet.', style: TextStyle(fontSize: 16, color: Colors.grey)),
                         SizedBox(height: 6),
-                        Text('Swipe back to add some, or continue and add them later.', style: TextStyle(fontSize: 13, color: Colors.grey), textAlign: TextAlign.center),
+                        Text('Chat them to us below or add them later.', style: TextStyle(fontSize: 13, color: Colors.grey), textAlign: TextAlign.center),
                       ],
                     ),
                   ),
                 )
-              : ListView.separated(
-                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
-                  itemCount: inhabitants.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 10),
-                  itemBuilder: (_, i) {
-                    final inh = inhabitants[i];
-                    return Container(
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        border: Border.all(color: Colors.grey.shade200),
-                        borderRadius: BorderRadius.circular(12),
-                        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 6, offset: const Offset(0, 2))],
+              : Column(
+                  children: [
+                    // Inhabitants list (shrinks when chat expands)
+                    if (!_chatExpanded && widget.inhabitants.isNotEmpty)
+                      Expanded(
+                        child: ListView.separated(
+                          padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+                          itemCount: widget.inhabitants.length,
+                          separatorBuilder: (_, __) => const SizedBox(height: 10),
+                          itemBuilder: (_, i) {
+                            final inh = widget.inhabitants[i];
+                            return Container(
+                              padding: const EdgeInsets.all(14),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                border: Border.all(color: Colors.grey.shade200),
+                                borderRadius: BorderRadius.circular(12),
+                                boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 6, offset: const Offset(0, 2))],
+                              ),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Container(
+                                    width: 42, height: 42,
+                                    decoration: BoxDecoration(color: _cMint, borderRadius: BorderRadius.circular(10)),
+                                    alignment: Alignment.center,
+                                    child: Text(_emoji(inh.type), style: const TextStyle(fontSize: 22)),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          inh.count > 1 ? '${inh.count}× ${_titleCase(inh.name)}' : _titleCase(inh.name),
+                                          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          _speciesDescription(inh.name, inh.type),
+                                          style: const TextStyle(fontSize: 13, color: Colors.black54, height: 1.4),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
                       ),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Container(
-                            width: 42, height: 42,
-                            decoration: BoxDecoration(color: _cMint, borderRadius: BorderRadius.circular(10)),
-                            alignment: Alignment.center,
-                            child: Text(_emoji(inh.type), style: const TextStyle(fontSize: 22)),
+                    // Chat area (expands when user starts chatting, swipe down to collapse)
+                    if (_chatExpanded)
+                      Expanded(
+                        child: GestureDetector(
+                          onVerticalDragEnd: (details) {
+                            if (details.primaryVelocity != null && details.primaryVelocity! > 200) {
+                              setState(() => _chatExpanded = false);
+                            }
+                          },
+                          child: Container(
+                          margin: const EdgeInsets.fromLTRB(12, 0, 12, 0),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF5F9FA),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.grey.shade200),
                           ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  inh.count > 1 ? '${inh.count}× ${_titleCase(inh.name)}' : _titleCase(inh.name),
-                                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                          child: Column(children: [
+                            // Drag handle
+                            GestureDetector(
+                              onTap: () => setState(() => _chatExpanded = false),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(vertical: 8),
+                                child: Container(
+                                  width: 36, height: 4,
+                                  decoration: BoxDecoration(
+                                    color: Colors.grey.shade300,
+                                    borderRadius: BorderRadius.circular(2),
+                                  ),
                                 ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  _speciesDescription(inh.name, inh.type),
-                                  style: const TextStyle(fontSize: 13, color: Colors.black54, height: 1.4),
-                                ),
-                              ],
+                              ),
                             ),
-                          ),
-                        ],
+                            Expanded(child: ListView.builder(
+                            controller: _scrollCtrl,
+                            padding: const EdgeInsets.all(12),
+                            itemCount: _messages.length + (_sending ? 1 : 0),
+                            itemBuilder: (context, i) {
+                              if (_sending && i == _messages.length) {
+                                return Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: Container(
+                                    margin: const EdgeInsets.only(bottom: 8),
+                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(color: Colors.grey.shade200),
+                                    ),
+                                    child: const SizedBox(
+                                      width: 16, height: 16,
+                                      child: CircularProgressIndicator(strokeWidth: 2),
+                                    ),
+                                  ),
+                                );
+                              }
+                              final msg = _messages[i];
+                              final isUser = msg.role == 'user';
+                              return Align(
+                                alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
+                                child: Container(
+                                  margin: const EdgeInsets.only(bottom: 8),
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                  constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),
+                                  decoration: BoxDecoration(
+                                    color: isUser ? _cDark : Colors.white,
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: isUser ? null : Border.all(color: Colors.grey.shade200),
+                                  ),
+                                  child: Text(
+                                    msg.content,
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      color: isUser ? Colors.white : Colors.black87,
+                                      height: 1.4,
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
+                          )),
+                          ]),
+                        ),
+                        ),
                       ),
-                    );
-                  },
+                  ],
                 ),
         ),
         Builder(builder: (context) {
-          final warnings = _compatibilityWarnings(inhabitants, waterType);
+          if (_chatExpanded) return const SizedBox.shrink();
+          final warnings = _compatibilityWarnings(widget.inhabitants, widget.waterType);
           if (warnings.isEmpty) return const SizedBox.shrink();
           return Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
@@ -3450,7 +3683,55 @@ class _ObInhabitantSummaryPage extends StatelessWidget {
             ),
           );
         }),
-        _obNextButton(label: 'Continue', onPressed: onNext),
+        // Chat input row
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 0, 12, 4),
+          child: Row(children: [
+            Expanded(
+              child: TextField(
+                controller: _textCtrl,
+                textInputAction: TextInputAction.send,
+                onSubmitted: (_) => _send(),
+                onTap: () {
+                  if (!_chatExpanded) setState(() => _chatExpanded = true);
+                },
+                decoration: InputDecoration(
+                  hintText: 'Forget anyone, tell us!',
+                  hintStyle: TextStyle(color: Colors.grey.shade400, fontSize: 13),
+                  prefixIcon: Padding(
+                    padding: const EdgeInsets.only(left: 12, right: 4),
+                    child: Icon(Icons.auto_awesome, size: 16, color: Colors.grey.shade400),
+                  ),
+                  prefixIconConstraints: const BoxConstraints(minWidth: 0, minHeight: 0),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(24),
+                    borderSide: BorderSide(color: _cMid, width: 1.5),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(24),
+                    borderSide: BorderSide(color: _cDark, width: 2),
+                  ),
+                  isDense: true,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 38, height: 38,
+              child: IconButton.filled(
+                onPressed: _sending ? null : _send,
+                icon: const Icon(Icons.send_rounded, size: 18),
+                style: IconButton.styleFrom(
+                  backgroundColor: _cDark,
+                  foregroundColor: Colors.white,
+                  shape: const CircleBorder(),
+                ),
+              ),
+            ),
+          ]),
+        ),
+        _obNextButton(label: 'Continue', onPressed: widget.onNext),
         const SizedBox(height: 8),
       ],
     );
@@ -3495,26 +3776,27 @@ class _ObWaterQualityPageState extends State<_ObWaterQualityPage> {
     (
       role: 'assistant',
       content: widget.experience == 'beginner'
-          ? "Hi! I'm Ariel 🐠 I'm here to help you with your aquarium journey. "
-            "You can ask me about tank setup, water testing, equipment, cycling — anything aquarium related.\n\n"
-            "Where would you like to start?\n\n"
-            "You can always find me by tapping the ✨ at the bottom of the screen."
-          : "Hey! I'm Ariel 🐠 I'll be here to help with water parameters, tank maintenance, "
-            "equipment questions, and anything else aquarium related.\n\n"
-            "Have you tested your water recently? Drop your latest numbers here and I'll log them.\n\n"
-            "You can always find me by tapping the ✨ at the bottom of the screen.",
+          ? "Hey! I'm Ariel 🐠\n\n"
+            "✨ Tap the sparkle button whenever you have a question — I'm here to help you learn.\n\n"
+            "🐟 Need help setting up your tank? Tell me what you have and I'll guide you through equipment, cycling, stocking, and more.\n\n"
+            "💧 Ask me about water quality, compatibility, maintenance — anything you're unsure about. I'll walk you through it.\n\n"
+            "🧪 Share your test results and tap water parameters so I can give advice tailored to your tank.\n\n"
+            "🔔 Ask me to schedule regular reminders — I'll help you build good habits from the start.\n\n"
+            "Give it a try!"
+          : "Hey! I'm Ariel 🐠\n\n"
+            "✨ Tap the sparkle button when you need a hand.\n\n"
+            "🐟 Planning a new build or making changes? Tell me about your setup and I'll help with equipment, stocking, and compatibility.\n\n"
+            "💧 Ask me about maintenance, water quality, test results, compatibility — I can even help estimate the impact changes will have on your aquarium.\n\n"
+            "🧪 Share your test results, tap water parameters, and tank equipment so I can customize my guidance to your specific setup.\n\n"
+            "🔔 Ask me to schedule regular reminders — I'll keep things on track.\n\n"
+            "Give it a try!",
     ),
   ];
 
   @override
   void didUpdateWidget(covariant _ObWaterQualityPage old) {
     super.didUpdateWidget(old);
-    if (widget.isActive && !old.isActive && !_csvPromptShown && widget.experience != 'beginner') {
-      _csvPromptShown = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _showCsvPrompt();
-      });
-    }
+    // Import CSV prompt disabled — the Import Data button is available in the chat instead
   }
 
   void _showCsvPrompt() {
@@ -3744,7 +4026,7 @@ class _ObWaterQualityPageState extends State<_ObWaterQualityPage> {
           child: Align(
             alignment: Alignment.centerLeft,
             child: Text(
-              'Water Quality',
+              'Meet Ariel',
               style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: _cDark),
             ),
           ),
@@ -3754,7 +4036,7 @@ class _ObWaterQualityPageState extends State<_ObWaterQualityPage> {
           child: Align(
             alignment: Alignment.centerLeft,
             child: Text(
-              'Regular testing and observation is the best protection for your aquarium.',
+              'Your AI assistant for everything aquarium related.',
               style: TextStyle(fontSize: 13, color: Colors.black54, height: 1.4),
             ),
           ),
@@ -3771,9 +4053,55 @@ class _ObWaterQualityPageState extends State<_ObWaterQualityPage> {
             child: ListView.builder(
               controller: _scrollCtrl,
               padding: const EdgeInsets.all(12),
-              itemCount: _messages.length + (_sending ? 1 : 0),
+              // +1 for the Import Data button after the first message
+              itemCount: _messages.length + 1 + (_sending ? 1 : 0),
               itemBuilder: (context, i) {
-                if (_sending && i == _messages.length) {
+                // First item is always Ariel's intro
+                if (i == 0) {
+                  final msg = _messages[0];
+                  return Align(
+                    alignment: Alignment.centerLeft,
+                    child: Container(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      constraints: BoxConstraints(
+                        maxWidth: MediaQuery.of(context).size.width * 0.75,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.grey.shade200),
+                      ),
+                      child: Text(
+                        msg.content,
+                        style: const TextStyle(fontSize: 13, color: Colors.black87, height: 1.4),
+                      ),
+                    ),
+                  );
+                }
+                // Import Data button right after intro
+                if (i == 1) {
+                  return Align(
+                    alignment: Alignment.centerLeft,
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: OutlinedButton.icon(
+                        onPressed: _showCsvPrompt,
+                        icon: const Icon(Icons.upload_file, size: 16),
+                        label: const Text('Import Data', style: TextStyle(fontSize: 13)),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: _cDark,
+                          side: BorderSide(color: _cMid, width: 1.5),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                        ),
+                      ),
+                    ),
+                  );
+                }
+                // Sending indicator
+                final msgIdx = i - 1; // offset by 1 for the import button
+                if (_sending && msgIdx == _messages.length) {
                   return Align(
                     alignment: Alignment.centerLeft,
                     child: Container(
@@ -3792,7 +4120,7 @@ class _ObWaterQualityPageState extends State<_ObWaterQualityPage> {
                     ),
                   );
                 }
-                final msg = _messages[i];
+                final msg = _messages[msgIdx];
                 final isUser = msg.role == 'user';
                 return Align(
                   alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
@@ -5828,7 +6156,7 @@ class _AddTaskSheetState extends State<_AddTaskSheet> {
     final dueFmt = _dueDate != null
         ? '${_dueDate!.month}/${_dueDate!.day}/${_dueDate!.year}'
         : null;
-    final topPad = MediaQuery.of(context).padding.top;
+    final topPad = MediaQuery.of(context).viewPadding.top;
     return ConstrainedBox(
       constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height - topPad - 16),
       child: Container(
@@ -5836,7 +6164,7 @@ class _AddTaskSheetState extends State<_AddTaskSheet> {
           color: Colors.white,
           borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
         ),
-        padding: EdgeInsets.fromLTRB(16, MediaQuery.of(context).padding.top + 16, 16, MediaQuery.of(context).viewInsets.bottom + MediaQuery.of(context).padding.bottom + 32),
+        padding: EdgeInsets.fromLTRB(16, MediaQuery.of(context).viewPadding.top + 16, 16, MediaQuery.of(context).viewInsets.bottom + MediaQuery.of(context).viewPadding.bottom + 32),
         child: SingleChildScrollView(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -5951,7 +6279,7 @@ class _AddNoteSheetState extends State<_AddNoteSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final topPad = MediaQuery.of(context).padding.top;
+    final topPad = MediaQuery.of(context).viewPadding.top;
     return ConstrainedBox(
       constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height - topPad - 16),
       child: Container(
@@ -5959,7 +6287,7 @@ class _AddNoteSheetState extends State<_AddNoteSheet> {
           color: Colors.white,
           borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
         ),
-        padding: EdgeInsets.fromLTRB(16, MediaQuery.of(context).padding.top + 16, 16, MediaQuery.of(context).viewInsets.bottom + MediaQuery.of(context).padding.bottom + 32),
+        padding: EdgeInsets.fromLTRB(16, MediaQuery.of(context).viewPadding.top + 16, 16, MediaQuery.of(context).viewInsets.bottom + MediaQuery.of(context).viewPadding.bottom + 32),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
@@ -6775,7 +7103,11 @@ class _AddTankFlowScreenState extends State<AddTankFlowScreen> {
                   _ObInhabitantSummaryPage(
                     inhabitants: _inhabitants,
                     waterType: _waterType,
+                    tankName: _tankNameCtrl.text,
+                    gallons: _gallons,
                     onNext: _goNext,
+                    onInhabitantsAdded: (added) => setState(() => _inhabitants = [..._inhabitants, ...added]),
+                    onInhabitantsRemoved: (names) => setState(() => _inhabitants = _inhabitants.where((i) => !names.contains(i.name.toLowerCase())).toList()),
                   ),
                   _ObCongratsPage(
                     experience: 'beginner',
@@ -9820,7 +10152,7 @@ class _AddMeasurementSheetState extends State<_AddMeasurementSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final topPad = MediaQuery.of(context).padding.top;
+    final topPad = MediaQuery.of(context).viewPadding.top;
     return ConstrainedBox(
       constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height - topPad - 16),
       child: Container(
@@ -9828,7 +10160,7 @@ class _AddMeasurementSheetState extends State<_AddMeasurementSheet> {
           color: Colors.white,
           borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
         ),
-        padding: EdgeInsets.fromLTRB(16, MediaQuery.of(context).padding.top + 16, 16, MediaQuery.of(context).viewInsets.bottom + MediaQuery.of(context).padding.bottom + 32),
+        padding: EdgeInsets.fromLTRB(16, MediaQuery.of(context).viewPadding.top + 16, 16, MediaQuery.of(context).viewInsets.bottom + MediaQuery.of(context).viewPadding.bottom + 32),
         child: SingleChildScrollView(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -10013,22 +10345,22 @@ class _LogEditSheetState extends State<_LogEditSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final topPad = MediaQuery.of(context).padding.top;
-    return ConstrainedBox(
-      constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height - topPad - 16),
+    return SafeArea(
+      bottom: false,
+      minimum: const EdgeInsets.only(top: 26),
       child: Container(
         decoration: const BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
         ),
-        padding: EdgeInsets.fromLTRB(16, MediaQuery.of(context).padding.top + 16, 16, MediaQuery.of(context).viewInsets.bottom + MediaQuery.of(context).padding.bottom + 32),
+        padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(context).viewInsets.bottom + MediaQuery.of(context).viewPadding.bottom + 32),
         child: SingleChildScrollView(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
               Row(children: [
-                const Text('Edit Log Entry', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
+                const Text('Edit Journal Entry', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
               const Spacer(),
               TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
               const SizedBox(width: 8),

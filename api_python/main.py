@@ -1487,6 +1487,17 @@ Rules:
 - Only include inhabitants the user explicitly said to add — not ones already in the tank profile.
 - If the conversation is just a question or clarification with no clear species to add, return {"inhabitants": []}"""
 
+_REMOVE_INHABITANT_EXTRACT_PROMPT = """Based on this conversation, extract the inhabitant(s) the user wants to REMOVE from their tank profile.
+
+Return ONLY valid JSON — no markdown, no explanation:
+{"inhabitants": [{"name": "Guppy", "count": 2}]}
+
+Rules:
+- name: use the name as closely as the user mentioned it. Capitalize properly.
+- count: integer. The number to remove. If the user says "remove guppies" without a count, use -1 to mean "remove all".
+- Only include inhabitants the user explicitly asked to remove or delete.
+- If no removal was requested, return {"inhabitants": []}"""
+
 
 _NEW_TANK_EXTRACT_PROMPT = """Based on this conversation, extract the new tank details into JSON.
 
@@ -2221,6 +2232,51 @@ def chat_tank(request: Request, req: ChatRequest, user_id: str = Depends(_get_us
             except Exception as e:
                 print(f"[Chat/InhabitantExtract] error: {e}")
 
+        # Extract inhabitant removals
+        remove_inhabitants = None
+
+        reply_confirms_removal = any(k in reply_lower for k in [
+            "removed", "i've removed", "i have removed", "taken out",
+            "deleted", "i've deleted", "i have deleted",
+            "done", "all set", "taken care",
+        ])
+        user_requests_removal = bool(re.search(
+            r"\b(remove|delete|take out|get rid of|drop)\b.{0,50}(from|off|out)",
+            req.message, re.IGNORECASE,
+        )) or bool(re.search(
+            r"\b(remove|delete|take out|get rid of|drop)\b.{0,30}\b(guppy|guppies|fish|coral|shrimp|snail|tetra|neon|\w+)\b",
+            req.message, re.IGNORECASE,
+        ))
+
+        should_extract_removal = (reply_confirms_removal or user_requests_removal) and any(
+            k in (req.message.lower() + " " + reply_lower) for k in ["remove", "delete", "take out", "get rid", "drop"]
+        )
+        print(f"[InhabitantRemove] triggers: reply_confirms={reply_confirms_removal}, user_requests={user_requests_removal} → should_extract={should_extract_removal}")
+
+        if should_extract_removal:
+            convo = "\n".join(
+                f"{m['role'].upper()}: {m['content']}"
+                for m in (req.history or [])
+                if m.get("role") in ("user", "assistant")
+            )
+            convo += f"\nUSER: {req.message}\nASSISTANT: {reply}"
+            try:
+                rem_response = _chat(client,
+                    model="claude-haiku-4-5",
+                    max_tokens=256,
+                    system=_REMOVE_INHABITANT_EXTRACT_PROMPT,
+                    messages=[{"role": "user", "content": convo}],
+                )
+                raw = rem_response.content[0].text.strip()
+                raw = re.sub(r"^```(?:json)?\s*", "", raw)
+                raw = re.sub(r"\s*```$", "", raw).strip()
+                parsed = json.loads(raw)
+                if parsed.get("inhabitants"):
+                    remove_inhabitants = parsed
+                    print(f"[InhabitantRemove] extracted: {remove_inhabitants}")
+            except Exception as e:
+                print(f"[Chat/InhabitantRemove] error: {e}")
+
         # Extract new plants — same three triggers as inhabitants
         new_plants = None
 
@@ -2384,6 +2440,7 @@ def chat_tank(request: Request, req: ChatRequest, user_id: str = Depends(_get_us
             "tasks": extracted_tasks,
             "new_tank": new_tank,
             "new_inhabitant": new_inhabitant,
+            "remove_inhabitants": remove_inhabitants,
             "new_plants": new_plants,
             "rename_plant": rename_plant,
             "measurement_correction": measurement_correction,
