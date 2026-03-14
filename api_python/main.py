@@ -677,6 +677,12 @@ Return this exact shape — always a "logs" array, even for a single entry:
 
 SINGLE-ENTRY RULE: Combine ALL measurements, actions, and notes from a single message into ONE log object. Do NOT split a single message into multiple log entries unless the user explicitly references different dates.
 
+BEFORE/AFTER WATER CHANGE ON SAME DAY: When a user CLEARLY indicates two sets of measurements on the same day — one taken BEFORE a water change and one AFTER — combine them into a single log entry for that date. If it is ambiguous which readings are before vs after, return all-empty output and let the chat assistant ask for clarification.
+- "measurements": should contain ONLY the AFTER water change readings (these are the current tank state).
+- "notes": should include the BEFORE water change readings as text, e.g. "Before water change: pH 7.8, nitrate 40, GH 12". Also add a note: "Measurements above recorded after water change."
+- "actions": should include the water change action as usual.
+This ensures the journal shows the current (post-change) values as the official measurements while preserving the pre-change readings as context in the notes.
+
 MULTI-DATE ENTRIES: If the user mentions measurements or events across multiple distinct dates (e.g. "ca was 50ppm 2.22.26 next day 65 next day 75", or "on Monday pH was 7.2, Tuesday pH was 7.4"), create a SEPARATE log object for each date inside the "logs" array. Each entry should only contain the measurements/actions/notes relevant to that specific date. Relative day references like "next day" mean +1 day from the preceding date.
 
 "tasks" — scheduling or reminder requests from the user, ONLY if they relate to aquarium care.
@@ -1554,8 +1560,14 @@ def _is_affirmation(text: str) -> bool:
     t = text.lower().strip().rstrip("!.")
     affirmations = ["yes", "yeah", "sure", "ok", "okay", "please", "yep", "yup",
                     "go ahead", "do it", "set it", "sounds good", "that would be great",
-                    "yes please", "sure thing", "absolutely"]
-    return any(t == a or t.startswith(a + " ") or t.startswith(a + ",") for a in affirmations)
+                    "yes please", "sure thing", "absolutely", "go for it", "why not",
+                    "i said yes", "that's what i asked", "that's what i said"]
+    # Also match implicit references to prior offers
+    implicit = ["you offered", "you said you would", "you already offered",
+                "you just offered", "you mentioned", "you suggested",
+                "didn't you offer", "thought you were going to"]
+    return (any(t == a or t.startswith(a + " ") or t.startswith(a + ",") for a in affirmations)
+            or any(k in t for k in implicit))
 
 
 def _history_has_tank_creation_offer(history: list) -> tuple[bool, str]:
@@ -1599,7 +1611,8 @@ def _history_has_reminder_offer(history: list) -> tuple[bool, str]:
 
 
 def _history_has_inhabitant_add_offer(history: list) -> tuple[bool, str]:
-    """Returns (has_offer, ai_message_text) if the last AI message offered to add an inhabitant."""
+    """Returns (has_offer, ai_message_text) if a recent AI message offered to add an inhabitant."""
+    checked = 0
     for msg in reversed(history or []):
         if msg.get("role") == "assistant":
             content = msg.get("content", "")
@@ -1612,12 +1625,15 @@ def _history_has_inhabitant_add_offer(history: list) -> tuple[bool, str]:
                 "want me to log", "shall i log",
             ]):
                 return True, content
-            return False, ""
+            checked += 1
+            if checked >= 3:
+                break
     return False, ""
 
 
 def _history_has_plant_add_offer(history: list) -> tuple[bool, str]:
-    """Returns (has_offer, ai_message_text) if the last AI message offered to add a plant."""
+    """Returns (has_offer, ai_message_text) if a recent AI message offered to add a plant."""
+    checked = 0
     for msg in reversed(history or []):
         if msg.get("role") == "assistant":
             content = msg.get("content", "")
@@ -1631,7 +1647,9 @@ def _history_has_plant_add_offer(history: list) -> tuple[bool, str]:
                 "want me to log", "shall i log",
             ]):
                 return True, content
-            return False, ""
+            checked += 1
+            if checked >= 3:  # check last 3 assistant messages
+                break
     return False, ""
 
 
@@ -2165,12 +2183,20 @@ def chat_tank(request: Request, req: ChatRequest, user_id: str = Depends(_get_us
             req.message, re.IGNORECASE,
         ))
 
+        # Terse reply confirms guarded by history context
+        inhab_reply_terse = any(k in reply_lower for k in [
+            "done", "all done", "all set", "taken care", "you're right",
+            "got it", "no problem", "of course",
+        ])
+        history_has_inhab_offer = _history_has_inhabitant_add_offer(req.history or [])[0]
+
         should_extract = (
-            (_is_affirmation(req.message) and _history_has_inhabitant_add_offer(req.history or [])[0])
+            (_is_affirmation(req.message) and history_has_inhab_offer)
             or reply_confirms_added
             or user_explicit_add
+            or (inhab_reply_terse and history_has_inhab_offer)
         )
-        print(f"[InhabitantExtract] triggers: affirm={_is_affirmation(req.message)}, history_offer={_history_has_inhabitant_add_offer(req.history or [])[0]}, reply_confirms={reply_confirms_added}, user_explicit={user_explicit_add} → should_extract={should_extract}")
+        print(f"[InhabitantExtract] triggers: affirm={_is_affirmation(req.message)}, history_offer={history_has_inhab_offer}, reply_confirms={reply_confirms_added}, reply_terse={inhab_reply_terse}, user_explicit={user_explicit_add} → should_extract={should_extract}")
 
         if should_extract:
             convo = "\n".join(
@@ -2217,12 +2243,20 @@ def chat_tank(request: Request, req: ChatRequest, user_id: str = Depends(_get_us
             req.message, re.IGNORECASE,
         ))
 
+        # Terse reply confirms ("done", "all set") only count when history has a plant add offer
+        reply_terse_confirm = any(k in reply_lower for k in [
+            "done", "all done", "all set", "taken care", "you're right",
+            "got it", "no problem", "of course",
+        ])
+        history_has_plant_offer = _history_has_plant_add_offer(req.history or [])[0]
+
         should_extract_plants = (
-            (_is_affirmation(req.message) and _history_has_plant_add_offer(req.history or [])[0])
+            (_is_affirmation(req.message) and history_has_plant_offer)
             or reply_confirms_plant_added
             or user_explicit_plant_add
+            or (reply_terse_confirm and history_has_plant_offer)
         )
-        print(f"[PlantExtract] triggers: affirm={_is_affirmation(req.message)}, history_offer={_history_has_plant_add_offer(req.history or [])[0]}, reply_confirms={reply_confirms_plant_added}, user_explicit={user_explicit_plant_add} → should_extract={should_extract_plants}")
+        print(f"[PlantExtract] triggers: affirm={_is_affirmation(req.message)}, history_offer={history_has_plant_offer}, reply_confirms={reply_confirms_plant_added}, reply_terse={reply_terse_confirm}, user_explicit={user_explicit_plant_add} → should_extract={should_extract_plants}")
 
         if should_extract_plants:
             convo = "\n".join(
