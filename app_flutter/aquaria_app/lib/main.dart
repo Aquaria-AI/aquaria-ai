@@ -8098,9 +8098,10 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
 
   Future<void> _loadSummary() async {
     if (_journal.isEmpty) return;
+    if (_summaryLoading) return; // prevent concurrent calls
 
     // Use cached summary if journal hasn't changed and cache is fresh (6 days)
-    final cached = TankStore.instance.getCachedSummary(_tank.id, _journal);
+    final cached = await TankStore.instance.getCachedSummary(_tank.id, _journal);
     if (cached != null) {
       if (mounted) setState(() { _summary = cached.text; _summaryExpanded = false; });
       return;
@@ -8165,7 +8166,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
             lower.contains('nothing logged') ||
             lower.contains('no information');
         final text = isEmpty ? null : raw;
-        if (text != null) TankStore.instance.cacheSummary(_tank.id, text, _journal);
+        if (text != null) await TankStore.instance.cacheSummary(_tank.id, text, _journal);
         setState(() { _summary = text; _summaryExpanded = false; });
       }
     } catch (e) {
@@ -8175,8 +8176,10 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
   }
 
   Future<void> _loadSuggestions() async {
+    if (_suggestionsLoading) return; // prevent concurrent calls
+
     // Use cached suggestions if journal hasn't changed and cache is fresh
-    final cachedSugg = TankStore.instance.getCachedSuggestions(_tank.id, _journal);
+    final cachedSugg = await TankStore.instance.getCachedSuggestions(_tank.id, _journal);
     if (cachedSugg != null) {
       if (mounted) setState(() { _suggestions = cachedSugg.suggestions; _suggestionsLoading = false; });
       return;
@@ -8246,7 +8249,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
         final raw = data['suggestions'] as List<dynamic>?;
         if (raw != null) {
           final parsed = raw.map((s) => s.toString()).toList();
-          TankStore.instance.cacheSuggestions(_tank.id, parsed, _journal);
+          await TankStore.instance.cacheSuggestions(_tank.id, parsed, _journal);
           setState(() {
             _suggestions = parsed;
             _alertLevel = (data['alert_level'] as String?) ?? 'none';

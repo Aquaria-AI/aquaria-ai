@@ -489,66 +489,104 @@ class TankStore {
   }
 
   // ----------------------------------------------------------------
-  // AI summary cache
+  // AI summary & suggestions cache (in-memory + SQLite-backed)
   // ----------------------------------------------------------------
   final Map<String, _SummaryCache> _summaryCache = {};
+  final Map<String, _SuggestionsCache> _suggestionsCache = {};
 
-  _SummaryCache? getCachedSummary(String tankId, List<db.JournalEntry> currentJournal) {
-    final cache = _summaryCache[tankId];
-    if (cache == null) return null;
-    final latestUpdatedAt = currentJournal.isNotEmpty
-        ? currentJournal.map((j) => j.updatedAt).reduce((a, b) => a.isAfter(b) ? a : b)
-        : null;
-    final stale = DateTime.now().difference(cache.generatedAt).inDays >= 6;
-    final journalChanged = cache.entryCount != currentJournal.length ||
-        cache.latestEntryUpdatedAt != latestUpdatedAt;
-    if (stale || journalChanged) return null;
+  static int? _latestMs(List<db.JournalEntry> journal) {
+    if (journal.isEmpty) return null;
+    return journal.map((j) => j.updatedAt.millisecondsSinceEpoch).reduce((a, b) => a > b ? a : b);
+  }
+
+  static bool _cacheStale(int generatedAtMs, int entryCount, int? latestEntryMs,
+      List<db.JournalEntry> currentJournal) {
+    final age = DateTime.now().millisecondsSinceEpoch - generatedAtMs;
+    if (age >= 6 * 24 * 60 * 60 * 1000) return true; // 6 days
+    if (entryCount != currentJournal.length) return true;
+    if (latestEntryMs != _latestMs(currentJournal)) return true;
+    return false;
+  }
+
+  Future<_SummaryCache?> getCachedSummary(String tankId, List<db.JournalEntry> currentJournal) async {
+    // Try in-memory first
+    final mem = _summaryCache[tankId];
+    if (mem != null) {
+      if (!_cacheStale(mem.generatedAt.millisecondsSinceEpoch, mem.entryCount, mem.latestEntryMs, currentJournal)) {
+        return mem;
+      }
+      _summaryCache.remove(tankId);
+    }
+    // Try disk
+    final row = await _db.getAiCache(tankId, 'summary');
+    if (row == null) return null;
+    final generatedAt = row['generated_at'] as int;
+    final entryCount = row['entry_count'] as int;
+    final latestMs = row['latest_entry_ms'] as int?;
+    if (_cacheStale(generatedAt, entryCount, latestMs, currentJournal)) return null;
+    final cache = _SummaryCache(
+      text: row['data'] as String,
+      entryCount: entryCount,
+      latestEntryMs: latestMs,
+      generatedAt: DateTime.fromMillisecondsSinceEpoch(generatedAt),
+    );
+    _summaryCache[tankId] = cache;
     return cache;
   }
 
-  void cacheSummary(String tankId, String text, List<db.JournalEntry> journal) {
+  Future<void> cacheSummary(String tankId, String text, List<db.JournalEntry> journal) async {
+    final ms = _latestMs(journal);
     _summaryCache[tankId] = _SummaryCache(
       text: text,
       entryCount: journal.length,
-      latestEntryUpdatedAt: journal.isNotEmpty
-          ? journal.map((j) => j.updatedAt).reduce((a, b) => a.isAfter(b) ? a : b)
-          : null,
+      latestEntryMs: ms,
       generatedAt: DateTime.now(),
     );
+    await _db.setAiCache(tankId, 'summary', text, journal.length, ms);
   }
 
-  void invalidateSummary(String tankId) {
+  Future<void> invalidateSummary(String tankId) async {
     _summaryCache.remove(tankId);
     _suggestionsCache.remove(tankId);
+    await _db.deleteAiCache(tankId);
   }
 
-  // ----------------------------------------------------------------
-  // AI suggestions cache
-  // ----------------------------------------------------------------
-  final Map<String, _SuggestionsCache> _suggestionsCache = {};
-
-  _SuggestionsCache? getCachedSuggestions(String tankId, List<db.JournalEntry> currentJournal) {
-    final cache = _suggestionsCache[tankId];
-    if (cache == null) return null;
-    final latestUpdatedAt = currentJournal.isNotEmpty
-        ? currentJournal.map((j) => j.updatedAt).reduce((a, b) => a.isAfter(b) ? a : b)
-        : null;
-    final stale = DateTime.now().difference(cache.generatedAt).inDays >= 6;
-    final journalChanged = cache.entryCount != currentJournal.length ||
-        cache.latestEntryUpdatedAt != latestUpdatedAt;
-    if (stale || journalChanged) return null;
+  Future<_SuggestionsCache?> getCachedSuggestions(String tankId, List<db.JournalEntry> currentJournal) async {
+    // Try in-memory first
+    final mem = _suggestionsCache[tankId];
+    if (mem != null) {
+      if (!_cacheStale(mem.generatedAt.millisecondsSinceEpoch, mem.entryCount, mem.latestEntryMs, currentJournal)) {
+        return mem;
+      }
+      _suggestionsCache.remove(tankId);
+    }
+    // Try disk
+    final row = await _db.getAiCache(tankId, 'suggestions');
+    if (row == null) return null;
+    final generatedAt = row['generated_at'] as int;
+    final entryCount = row['entry_count'] as int;
+    final latestMs = row['latest_entry_ms'] as int?;
+    if (_cacheStale(generatedAt, entryCount, latestMs, currentJournal)) return null;
+    final suggestions = (jsonDecode(row['data'] as String) as List).cast<String>();
+    final cache = _SuggestionsCache(
+      suggestions: suggestions,
+      entryCount: entryCount,
+      latestEntryMs: latestMs,
+      generatedAt: DateTime.fromMillisecondsSinceEpoch(generatedAt),
+    );
+    _suggestionsCache[tankId] = cache;
     return cache;
   }
 
-  void cacheSuggestions(String tankId, List<String> suggestions, List<db.JournalEntry> journal) {
+  Future<void> cacheSuggestions(String tankId, List<String> suggestions, List<db.JournalEntry> journal) async {
+    final ms = _latestMs(journal);
     _suggestionsCache[tankId] = _SuggestionsCache(
       suggestions: suggestions,
       entryCount: journal.length,
-      latestEntryUpdatedAt: journal.isNotEmpty
-          ? journal.map((j) => j.updatedAt).reduce((a, b) => a.isAfter(b) ? a : b)
-          : null,
+      latestEntryMs: ms,
       generatedAt: DateTime.now(),
     );
+    await _db.setAiCache(tankId, 'suggestions', jsonEncode(suggestions), journal.length, ms);
   }
 
   // ----------------------------------------------------------------
@@ -1243,13 +1281,13 @@ class TankStore {
 class _SummaryCache {
   final String text;
   final int entryCount;
-  final DateTime? latestEntryUpdatedAt;
+  final int? latestEntryMs;
   final DateTime generatedAt;
 
   const _SummaryCache({
     required this.text,
     required this.entryCount,
-    required this.latestEntryUpdatedAt,
+    required this.latestEntryMs,
     required this.generatedAt,
   });
 }
@@ -1257,13 +1295,13 @@ class _SummaryCache {
 class _SuggestionsCache {
   final List<String> suggestions;
   final int entryCount;
-  final DateTime? latestEntryUpdatedAt;
+  final int? latestEntryMs;
   final DateTime generatedAt;
 
   const _SuggestionsCache({
     required this.suggestions,
     required this.entryCount,
-    required this.latestEntryUpdatedAt,
+    required this.latestEntryMs,
     required this.generatedAt,
   });
 }

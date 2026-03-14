@@ -141,7 +141,7 @@ class AppDb extends _$AppDb {
   AppDb() : super(_openConnection());
 
   @override
-  int get schemaVersion => 19;
+  int get schemaVersion => 20;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -159,6 +159,13 @@ class AppDb extends _$AppDb {
             'CREATE TABLE IF NOT EXISTS synced_log_keys '
             '(tank_id TEXT NOT NULL, created_at_utc TEXT NOT NULL, '
             'PRIMARY KEY(tank_id, created_at_utc))',
+          );
+          await customStatement(
+            'CREATE TABLE IF NOT EXISTS ai_cache '
+            '(tank_id TEXT NOT NULL, kind TEXT NOT NULL, '
+            'data TEXT NOT NULL, entry_count INTEGER NOT NULL, '
+            'latest_entry_ms INTEGER, generated_at INTEGER NOT NULL, '
+            'PRIMARY KEY(tank_id, kind))',
           );
         },
         onUpgrade: (migrator, from, to) async {
@@ -228,6 +235,15 @@ class AppDb extends _$AppDb {
           }
           if (from <= 18) {
             await migrator.addColumn(tankPhotos, tankPhotos.remotePath);
+          }
+          if (from <= 19) {
+            await customStatement(
+              'CREATE TABLE IF NOT EXISTS ai_cache '
+              '(tank_id TEXT NOT NULL, kind TEXT NOT NULL, '
+              'data TEXT NOT NULL, entry_count INTEGER NOT NULL, '
+              'latest_entry_ms INTEGER, generated_at INTEGER NOT NULL, '
+              'PRIMARY KEY(tank_id, kind))',
+            );
           }
         },
       );
@@ -698,10 +714,14 @@ class AppDb extends _$AppDb {
       ));
     } else {
       final row = existing.first;
+      // Skip write entirely if data hasn't changed (preserves updatedAt for cache stability)
+      final dataChanged = row.data != data;
+      final cloudIdChanged = cloudId != null && cloudId != row.cloudId;
+      if (!dataChanged && !cloudIdChanged) return row.id;
       await (update(journalEntries)..where((r) => r.id.equals(row.id))).write(
         JournalEntriesCompanion(
           data: Value(data),
-          updatedAt: Value(now),
+          updatedAt: dataChanged ? Value(now) : const Value.absent(),
           cloudId: Value(cloudId ?? row.cloudId),
         ),
       );
@@ -846,7 +866,35 @@ class AppDb extends _$AppDb {
     await customStatement('DELETE FROM dismissed_tasks');
     await customStatement('DELETE FROM deleted_log_keys');
     await customStatement('DELETE FROM synced_log_keys');
+    await customStatement('DELETE FROM ai_cache');
     await delete(tanks).go();
+  }
+
+  // ---------- AI Cache ----------
+  Future<Map<String, dynamic>?> getAiCache(String tankId, String kind) async {
+    final rows = await customSelect(
+      'SELECT data, entry_count, latest_entry_ms, generated_at FROM ai_cache WHERE tank_id = ? AND kind = ?',
+      variables: [Variable.withString(tankId), Variable.withString(kind)],
+    ).get();
+    if (rows.isEmpty) return null;
+    final row = rows.first;
+    return {
+      'data': row.read<String>('data'),
+      'entry_count': row.read<int>('entry_count'),
+      'latest_entry_ms': row.readNullable<int>('latest_entry_ms'),
+      'generated_at': row.read<int>('generated_at'),
+    };
+  }
+
+  Future<void> setAiCache(String tankId, String kind, String data, int entryCount, int? latestEntryMs) async {
+    await customStatement(
+      'INSERT OR REPLACE INTO ai_cache (tank_id, kind, data, entry_count, latest_entry_ms, generated_at) VALUES (?, ?, ?, ?, ?, ?)',
+      [tankId, kind, data, entryCount, latestEntryMs, DateTime.now().millisecondsSinceEpoch],
+    );
+  }
+
+  Future<void> deleteAiCache(String tankId) async {
+    await customStatement('DELETE FROM ai_cache WHERE tank_id = ?', [tankId]);
   }
 }
 
