@@ -448,6 +448,8 @@ AppBar _buildAppBar(BuildContext context, String title, {List<Widget>? actions, 
               );
             } else if (value == 'discord') {
               _showDiscordSheet(context);
+            } else if (value == 'twitter') {
+              _showTwitterSheet(context);
             } else if (value == 'donate') {
               launchUrl(Uri.parse('https://buy.stripe.com/00wcN6a8f9TM5QKaxw2sM01'), mode: LaunchMode.externalApplication);
             } else if (value == 'sign_out') {
@@ -489,6 +491,8 @@ AppBar _buildAppBar(BuildContext context, String title, {List<Widget>? actions, 
             const PopupMenuItem(value: 'invite', child: Text('Invite Friends')),
             if (SupabaseService.isLoggedIn)
               const PopupMenuItem(value: 'discord', child: Text('Discord')),
+            if (SupabaseService.isLoggedIn)
+              const PopupMenuItem(value: 'twitter', child: Text('Twitter / X')),
             if (SupabaseService.userEmail == 'maugliera@gmail.com' || SupabaseService.isAdmin)
               const PopupMenuItem(value: 'onboarding', child: Text('Onboarding')),
             const PopupMenuItem(value: 'feedback', child: Text('Feedback')),
@@ -1052,6 +1056,358 @@ Future<void> _showDiscordShareFlow(BuildContext context, String photoStoragePath
       ScaffoldMessenger.of(context)
         ..clearSnackBars()
         ..showSnackBar(const SnackBar(content: Text('Failed to share')));
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Twitter/X integration
+// ---------------------------------------------------------------------------
+
+void _showTwitterSheet(BuildContext context) {
+  showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+    ),
+    builder: (ctx) => const _TwitterSheet(),
+  );
+}
+
+class _TwitterSheet extends StatefulWidget {
+  const _TwitterSheet();
+  @override
+  State<_TwitterSheet> createState() => _TwitterSheetState();
+}
+
+class _TwitterSheetState extends State<_TwitterSheet> {
+  bool _loading = true;
+  bool _linked = false;
+  String _username = '';
+  String _error = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _checkStatus();
+  }
+
+  Future<void> _checkStatus() async {
+    setState(() { _loading = true; _error = ''; });
+    try {
+      final resp = await http.get(
+        Uri.parse('$_kBaseUrl/twitter/status'),
+        headers: _apiHeaders(),
+      ).timeout(const Duration(seconds: 10));
+      if (resp.statusCode == 200) {
+        final data = jsonDecode(resp.body);
+        setState(() {
+          _linked = data['linked'] == true;
+          _username = data['twitter_username'] ?? '';
+          _loading = false;
+        });
+      } else {
+        setState(() { _loading = false; _error = 'Failed to check status'; });
+      }
+    } catch (e) {
+      setState(() { _loading = false; _error = 'Connection error'; });
+    }
+  }
+
+  Future<void> _linkTwitter() async {
+    setState(() { _loading = true; _error = ''; });
+    try {
+      final resp = await http.get(
+        Uri.parse('$_kBaseUrl/twitter/auth-url'),
+        headers: _apiHeaders(),
+      ).timeout(const Duration(seconds: 10));
+      if (resp.statusCode == 200) {
+        final url = jsonDecode(resp.body)['url'] as String;
+        await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+        setState(() => _loading = false);
+        _pollForLink();
+      } else {
+        setState(() { _loading = false; _error = 'Failed to start linking'; });
+      }
+    } catch (e) {
+      setState(() { _loading = false; _error = 'Connection error'; });
+    }
+  }
+
+  void _pollForLink() {
+    int attempts = 0;
+    Future.doWhile(() async {
+      await Future.delayed(const Duration(seconds: 3));
+      if (!mounted) return false;
+      attempts++;
+      if (attempts > 40) return false;
+      try {
+        final resp = await http.get(
+          Uri.parse('$_kBaseUrl/twitter/status'),
+          headers: _apiHeaders(),
+        ).timeout(const Duration(seconds: 5));
+        if (resp.statusCode == 200) {
+          final data = jsonDecode(resp.body);
+          if (data['linked'] == true) {
+            if (mounted) {
+              setState(() {
+                _linked = true;
+                _username = data['twitter_username'] ?? '';
+              });
+              ScaffoldMessenger.of(context)
+                ..clearSnackBars()
+                ..showSnackBar(const SnackBar(content: Text('Twitter linked!')));
+            }
+            return false;
+          }
+        }
+      } catch (_) {}
+      return true;
+    });
+  }
+
+  Future<void> _unlinkTwitter() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Unlink Twitter?'),
+        content: Text('Disconnect @$_username from Aquaria?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Unlink')),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    setState(() => _loading = true);
+    try {
+      await http.delete(
+        Uri.parse('$_kBaseUrl/twitter/unlink'),
+        headers: _apiHeaders(),
+      ).timeout(const Duration(seconds: 10));
+      setState(() { _linked = false; _username = ''; _loading = false; });
+    } catch (e) {
+      setState(() { _loading = false; _error = 'Failed to unlink'; });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 20, right: 20, top: 24,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 24,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.alternate_email, color: Colors.black87, size: 26),
+              const SizedBox(width: 10),
+              const Text('Twitter / X', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+              const Spacer(),
+              GestureDetector(
+                onTap: () => Navigator.pop(context),
+                child: const Icon(Icons.close, size: 22, color: Colors.grey),
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+          if (_loading)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 24),
+              child: CircularProgressIndicator(),
+            )
+          else if (_error.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              child: Column(children: [
+                Text(_error, style: const TextStyle(color: Colors.red)),
+                const SizedBox(height: 12),
+                ElevatedButton(onPressed: _checkStatus, child: const Text('Retry')),
+              ]),
+            )
+          else if (_linked) ...[
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF0F5FF),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(children: [
+                const Icon(Icons.check_circle, color: Colors.black87),
+                const SizedBox(width: 12),
+                Expanded(child: Text('Connected as @$_username',
+                    style: const TextStyle(fontWeight: FontWeight.w500))),
+              ]),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'Share tank photos to Twitter/X from the share menu on any photo.',
+              style: TextStyle(fontSize: 13, color: Colors.black54),
+            ),
+            const SizedBox(height: 16),
+            TextButton(
+              onPressed: _unlinkTwitter,
+              child: const Text('Unlink Twitter', style: TextStyle(color: Colors.red)),
+            ),
+          ] else ...[
+            const Text(
+              'Link your Twitter/X account to share tank photos directly to your timeline.',
+              style: TextStyle(fontSize: 14, color: Colors.black87),
+            ),
+            const SizedBox(height: 20),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _linkTwitter,
+                icon: const Icon(Icons.link),
+                label: const Text('Link Twitter / X'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.black87,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Show Twitter share flow: write tweet text → post
+Future<void> _showTwitterShareFlow(BuildContext context, String photoStoragePath) async {
+  final headers = _apiHeaders();
+
+  // Check linked status — if not linked, start OAuth inline
+  final statusResp = await http.get(
+    Uri.parse('$_kBaseUrl/twitter/status'),
+    headers: headers,
+  ).timeout(const Duration(seconds: 10));
+  if (statusResp.statusCode != 200 || jsonDecode(statusResp.body)['linked'] != true) {
+    if (!context.mounted) return;
+    final authResp = await http.get(
+      Uri.parse('$_kBaseUrl/twitter/auth-url'),
+      headers: headers,
+    ).timeout(const Duration(seconds: 10));
+    if (authResp.statusCode != 200 || !context.mounted) return;
+    final url = jsonDecode(authResp.body)['url'] as String;
+    await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+    if (context.mounted) {
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(const SnackBar(content: Text('Linking Twitter — authorize in your browser, then come back...')));
+    }
+    bool linked = false;
+    for (int i = 0; i < 40; i++) {
+      await Future.delayed(const Duration(seconds: 3));
+      if (!context.mounted) return;
+      try {
+        final poll = await http.get(
+          Uri.parse('$_kBaseUrl/twitter/status'),
+          headers: headers,
+        ).timeout(const Duration(seconds: 5));
+        if (poll.statusCode == 200 && jsonDecode(poll.body)['linked'] == true) {
+          linked = true;
+          break;
+        }
+      } catch (_) {}
+    }
+    if (!linked || !context.mounted) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context)
+          ..clearSnackBars()
+          ..showSnackBar(const SnackBar(content: Text('Twitter linking timed out. Try again.')));
+      }
+      return;
+    }
+    if (context.mounted) {
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(const SnackBar(content: Text('Twitter linked!')));
+    }
+  }
+
+  if (!context.mounted) return;
+
+  // Tweet text dialog
+  final textCtrl = TextEditingController();
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Post to Twitter / X'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: textCtrl,
+            decoration: const InputDecoration(
+              labelText: 'What do you want to say?',
+              hintText: 'Check out my tank!',
+              border: OutlineInputBorder(),
+            ),
+            textCapitalization: TextCapitalization.sentences,
+            maxLines: 3,
+            maxLength: 200, // leave room for credit
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Credit line and link will be added automatically.',
+            style: TextStyle(fontSize: 12, color: Colors.black45),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+        TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Post')),
+      ],
+    ),
+  );
+  if (confirmed != true || textCtrl.text.trim().isEmpty || !context.mounted) return;
+
+  // Post to Twitter
+  ScaffoldMessenger.of(context)
+    ..clearSnackBars()
+    ..showSnackBar(const SnackBar(content: Text('Posting to Twitter...')));
+  try {
+    final shareResp = await http.post(
+      Uri.parse('$_kBaseUrl/twitter/share'),
+      headers: headers,
+      body: jsonEncode({
+        'text': textCtrl.text.trim(),
+        'photo_storage_path': photoStoragePath,
+      }),
+    ).timeout(const Duration(seconds: 30));
+    if (context.mounted) {
+      if (shareResp.statusCode == 200) {
+        final data = jsonDecode(shareResp.body);
+        final tweetUrl = data['tweet_url'] ?? '';
+        ScaffoldMessenger.of(context)
+          ..clearSnackBars()
+          ..showSnackBar(SnackBar(
+            content: const Text('Posted to Twitter!'),
+            action: tweetUrl.isNotEmpty ? SnackBarAction(
+              label: 'View',
+              onPressed: () => launchUrl(Uri.parse(tweetUrl), mode: LaunchMode.externalApplication),
+            ) : null,
+          ));
+      } else {
+        final err = jsonDecode(shareResp.body)['detail'] ?? 'Post failed';
+        ScaffoldMessenger.of(context)
+          ..clearSnackBars()
+          ..showSnackBar(SnackBar(content: Text('Error: $err')));
+      }
+    }
+  } catch (e) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(const SnackBar(content: Text('Failed to post')));
     }
   }
 }
@@ -14842,10 +15198,18 @@ class _FullScreenNetworkImageState extends State<_FullScreenNetworkImage> {
                       children: [
                         ListTile(
                           leading: const Icon(Icons.discord, color: Color(0xFF5865F2)),
-                          title: const Text('Share to Discord'),
+                          title: const Text('Discord'),
                           onTap: () {
                             Navigator.pop(ctx);
                             _showDiscordShareFlow(context, widget.photoStoragePath!);
+                          },
+                        ),
+                        ListTile(
+                          leading: const Icon(Icons.alternate_email, color: Colors.black87),
+                          title: const Text('Twitter / X'),
+                          onTap: () {
+                            Navigator.pop(ctx);
+                            _showTwitterShareFlow(context, widget.photoStoragePath!);
                           },
                         ),
                       ],
@@ -15018,13 +15382,33 @@ class _PhotoDetailScreenState extends State<_PhotoDetailScreen> {
                           subtitle: const Text('Share to a Discord server'),
                           onTap: () async {
                             Navigator.pop(ctx);
-                            // Upload to Supabase storage first, then share to Discord
                             setState(() => _sharing = true);
                             try {
                               final storagePath = await SupabaseService.uploadCommunityPhoto(widget.photo.filePath);
                               if (mounted) {
                                 setState(() => _sharing = false);
                                 _showDiscordShareFlow(context, storagePath);
+                              }
+                            } catch (e) {
+                              if (mounted) {
+                                setState(() => _sharing = false);
+                                _showTopSnack(context, 'Failed to upload: $e');
+                              }
+                            }
+                          },
+                        ),
+                        ListTile(
+                          leading: const Icon(Icons.alternate_email, color: Colors.black87),
+                          title: const Text('Twitter / X'),
+                          subtitle: const Text('Post to your timeline'),
+                          onTap: () async {
+                            Navigator.pop(ctx);
+                            setState(() => _sharing = true);
+                            try {
+                              final storagePath = await SupabaseService.uploadCommunityPhoto(widget.photo.filePath);
+                              if (mounted) {
+                                setState(() => _sharing = false);
+                                _showTwitterShareFlow(context, storagePath);
                               }
                             } catch (e) {
                               if (mounted) {
@@ -17165,16 +17549,37 @@ class _CommunityScreenState extends State<_CommunityScreen> {
                                       ),
                                       if (isAuthor)
                                         IconButton(
-                                          icon: const Icon(Icons.send, size: 16),
-                                          color: const Color(0xFF5865F2),
+                                          icon: const Icon(Icons.share, size: 16),
+                                          color: Colors.grey,
                                           padding: EdgeInsets.zero,
                                           constraints: const BoxConstraints(),
-                                          tooltip: 'Share to Discord',
+                                          tooltip: 'Share',
                                           onPressed: () {
                                             final photoPath = post['photo_url'] as String? ?? '';
-                                            if (photoPath.isNotEmpty) {
-                                              _showDiscordShareFlow(context, photoPath);
-                                            }
+                                            if (photoPath.isEmpty) return;
+                                            showModalBottomSheet(
+                                              context: context,
+                                              shape: const RoundedRectangleBorder(
+                                                borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+                                              ),
+                                              builder: (ctx) => SafeArea(
+                                                child: Column(
+                                                  mainAxisSize: MainAxisSize.min,
+                                                  children: [
+                                                    ListTile(
+                                                      leading: const Icon(Icons.discord, color: Color(0xFF5865F2)),
+                                                      title: const Text('Discord'),
+                                                      onTap: () { Navigator.pop(ctx); _showDiscordShareFlow(context, photoPath); },
+                                                    ),
+                                                    ListTile(
+                                                      leading: const Icon(Icons.alternate_email, color: Colors.black87),
+                                                      title: const Text('Twitter / X'),
+                                                      onTap: () { Navigator.pop(ctx); _showTwitterShareFlow(context, photoPath); },
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            );
                                           },
                                         ),
                                       if (isAuthor)

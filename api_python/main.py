@@ -52,6 +52,17 @@ _DISCORD_SCOPES = "identify guilds"
 # In-memory store for OAuth state tokens (short-lived, cleared on use)
 _discord_auth_states: dict[str, str] = {}  # state -> user_id
 
+# ---------------------------------------------------------------------------
+# Twitter/X integration
+# ---------------------------------------------------------------------------
+_TWITTER_CLIENT_ID = os.environ.get("TWITTER_CLIENT_ID", "")
+_TWITTER_CLIENT_SECRET = os.environ.get("TWITTER_CLIENT_SECRET", "")
+_TWITTER_REDIRECT_URI = os.environ.get("TWITTER_REDIRECT_URI", "https://aquaria-ai-production.up.railway.app/twitter/callback")
+_TWITTER_API = "https://api.twitter.com/2"
+_TWITTER_UPLOAD_API = "https://upload.twitter.com/1.1"
+_TWITTER_SCOPES = "tweet.read tweet.write users.read offline.access"
+_twitter_auth_states: dict[str, dict] = {}  # state -> {user_id, code_verifier}
+
 def _get_jwks_client() -> PyJWKClient:
     global _jwks_client
     if _jwks_client is None:
@@ -3420,4 +3431,295 @@ def discord_share(request: Request, req: DiscordShareRequest, user_id: str = Dep
 
     print(f"[Discord] shared by {discord_username} to channel {channel_id}", flush=True)
     return {"ok": True, "message_id": message_id}
-    return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Twitter/X integration endpoints
+# ---------------------------------------------------------------------------
+
+def _twitter_api(method: str, url: str, *, token: str, data: dict | None = None,
+                 files: dict | None = None, json_body: dict | None = None) -> dict | None:
+    """Call the Twitter API with a user's OAuth token."""
+    headers = {"Authorization": f"Bearer {token}"}
+    if json_body is not None:
+        headers["Content-Type"] = "application/json"
+        resp = http_requests.request(method, url, headers=headers, json=json_body, timeout=30)
+    elif files:
+        resp = http_requests.request(method, url, headers=headers, data=data, files=files, timeout=60)
+    elif data:
+        resp = http_requests.request(method, url, headers=headers, data=data, timeout=30)
+    else:
+        resp = http_requests.request(method, url, headers=headers, timeout=15)
+    if resp.status_code >= 400:
+        print(f"[Twitter] {method} {url} → {resp.status_code}: {resp.text}", flush=True)
+        raise HTTPException(status_code=resp.status_code, detail=f"Twitter API error: {resp.text}")
+    return resp.json() if resp.text.strip() else None
+
+
+def _refresh_twitter_token(user_id: str) -> str:
+    """Get a valid Twitter access token for user, refreshing if expired."""
+    rows = _supabase_rest("GET", "twitter_accounts",
+                          params=f"user_id=eq.{user_id}&select=*")
+    if not rows:
+        raise HTTPException(status_code=404, detail="Twitter account not linked")
+    row = rows[0]
+    # Check if token is still valid
+    expires_at = row.get("token_expires_at", "")
+    if expires_at:
+        from datetime import timezone
+        exp_dt = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+        if datetime.now(timezone.utc).timestamp() < exp_dt.timestamp() - 10:
+            return row["access_token"]
+    # Refresh
+    import base64
+    creds = base64.b64encode(f"{_TWITTER_CLIENT_ID}:{_TWITTER_CLIENT_SECRET}".encode()).decode()
+    resp = http_requests.post("https://api.twitter.com/2/oauth2/token", data={
+        "grant_type": "refresh_token",
+        "refresh_token": row["refresh_token"],
+        "client_id": _TWITTER_CLIENT_ID,
+    }, headers={
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Authorization": f"Basic {creds}",
+    }, timeout=15)
+    if resp.status_code != 200:
+        print(f"[Twitter] token refresh failed: {resp.text}", flush=True)
+        raise HTTPException(status_code=401, detail="Twitter token refresh failed. Please re-link.")
+    tokens = resp.json()
+    from datetime import timedelta
+    new_expires = (datetime.utcnow() + timedelta(seconds=tokens.get("expires_in", 7200))).isoformat() + "Z"
+    _supabase_rest("PATCH", "twitter_accounts",
+                   params=f"user_id=eq.{user_id}",
+                   body={
+                       "access_token": tokens["access_token"],
+                       "refresh_token": tokens.get("refresh_token", row["refresh_token"]),
+                       "token_expires_at": new_expires,
+                       "updated_at": datetime.utcnow().isoformat() + "Z",
+                   }, prefer="return=minimal")
+    return tokens["access_token"]
+
+
+# --- Twitter OAuth Flow (PKCE) ---
+
+@app.get("/twitter/auth-url")
+@limiter.limit("10/minute")
+def twitter_auth_url(request: Request, user_id: str = Depends(_get_user_id)):
+    """Generate a Twitter OAuth2 authorization URL (PKCE flow)."""
+    if not _TWITTER_CLIENT_ID:
+        raise HTTPException(status_code=500, detail="Twitter integration not configured")
+    import hashlib, base64
+    state = secrets.token_urlsafe(32)
+    code_verifier = secrets.token_urlsafe(64)
+    code_challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(code_verifier.encode()).digest()
+    ).decode().rstrip("=")
+    _twitter_auth_states[state] = {"user_id": user_id, "code_verifier": code_verifier}
+    url = (
+        f"https://twitter.com/i/oauth2/authorize"
+        f"?response_type=code"
+        f"&client_id={_TWITTER_CLIENT_ID}"
+        f"&redirect_uri={urllib.request.quote(_TWITTER_REDIRECT_URI, safe='')}"
+        f"&scope={urllib.request.quote(_TWITTER_SCOPES, safe='')}"
+        f"&state={state}"
+        f"&code_challenge={code_challenge}"
+        f"&code_challenge_method=S256"
+    )
+    return {"url": url}
+
+
+@app.get("/twitter/callback")
+def twitter_callback(request: Request, code: str = "", state: str = "", error: str = ""):
+    """Handle the OAuth2 callback from Twitter."""
+    if error:
+        return HTMLResponse(f"<html><body><h2>Authorization failed</h2><p>{error}</p>"
+                            f"<p>You can close this window.</p></body></html>")
+    auth_data = _twitter_auth_states.pop(state, None)
+    if not auth_data:
+        return HTMLResponse("<html><body><h2>Invalid or expired session</h2>"
+                            "<p>Please try linking Twitter again from the app.</p></body></html>")
+    user_id = auth_data["user_id"]
+    code_verifier = auth_data["code_verifier"]
+
+    # Exchange code for tokens
+    import base64
+    creds = base64.b64encode(f"{_TWITTER_CLIENT_ID}:{_TWITTER_CLIENT_SECRET}".encode()).decode()
+    resp = http_requests.post("https://api.twitter.com/2/oauth2/token", data={
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": _TWITTER_REDIRECT_URI,
+        "client_id": _TWITTER_CLIENT_ID,
+        "code_verifier": code_verifier,
+    }, headers={
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Authorization": f"Basic {creds}",
+    }, timeout=15)
+    if resp.status_code != 200:
+        print(f"[Twitter] token exchange failed: {resp.text}", flush=True)
+        return HTMLResponse("<html><body><h2>Token exchange failed</h2>"
+                            "<p>Please try again.</p></body></html>")
+    tokens = resp.json()
+    access_token = tokens["access_token"]
+    refresh_token = tokens.get("refresh_token", "")
+
+    # Get Twitter user info
+    me = _twitter_api("GET", f"{_TWITTER_API}/users/me", token=access_token)
+    twitter_username = me.get("data", {}).get("username", "unknown") if me else "unknown"
+    twitter_id = me.get("data", {}).get("id", "") if me else ""
+
+    from datetime import timedelta
+    expires_at = (datetime.utcnow() + timedelta(seconds=tokens.get("expires_in", 7200))).isoformat() + "Z"
+
+    # Upsert into Supabase
+    _supabase_rest("POST", "twitter_accounts",
+                   params="on_conflict=user_id",
+                   body={
+                       "user_id": user_id,
+                       "twitter_id": twitter_id,
+                       "twitter_username": twitter_username,
+                       "access_token": access_token,
+                       "refresh_token": refresh_token,
+                       "token_expires_at": expires_at,
+                       "scopes": _TWITTER_SCOPES,
+                       "updated_at": datetime.utcnow().isoformat() + "Z",
+                   }, prefer="resolution=merge-duplicates,return=minimal")
+
+    print(f"[Twitter] linked user {user_id} → @{twitter_username} ({twitter_id})", flush=True)
+    return HTMLResponse(
+        "<html><body style='font-family: system-ui; text-align: center; padding: 60px;'>"
+        "<h2>✅ Twitter linked!</h2>"
+        f"<p>Connected as <strong>@{twitter_username}</strong></p>"
+        "<p>You can close this window and return to Aquaria.</p>"
+        "</body></html>"
+    )
+
+
+@app.get("/twitter/status")
+@limiter.limit("30/minute")
+def twitter_status(request: Request, user_id: str = Depends(_get_user_id)):
+    """Check if the user has linked their Twitter account."""
+    try:
+        rows = _supabase_rest("GET", "twitter_accounts",
+                              params=f"user_id=eq.{user_id}&select=twitter_username,twitter_id")
+        if rows:
+            return {"linked": True, "twitter_username": rows[0]["twitter_username"]}
+    except Exception:
+        pass
+    return {"linked": False}
+
+
+@app.delete("/twitter/unlink")
+@limiter.limit("5/minute")
+def twitter_unlink(request: Request, user_id: str = Depends(_get_user_id)):
+    """Unlink the user's Twitter account."""
+    try:
+        rows = _supabase_rest("GET", "twitter_accounts",
+                              params=f"user_id=eq.{user_id}&select=access_token")
+        if rows and rows[0].get("access_token"):
+            import base64
+            creds = base64.b64encode(f"{_TWITTER_CLIENT_ID}:{_TWITTER_CLIENT_SECRET}".encode()).decode()
+            http_requests.post("https://api.twitter.com/2/oauth2/token/revoke", data={
+                "token": rows[0]["access_token"],
+                "client_id": _TWITTER_CLIENT_ID,
+            }, headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Authorization": f"Basic {creds}",
+            }, timeout=10)
+    except Exception as e:
+        print(f"[Twitter] revoke error (non-fatal): {e}", flush=True)
+    try:
+        _supabase_rest("DELETE", "twitter_accounts",
+                       params=f"user_id=eq.{user_id}", prefer="return=minimal")
+    except Exception:
+        pass
+    return {"ok": True}
+
+
+# --- Twitter Share ---
+
+class TwitterShareRequest(BaseModel):
+    text: str
+    photo_storage_path: str  # Supabase storage path
+
+
+@app.post("/twitter/share")
+@limiter.limit("10/minute")
+def twitter_share(request: Request, req: TwitterShareRequest, user_id: str = Depends(_get_user_id)):
+    """Share a tank photo to Twitter/X."""
+    token = _refresh_twitter_token(user_id)
+
+    # Get username for credit
+    rows = _supabase_rest("GET", "twitter_accounts",
+                          params=f"user_id=eq.{user_id}&select=twitter_username")
+    twitter_username = rows[0]["twitter_username"] if rows else "unknown"
+
+    # Download image from Supabase Storage
+    storage_url = f"{_SUPABASE_URL}/storage/v1/object/community-photos/{req.photo_storage_path}"
+    try:
+        img_req = urllib.request.Request(storage_url, headers={
+            "apikey": _SUPABASE_SERVICE_KEY,
+            "Authorization": f"Bearer {_SUPABASE_SERVICE_KEY}",
+        })
+        img_resp = urllib.request.urlopen(img_req, timeout=30)
+        image_bytes = img_resp.read()
+    except Exception as e:
+        print(f"[Twitter] image download failed: {e}", flush=True)
+        raise HTTPException(status_code=400, detail="Failed to download image")
+
+    # Apply watermark
+    try:
+        watermarked = _apply_watermark(image_bytes)
+    except Exception as e:
+        print(f"[Twitter] watermark failed (using original): {e}", flush=True)
+        watermarked = image_bytes
+
+    # Upload media to Twitter (v1.1 media upload endpoint — still required)
+    # Twitter OAuth2 tokens work with v1.1 media upload
+    media_resp = http_requests.post(
+        f"{_TWITTER_UPLOAD_API}/media/upload.json",
+        headers={"Authorization": f"Bearer {token}"},
+        files={"media_data": ("photo.jpg", watermarked, "image/jpeg")},
+        timeout=60,
+    )
+    if media_resp.status_code != 200:
+        # Try alternate upload method with media parameter
+        import base64 as b64mod
+        media_resp = http_requests.post(
+            f"{_TWITTER_UPLOAD_API}/media/upload.json",
+            headers={"Authorization": f"Bearer {token}"},
+            data={"media_data": b64mod.b64encode(watermarked).decode()},
+            timeout=60,
+        )
+    if media_resp.status_code != 200:
+        print(f"[Twitter] media upload failed: {media_resp.text}", flush=True)
+        raise HTTPException(status_code=400, detail="Failed to upload image to Twitter")
+    media_id = media_resp.json().get("media_id_string", "")
+
+    # Create tweet with media
+    tweet_text = req.text.strip()
+    credit = f"\n\n📸 @{twitter_username} via @AquariaAI\naquaria-ai.com"
+    # Twitter has a 280 char limit
+    max_text = 280 - len(credit)
+    if len(tweet_text) > max_text:
+        tweet_text = tweet_text[:max_text - 1] + "…"
+    tweet_text += credit
+
+    tweet_data = {"text": tweet_text}
+    if media_id:
+        tweet_data["media"] = {"media_ids": [media_id]}
+
+    result = _twitter_api("POST", f"{_TWITTER_API}/tweets", token=token, json_body=tweet_data)
+    tweet_id = result.get("data", {}).get("id", "") if result else ""
+
+    # Log the share
+    try:
+        _supabase_rest("POST", "twitter_shares", body={
+            "user_id": user_id,
+            "twitter_username": twitter_username,
+            "tweet_id": tweet_id,
+            "text": tweet_text[:500],
+        }, prefer="return=minimal")
+    except Exception as e:
+        print(f"[Twitter] share log error: {e}", flush=True)
+
+    tweet_url = f"https://twitter.com/{twitter_username}/status/{tweet_id}" if tweet_id else ""
+    print(f"[Twitter] shared by @{twitter_username}: {tweet_url}", flush=True)
+    return {"ok": True, "tweet_id": tweet_id, "tweet_url": tweet_url}
