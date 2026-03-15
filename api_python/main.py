@@ -49,8 +49,21 @@ _DISCORD_REDIRECT_URI = os.environ.get("DISCORD_REDIRECT_URI", "https://aquaria-
 _DISCORD_API = "https://discord.com/api/v10"
 _DISCORD_SCOPES = "identify guilds"
 
-# In-memory store for OAuth state tokens (short-lived, cleared on use)
-_discord_auth_states: dict[str, str] = {}  # state -> user_id
+# OAuth state helpers (persisted in Supabase to survive redeploys)
+def _save_oauth_state(state: str, provider: str, user_id: str, code_verifier: str = ""):
+    _supabase_rest("POST", "oauth_auth_states", body={
+        "state": state, "provider": provider, "user_id": user_id,
+        "code_verifier": code_verifier or None,
+    }, prefer="return=minimal")
+
+def _pop_oauth_state(state: str, provider: str) -> dict | None:
+    rows = _supabase_rest("GET", "oauth_auth_states",
+                          params=f"state=eq.{state}&provider=eq.{provider}")
+    if not rows:
+        return None
+    _supabase_rest("DELETE", "oauth_auth_states", params=f"state=eq.{state}")
+    row = rows[0]
+    return {"user_id": row["user_id"], "code_verifier": row.get("code_verifier", "")}
 
 # ---------------------------------------------------------------------------
 # Twitter/X integration
@@ -61,7 +74,6 @@ _TWITTER_REDIRECT_URI = os.environ.get("TWITTER_REDIRECT_URI", "https://aquaria-
 _TWITTER_API = "https://api.twitter.com/2"
 _TWITTER_UPLOAD_API = "https://upload.twitter.com/1.1"
 _TWITTER_SCOPES = "tweet.read tweet.write users.read offline.access"
-_twitter_auth_states: dict[str, dict] = {}  # state -> {user_id, code_verifier}
 
 def _get_jwks_client() -> PyJWKClient:
     global _jwks_client
@@ -3193,7 +3205,7 @@ def discord_auth_url(request: Request, user_id: str = Depends(_get_user_id)):
     if not _DISCORD_CLIENT_ID:
         raise HTTPException(status_code=500, detail="Discord integration not configured")
     state = secrets.token_urlsafe(32)
-    _discord_auth_states[state] = user_id
+    _save_oauth_state(state, "discord", user_id)
     url = (
         f"https://discord.com/oauth2/authorize"
         f"?client_id={_DISCORD_CLIENT_ID}"
@@ -3212,7 +3224,8 @@ def discord_callback(request: Request, code: str = "", state: str = "", error: s
     if error:
         return HTMLResponse(f"<html><body><h2>Authorization failed</h2><p>{error}</p>"
                             f"<p>You can close this window.</p></body></html>")
-    user_id = _discord_auth_states.pop(state, None)
+    auth_data = _pop_oauth_state(state, "discord")
+    user_id = auth_data["user_id"] if auth_data else None
     if not user_id:
         return HTMLResponse("<html><body><h2>Invalid or expired session</h2>"
                             "<p>Please try linking Discord again from the app.</p></body></html>")
@@ -3540,7 +3553,7 @@ def twitter_auth_url(request: Request, user_id: str = Depends(_get_user_id)):
     code_challenge = base64.urlsafe_b64encode(
         hashlib.sha256(code_verifier.encode()).digest()
     ).decode().rstrip("=")
-    _twitter_auth_states[state] = {"user_id": user_id, "code_verifier": code_verifier}
+    _save_oauth_state(state, "twitter", user_id, code_verifier)
     url = (
         f"https://twitter.com/i/oauth2/authorize"
         f"?response_type=code"
@@ -3561,7 +3574,7 @@ def twitter_callback(request: Request, code: str = "", state: str = "", error: s
         if error:
             return HTMLResponse(f"<html><body><h2>Authorization failed</h2><p>{error}</p>"
                                 f"<p>You can close this window.</p></body></html>")
-        auth_data = _twitter_auth_states.pop(state, None)
+        auth_data = _pop_oauth_state(state, "twitter")
         if not auth_data:
             return HTMLResponse("<html><body><h2>Invalid or expired session</h2>"
                                 "<p>Please try linking Twitter again from the app.</p></body></html>")
