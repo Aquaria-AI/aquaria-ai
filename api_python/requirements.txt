@@ -1,6 +1,7 @@
 fastapi==0.128.0
 uvicorn==0.39.0
 anthropic==0.84.0
+google-genai>=1.0.0
 python-multipart==0.0.20
 PyJWT[crypto]==2.9.0
 slowapi==0.1.9

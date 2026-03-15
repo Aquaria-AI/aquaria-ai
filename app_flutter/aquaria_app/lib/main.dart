@@ -37,25 +37,20 @@ class _ChatMessage {
 }
 
 // In-memory chat history cache: keyed by tank ID (or '__none__' for no tank).
-// Cleared after 24 hours of inactivity.
+// Persists for the app session; cleared only when the user explicitly clears.
 class _ChatCache {
-  static const _ttl = Duration(hours: 24);
-  static final Map<String, ({DateTime updatedAt, List<_ChatMessage> messages})> _store = {};
+  static final Map<String, List<_ChatMessage>> _store = {};
 
   static String _key(String? tankId) => tankId ?? '__none__';
 
   static List<_ChatMessage>? load(String? tankId) {
     final entry = _store[_key(tankId)];
     if (entry == null) return null;
-    if (DateTime.now().difference(entry.updatedAt) > _ttl) {
-      _store.remove(_key(tankId));
-      return null;
-    }
-    return List.of(entry.messages);
+    return List.of(entry);
   }
 
   static void save(String? tankId, List<_ChatMessage> messages) {
-    _store[_key(tankId)] = (updatedAt: DateTime.now(), messages: List.of(messages));
+    _store[_key(tankId)] = List.of(messages);
   }
 
   static void clear(String? tankId) => _store.remove(_key(tankId));
@@ -448,8 +443,6 @@ AppBar _buildAppBar(BuildContext context, String title, {List<Widget>? actions, 
               );
             } else if (value == 'discord') {
               _showDiscordSheet(context);
-            } else if (value == 'twitter') {
-              _showTwitterSheet(context);
             } else if (value == 'donate') {
               launchUrl(Uri.parse('https://buy.stripe.com/00wcN6a8f9TM5QKaxw2sM01'), mode: LaunchMode.externalApplication);
             } else if (value == 'sign_out') {
@@ -478,7 +471,7 @@ AppBar _buildAppBar(BuildContext context, String title, {List<Widget>? actions, 
                 child: FutureBuilder<String>(
                   future: _loadExperienceLevel(),
                   builder: (_, snap) {
-                    final level = (snap.data ?? 'beginner').isEmpty ? 'beginner' : snap.data!;
+                    final level = (snap.data ?? '').isEmpty ? 'beginner' : snap.data!;
                     final label = level[0].toUpperCase() + level.substring(1);
                     return Text('Level: $label', style: const TextStyle(color: Colors.black54, fontSize: 13));
                   },
@@ -491,8 +484,6 @@ AppBar _buildAppBar(BuildContext context, String title, {List<Widget>? actions, 
             const PopupMenuItem(value: 'invite', child: Text('Invite Friends')),
             if (SupabaseService.isLoggedIn)
               const PopupMenuItem(value: 'discord', child: Text('Discord')),
-            if (SupabaseService.isLoggedIn)
-              const PopupMenuItem(value: 'twitter', child: Text('Twitter / X')),
             if (SupabaseService.userEmail == 'maugliera@gmail.com' || SupabaseService.isAdmin)
               const PopupMenuItem(value: 'onboarding', child: Text('Onboarding')),
             const PopupMenuItem(value: 'feedback', child: Text('Feedback')),
@@ -1056,358 +1047,6 @@ Future<void> _showDiscordShareFlow(BuildContext context, String photoStoragePath
       ScaffoldMessenger.of(context)
         ..clearSnackBars()
         ..showSnackBar(const SnackBar(content: Text('Failed to share')));
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Twitter/X integration
-// ---------------------------------------------------------------------------
-
-void _showTwitterSheet(BuildContext context) {
-  showModalBottomSheet(
-    context: context,
-    isScrollControlled: true,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-    ),
-    builder: (ctx) => const _TwitterSheet(),
-  );
-}
-
-class _TwitterSheet extends StatefulWidget {
-  const _TwitterSheet();
-  @override
-  State<_TwitterSheet> createState() => _TwitterSheetState();
-}
-
-class _TwitterSheetState extends State<_TwitterSheet> {
-  bool _loading = true;
-  bool _linked = false;
-  String _username = '';
-  String _error = '';
-
-  @override
-  void initState() {
-    super.initState();
-    _checkStatus();
-  }
-
-  Future<void> _checkStatus() async {
-    setState(() { _loading = true; _error = ''; });
-    try {
-      final resp = await http.get(
-        Uri.parse('$_kBaseUrl/twitter/status'),
-        headers: _apiHeaders(),
-      ).timeout(const Duration(seconds: 10));
-      if (resp.statusCode == 200) {
-        final data = jsonDecode(resp.body);
-        setState(() {
-          _linked = data['linked'] == true;
-          _username = data['twitter_username'] ?? '';
-          _loading = false;
-        });
-      } else {
-        setState(() { _loading = false; _error = 'Failed to check status'; });
-      }
-    } catch (e) {
-      setState(() { _loading = false; _error = 'Connection error'; });
-    }
-  }
-
-  Future<void> _linkTwitter() async {
-    setState(() { _loading = true; _error = ''; });
-    try {
-      final resp = await http.get(
-        Uri.parse('$_kBaseUrl/twitter/auth-url'),
-        headers: _apiHeaders(),
-      ).timeout(const Duration(seconds: 10));
-      if (resp.statusCode == 200) {
-        final url = jsonDecode(resp.body)['url'] as String;
-        await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
-        setState(() => _loading = false);
-        _pollForLink();
-      } else {
-        setState(() { _loading = false; _error = 'Failed to start linking'; });
-      }
-    } catch (e) {
-      setState(() { _loading = false; _error = 'Connection error'; });
-    }
-  }
-
-  void _pollForLink() {
-    int attempts = 0;
-    Future.doWhile(() async {
-      await Future.delayed(const Duration(seconds: 3));
-      if (!mounted) return false;
-      attempts++;
-      if (attempts > 40) return false;
-      try {
-        final resp = await http.get(
-          Uri.parse('$_kBaseUrl/twitter/status'),
-          headers: _apiHeaders(),
-        ).timeout(const Duration(seconds: 5));
-        if (resp.statusCode == 200) {
-          final data = jsonDecode(resp.body);
-          if (data['linked'] == true) {
-            if (mounted) {
-              setState(() {
-                _linked = true;
-                _username = data['twitter_username'] ?? '';
-              });
-              ScaffoldMessenger.of(context)
-                ..clearSnackBars()
-                ..showSnackBar(const SnackBar(content: Text('Twitter linked!')));
-            }
-            return false;
-          }
-        }
-      } catch (_) {}
-      return true;
-    });
-  }
-
-  Future<void> _unlinkTwitter() async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Unlink Twitter?'),
-        content: Text('Disconnect @$_username from Aquaria?'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Unlink')),
-        ],
-      ),
-    );
-    if (confirm != true) return;
-    setState(() => _loading = true);
-    try {
-      await http.delete(
-        Uri.parse('$_kBaseUrl/twitter/unlink'),
-        headers: _apiHeaders(),
-      ).timeout(const Duration(seconds: 10));
-      setState(() { _linked = false; _username = ''; _loading = false; });
-    } catch (e) {
-      setState(() { _loading = false; _error = 'Failed to unlink'; });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.only(
-        left: 20, right: 20, top: 24,
-        bottom: MediaQuery.of(context).viewInsets.bottom + 24,
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            children: [
-              const Icon(Icons.alternate_email, color: Colors.black87, size: 26),
-              const SizedBox(width: 10),
-              const Text('Twitter / X', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
-              const Spacer(),
-              GestureDetector(
-                onTap: () => Navigator.pop(context),
-                child: const Icon(Icons.close, size: 22, color: Colors.grey),
-              ),
-            ],
-          ),
-          const SizedBox(height: 20),
-          if (_loading)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 24),
-              child: CircularProgressIndicator(),
-            )
-          else if (_error.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              child: Column(children: [
-                Text(_error, style: const TextStyle(color: Colors.red)),
-                const SizedBox(height: 12),
-                ElevatedButton(onPressed: _checkStatus, child: const Text('Retry')),
-              ]),
-            )
-          else if (_linked) ...[
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: const Color(0xFFF0F5FF),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Row(children: [
-                const Icon(Icons.check_circle, color: Colors.black87),
-                const SizedBox(width: 12),
-                Expanded(child: Text('Connected as @$_username',
-                    style: const TextStyle(fontWeight: FontWeight.w500))),
-              ]),
-            ),
-            const SizedBox(height: 12),
-            const Text(
-              'Share tank photos to Twitter/X from the share menu on any photo.',
-              style: TextStyle(fontSize: 13, color: Colors.black54),
-            ),
-            const SizedBox(height: 16),
-            TextButton(
-              onPressed: _unlinkTwitter,
-              child: const Text('Unlink Twitter', style: TextStyle(color: Colors.red)),
-            ),
-          ] else ...[
-            const Text(
-              'Link your Twitter/X account to share tank photos directly to your timeline.',
-              style: TextStyle(fontSize: 14, color: Colors.black87),
-            ),
-            const SizedBox(height: 20),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: _linkTwitter,
-                icon: const Icon(Icons.link),
-                label: const Text('Link Twitter / X'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.black87,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                ),
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-/// Show Twitter share flow: write tweet text → post
-Future<void> _showTwitterShareFlow(BuildContext context, String photoStoragePath) async {
-  final headers = _apiHeaders();
-
-  // Check linked status — if not linked, start OAuth inline
-  final statusResp = await http.get(
-    Uri.parse('$_kBaseUrl/twitter/status'),
-    headers: headers,
-  ).timeout(const Duration(seconds: 10));
-  if (statusResp.statusCode != 200 || jsonDecode(statusResp.body)['linked'] != true) {
-    if (!context.mounted) return;
-    final authResp = await http.get(
-      Uri.parse('$_kBaseUrl/twitter/auth-url'),
-      headers: headers,
-    ).timeout(const Duration(seconds: 10));
-    if (authResp.statusCode != 200 || !context.mounted) return;
-    final url = jsonDecode(authResp.body)['url'] as String;
-    await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
-    if (context.mounted) {
-      ScaffoldMessenger.of(context)
-        ..clearSnackBars()
-        ..showSnackBar(const SnackBar(content: Text('Linking Twitter — authorize in your browser, then come back...')));
-    }
-    bool linked = false;
-    for (int i = 0; i < 40; i++) {
-      await Future.delayed(const Duration(seconds: 3));
-      if (!context.mounted) return;
-      try {
-        final poll = await http.get(
-          Uri.parse('$_kBaseUrl/twitter/status'),
-          headers: headers,
-        ).timeout(const Duration(seconds: 5));
-        if (poll.statusCode == 200 && jsonDecode(poll.body)['linked'] == true) {
-          linked = true;
-          break;
-        }
-      } catch (_) {}
-    }
-    if (!linked || !context.mounted) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context)
-          ..clearSnackBars()
-          ..showSnackBar(const SnackBar(content: Text('Twitter linking timed out. Try again.')));
-      }
-      return;
-    }
-    if (context.mounted) {
-      ScaffoldMessenger.of(context)
-        ..clearSnackBars()
-        ..showSnackBar(const SnackBar(content: Text('Twitter linked!')));
-    }
-  }
-
-  if (!context.mounted) return;
-
-  // Tweet text dialog
-  final textCtrl = TextEditingController();
-  final confirmed = await showDialog<bool>(
-    context: context,
-    builder: (ctx) => AlertDialog(
-      title: const Text('Post to Twitter / X'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          TextField(
-            controller: textCtrl,
-            decoration: const InputDecoration(
-              labelText: 'What do you want to say?',
-              hintText: 'Check out my tank!',
-              border: OutlineInputBorder(),
-            ),
-            textCapitalization: TextCapitalization.sentences,
-            maxLines: 3,
-            maxLength: 200, // leave room for credit
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            'Credit line and link will be added automatically.',
-            style: TextStyle(fontSize: 12, color: Colors.black45),
-          ),
-        ],
-      ),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-        TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Post')),
-      ],
-    ),
-  );
-  if (confirmed != true || textCtrl.text.trim().isEmpty || !context.mounted) return;
-
-  // Post to Twitter
-  ScaffoldMessenger.of(context)
-    ..clearSnackBars()
-    ..showSnackBar(const SnackBar(content: Text('Posting to Twitter...')));
-  try {
-    final shareResp = await http.post(
-      Uri.parse('$_kBaseUrl/twitter/share'),
-      headers: headers,
-      body: jsonEncode({
-        'text': textCtrl.text.trim(),
-        'photo_storage_path': photoStoragePath,
-      }),
-    ).timeout(const Duration(seconds: 30));
-    if (context.mounted) {
-      if (shareResp.statusCode == 200) {
-        final data = jsonDecode(shareResp.body);
-        final tweetUrl = data['tweet_url'] ?? '';
-        ScaffoldMessenger.of(context)
-          ..clearSnackBars()
-          ..showSnackBar(SnackBar(
-            content: const Text('Posted to Twitter!'),
-            action: tweetUrl.isNotEmpty ? SnackBarAction(
-              label: 'View',
-              onPressed: () => launchUrl(Uri.parse(tweetUrl), mode: LaunchMode.externalApplication),
-            ) : null,
-          ));
-      } else {
-        final err = jsonDecode(shareResp.body)['detail'] ?? 'Post failed';
-        ScaffoldMessenger.of(context)
-          ..clearSnackBars()
-          ..showSnackBar(SnackBar(content: Text('Error: $err')));
-      }
-    }
-  } catch (e) {
-    if (context.mounted) {
-      ScaffoldMessenger.of(context)
-        ..clearSnackBars()
-        ..showSnackBar(const SnackBar(content: Text('Failed to post')));
     }
   }
 }
@@ -2305,11 +1944,16 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     } catch (_) {}
   }
 
-  void _goNext() {
+  void _goNext() async {
     if (_page < _totalPages - 1) {
-      // Create/update the tank in DB before entering Meet Ariel (page 5)
+      // Create/update the tank in DB before entering Meet Ariel (page 4)
       // so the chat can operate on a real tank.
-      if (_page == 4) _ensureTankCreated();
+      debugPrint('[Onboard] _goNext page=$_page');
+      if (_page == 3) {
+        debugPrint('[Onboard] Creating tank before Meet Ariel...');
+        await _ensureTankCreated();
+        debugPrint('[Onboard] Tank created: $_createdTankId');
+      }
       final next = _page + 1;
       if (next > _maxPage) _maxPage = next;
       _pageCtrl.nextPage(
@@ -2320,20 +1964,25 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   Future<void> _finish() async {
+    debugPrint('[Onboard] _finish called, _createdTankId=$_createdTankId');
     setState(() => _finishing = true);
     try {
       // Final save — updates the tank already created before Meet Ariel
       await _ensureTankCreated();
       final tankId = _createdTankId!;
+      debugPrint('[Onboard] _finish tankId=$tankId');
       // Save any reminder tasks collected during the water quality chat
+      debugPrint('[Onboard] _finish pendingTasks=${_pendingTasks.length}: $_pendingTasks');
       if (_pendingTasks.isNotEmpty) {
         for (final task in _pendingTasks) {
+          final rd = task['repeat_days'];
           await TankStore.instance.addTask(
             tankId: tankId,
             description: (task['description'] ?? '').toString(),
             dueDate: (task['due_date'] ?? task['due'])?.toString(),
             priority: (task['priority'] ?? 'normal').toString(),
             source: 'ai',
+            repeatDays: rd is int ? rd : (rd is String ? int.tryParse(rd) : null),
           );
         }
       }
@@ -2344,8 +1993,16 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       await _markOnboardingDone();
       await _saveExperienceLevel(_experience);
       if (!mounted) return;
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => TankListScreen(showWelcome: true)),
+      final tank = TankModel(
+        id: tankId,
+        name: _tankNameCtrl.text,
+        gallons: _gallons.round(),
+        waterType: _waterType,
+      );
+      // Navigate to the main app — TankListScreen will auto-open the new tank
+      _navigatorKey.currentState?.pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => TankListScreen(openTankId: tankId)),
+        (_) => false,
       );
     } catch (e) {
       if (!mounted) return;
@@ -2404,20 +2061,14 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       _goNext();
                     },
                   ),
-                  _ObInhabitantSummaryPage(
-                    inhabitants: _inhabitants,
-                    plants: _plants,
-                    waterType: _waterType,
-                    onNext: _goNext,
-                  ),
-                  _ObWaterQualityPage(
+                  _ObMeetArielPage(
                     tankName: _tankNameCtrl.text,
                     gallons: _gallons,
                     waterType: _waterType,
                     inhabitants: _inhabitants,
                     plants: _plants,
                     equipment: _equipment,
-                    onNext: _finish,
+                    onNext: _goNext,
                     onReminderTask: (t) => _pendingTasks.add(t),
                     onCsvPending: (content, {Map<int, String?>? mapping, int? dateCol}) {
                       _pendingCsvContent = content;
@@ -2429,7 +2080,14 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     onPlantsAdded: (added) { debugPrint('[Onboard] onPlantsAdded: $added'); setState(() => _plants = [..._plants, ...added]); },
                     tankId: _createdTankId,
                     experience: _experience,
-                    isActive: _page == 5,
+                    isActive: _page == 4,
+                    finishing: false,
+                  ),
+                  _ObInhabitantSummaryPage(
+                    inhabitants: _inhabitants,
+                    plants: _plants,
+                    waterType: _waterType,
+                    onNext: _finish,
                     finishing: _finishing,
                   ),
                 ],
@@ -4349,11 +4007,13 @@ class _ObInhabitantSummaryPage extends StatelessWidget {
   final WaterType waterType;
   final VoidCallback onNext;
   final List<String> plants;
+  final bool finishing;
   const _ObInhabitantSummaryPage({
     required this.inhabitants,
     this.plants = const [],
     this.waterType = WaterType.freshwater,
     required this.onNext,
+    this.finishing = false,
   });
 
   static String _emoji(String type) {
@@ -4494,15 +4154,15 @@ class _ObInhabitantSummaryPage extends StatelessWidget {
                   ],
                 ),
         ),
-        _obNextButton(label: 'Continue', onPressed: onNext),
+        _obNextButton(label: finishing ? 'Setting up…' : 'Start Exploring', onPressed: finishing ? null : onNext),
         const SizedBox(height: 8),
       ],
     );
   }
 }
 
-// Page 6 — Water Quality Chat
-class _ObWaterQualityPage extends StatefulWidget {
+// Page 5 — Meet Ariel Chat
+class _ObMeetArielPage extends StatefulWidget {
   final String tankName;
   final double gallons;
   final WaterType waterType;
@@ -4520,7 +4180,7 @@ class _ObWaterQualityPage extends StatefulWidget {
   final bool isActive;
   final bool finishing;
 
-  const _ObWaterQualityPage({
+  const _ObMeetArielPage({
     required this.tankName,
     required this.gallons,
     required this.waterType,
@@ -4540,10 +4200,10 @@ class _ObWaterQualityPage extends StatefulWidget {
   });
 
   @override
-  State<_ObWaterQualityPage> createState() => _ObWaterQualityPageState();
+  State<_ObMeetArielPage> createState() => _ObMeetArielPageState();
 }
 
-class _ObWaterQualityPageState extends State<_ObWaterQualityPage>
+class _ObMeetArielPageState extends State<_ObMeetArielPage>
     with AutomaticKeepAliveClientMixin {
   @override
   bool get wantKeepAlive => true;
@@ -4574,8 +4234,17 @@ class _ObWaterQualityPageState extends State<_ObWaterQualityPage>
     ),
   ];
 
+  /// Sync onboarding chat messages to _ChatCache so they carry over to the main chat.
+  void _syncToCache() {
+    if (widget.tankId == null) return;
+    _ChatCache.save(
+      widget.tankId,
+      _messages.map((m) => _ChatMessage(role: m.role, content: m.content)).toList(),
+    );
+  }
+
   @override
-  void didUpdateWidget(covariant _ObWaterQualityPage old) {
+  void didUpdateWidget(covariant _ObMeetArielPage old) {
     super.didUpdateWidget(old);
     // Import CSV prompt disabled — the Import Data button is available in the chat instead
   }
@@ -4743,6 +4412,7 @@ class _ObWaterQualityPageState extends State<_ObWaterQualityPage>
       _messages.add((role: 'user', content: text));
       _sending = true;
     });
+    _syncToCache();
     _scrollToBottom();
 
     try {
@@ -4784,16 +4454,6 @@ class _ObWaterQualityPageState extends State<_ObWaterQualityPage>
             final logEntries = (parsed is Map && parsed['logs'] is List)
                 ? (parsed['logs'] as List).cast<Map<String, dynamic>>()
                 : <Map<String, dynamic>>[];
-            // Detect tap water mentions
-            final isTapWater = RegExp(
-              r'\btap\s+water\b|\bfrom\s+the\s+tap\b|\bsource\s+water\b|\bfaucet\b|\bmunicipal\s+water\b',
-              caseSensitive: false,
-            ).hasMatch(text);
-            if (isTapWater) {
-              for (final entry in logEntries) {
-                entry['source'] = 'tap_water';
-              }
-            }
             for (final entry in logEntries) {
               final hasMeasurements = (entry['measurements'] as Map?)?.isNotEmpty == true;
               final hasActions = (entry['actions'] as List?)?.isNotEmpty == true;
@@ -4810,15 +4470,46 @@ class _ObWaterQualityPageState extends State<_ObWaterQualityPage>
                 parsedJson: jsonEncode(entry),
                 date: logDate,
               );
-              // Save measurements
+              // Save measurements (with series support)
               if (hasMeasurements) {
                 final existing = await TankStore.instance.journalForDate(widget.tankId!, journalDate);
                 final measEntry = existing.where((e) => e.category == 'measurements').toList();
+                final incoming = (entry['measurements'] as Map).cast<String, dynamic>();
                 Map<String, dynamic> measurements = {};
                 if (measEntry.isNotEmpty) {
                   try { measurements = Map<String, dynamic>.from(jsonDecode(measEntry.first.data) as Map); } catch (_) {}
                 }
-                measurements.addAll((entry['measurements'] as Map).cast<String, dynamic>());
+                if (incoming.containsKey('_series')) {
+                  // Incoming has series — merge with existing series or convert existing to series
+                  final incomingSeries = (incoming['_series'] as List).cast<Map<String, dynamic>>();
+                  List<Map<String, dynamic>> existingSeries = [];
+                  if (measurements.containsKey('_series')) {
+                    existingSeries = (measurements['_series'] as List).cast<Map<String, dynamic>>();
+                  } else if (measurements.isNotEmpty) {
+                    existingSeries = [{'_label': null, ...measurements}];
+                  }
+                  for (final s in incomingSeries) {
+                    final label = s['_label'];
+                    final idx = existingSeries.indexWhere((e) => e['_label'] == label);
+                    if (idx >= 0) {
+                      existingSeries[idx].addAll(s);
+                    } else {
+                      existingSeries.add(Map<String, dynamic>.from(s));
+                    }
+                  }
+                  measurements = {'_series': existingSeries};
+                } else {
+                  // No series — flat merge as before
+                  if (measurements.containsKey('_series')) {
+                    // Existing has series, incoming is flat — add to last series
+                    final series = (measurements['_series'] as List).cast<Map<String, dynamic>>();
+                    if (series.isNotEmpty) {
+                      series.last.addAll(incoming);
+                    }
+                  } else {
+                    measurements.addAll(incoming);
+                  }
+                }
                 await TankStore.instance.upsertJournal(
                   tankId: widget.tankId!, date: journalDate, category: 'measurements', data: jsonEncode(measurements),
                 );
@@ -4854,7 +4545,8 @@ class _ObWaterQualityPageState extends State<_ObWaterQualityPage>
                 );
               }
             }
-            // Update tap water profile if tap water was mentioned
+            // Update tap water profile if LLM flagged measurements as tap water
+            final isTapWater = logEntries.any((e) => e['source'] == 'tap_water');
             if (isTapWater) {
               const logToTapKey = {
                 'pH': 'ph', 'GH': 'gh', 'KH': 'kh', 'ammonia': 'ammonia',
@@ -4885,15 +4577,8 @@ class _ObWaterQualityPageState extends State<_ObWaterQualityPage>
         }
       }
 
-      // Only fire log-parse for messages that likely contain loggable data
-      // (measurements, water changes, dosing, observations) — not conversational chat.
-      final _hasLoggableContent = RegExp(
-        r'\d'                                        // contains a number (measurements)
-        r'|(?:water\s+change|dosed|added .+ salt|added .+ buffer|trimmed|cleaned|fed|replaced|refilled)'  // actions
-        r'|(?:cloudy|murky|algae|died|sick|bloat|ich|fungus|fin rot|stress|lethargic)',                    // observations
-        caseSensitive: false,
-      ).hasMatch(text);
-      final logFuture = _hasLoggableContent ? parseAndSaveLog() : Future<void>.value();
+      // Let the LLM decide what's loggable — always call parse
+      final logFuture = parseAndSaveLog();
       final resp = await http
           .post(
             Uri.parse('$_baseUrl/chat/tank'),
@@ -4904,6 +4589,7 @@ class _ObWaterQualityPageState extends State<_ObWaterQualityPage>
               'message': text,
               'history': history,
               'recent_logs': <Map>[],
+              'client_date': '${DateTime.now().year}-${DateTime.now().month.toString().padLeft(2, '0')}-${DateTime.now().day.toString().padLeft(2, '0')}',
               'system_context': (() {
                 final parts = <String>[];
                 if (widget.tankName.isNotEmpty) parts.add('Tank name: "${widget.tankName}"');
@@ -4964,12 +4650,17 @@ class _ObWaterQualityPageState extends State<_ObWaterQualityPage>
                 : resp.body)
             as String;
         setState(() => _messages.add((role: 'assistant', content: reply)));
+        _syncToCache();
         _scrollToBottom();
         // Save any reminder tasks the AI scheduled
         if (data is Map && widget.onReminderTask != null) {
           final tasks = (data['tasks'] as List?) ?? [];
+          debugPrint('[Onboard/Chat] tasks from response: $tasks');
           for (final t in tasks) {
-            if (t is Map<String, dynamic>) widget.onReminderTask!(t);
+            if (t is Map<String, dynamic>) {
+              debugPrint('[Onboard/Chat] Adding pending task: $t');
+              widget.onReminderTask!(t);
+            }
           }
         }
         // Process new inhabitants from chat response
@@ -5048,6 +4739,7 @@ class _ObWaterQualityPageState extends State<_ObWaterQualityPage>
           content: "Sorry, I couldn't reach the server right now. "
               "You can always chat with me from the home screen once you're set up!",
         )));
+        _syncToCache();
       }
     } finally {
       if (mounted) setState(() => _sending = false);
@@ -5253,10 +4945,8 @@ class _ObWaterQualityPageState extends State<_ObWaterQualityPage>
                 padding: const EdgeInsets.symmetric(vertical: 16),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
-              onPressed: widget.finishing ? null : widget.onNext,
-              child: widget.finishing
-                  ? const SizedBox(height: 22, width: 22, child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white))
-                  : const Text('Start Exploring', style: TextStyle(fontSize: 16)),
+              onPressed: widget.onNext,
+              child: const Text('Continue', style: TextStyle(fontSize: 16)),
             ),
           ),
         ),
@@ -5629,7 +5319,8 @@ class _AquariaAppState extends State<AquariaApp> {
 
 class TankListScreen extends StatefulWidget {
   final bool showWelcome;
-  const TankListScreen({super.key, this.showWelcome = false});
+  final String? openTankId;
+  const TankListScreen({super.key, this.showWelcome = false, this.openTankId});
 
   @override
   State<TankListScreen> createState() => _TankListScreenState();
@@ -5676,6 +5367,19 @@ class _TankListScreenState extends State<TankListScreen> {
       _expReady = true;
       _tryShowDailyPopup();
     });
+    // Auto-open a specific tank immediately (e.g. after onboarding)
+    if (widget.openTankId != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final tank = TankStore.instance.tanks.firstWhere(
+          (t) => t.id == widget.openTankId,
+          orElse: () => TankStore.instance.tanks.first,
+        );
+        Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => TankJournalScreen(tank: tank)),
+        );
+      });
+    }
     _refresh().then((_) {
       _refreshReady = true;
       _tryShowDailyPopup();
@@ -6068,6 +5772,7 @@ class _TankListScreenState extends State<TankListScreen> {
           'message': noteText,
           'history': [],
           'extract_tasks_only': true,
+          'client_date': '${DateTime.now().year}-${DateTime.now().month.toString().padLeft(2, '0')}-${DateTime.now().day.toString().padLeft(2, '0')}',
         }),
       ).timeout(const Duration(seconds: 15));
       if (resp.statusCode == 200) {
@@ -8694,6 +8399,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
           'message': noteText,
           'history': [],
           'extract_tasks_only': true,
+          'client_date': '${DateTime.now().year}-${DateTime.now().month.toString().padLeft(2, '0')}-${DateTime.now().day.toString().padLeft(2, '0')}',
         }),
       ).timeout(const Duration(seconds: 15));
       if (resp.statusCode == 200) {
@@ -8908,12 +8614,21 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
         _tank.waterType == WaterType.pond;
     if (!isFreshwater) return;
 
-    // Group measurements by date
+    // Group measurements by date (handle _series: use last series for deduction)
     final byDate = <String, Map<String, dynamic>>{};
+    final byDateFull = <String, Map<String, dynamic>>{}; // full stored data for write-back
     for (final j in _journal.where((j) => j.category == 'measurements')) {
       try {
         final m = (jsonDecode(j.data) as Map).cast<String, dynamic>();
-        byDate[j.date] = m;
+        byDateFull[j.date] = m;
+        if (m.containsKey('_series')) {
+          final seriesList = (m['_series'] as List).cast<Map<String, dynamic>>();
+          if (seriesList.isNotEmpty) {
+            byDate[j.date] = Map<String, dynamic>.from(seriesList.last)..remove('_label');
+          }
+        } else {
+          byDate[j.date] = m;
+        }
       } catch (_) {}
     }
 
@@ -8936,15 +8651,28 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
       // Skip write if values haven't changed
       if (m['magnesium_calc'] == mgStr && m['ca_mg_ratio'] == ratioStr) continue;
 
-      final updated = Map<String, dynamic>.from(m);
-      updated['magnesium_calc'] = mgStr;
-      updated['ca_mg_ratio'] = ratioStr;
+      // Write back to the correct structure (flat or series)
+      final full = byDateFull[date] ?? m;
+      Map<String, dynamic> toSave;
+      if (full.containsKey('_series')) {
+        final seriesList = (full['_series'] as List).cast<Map<String, dynamic>>();
+        if (seriesList.isNotEmpty) {
+          seriesList.last['magnesium_calc'] = mgStr;
+          seriesList.last['ca_mg_ratio'] = ratioStr;
+        }
+        toSave = full;
+      } else {
+        final updated = Map<String, dynamic>.from(m);
+        updated['magnesium_calc'] = mgStr;
+        updated['ca_mg_ratio'] = ratioStr;
+        toSave = updated;
+      }
 
       await TankStore.instance.upsertJournal(
         tankId: _tank.id,
         date: date,
         category: 'measurements',
-        data: jsonEncode(updated),
+        data: jsonEncode(toSave),
       );
     }
   }
@@ -8981,7 +8709,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
           try {
             if (e.category == 'measurements') {
               final m = (jsonDecode(e.data) as Map).cast<String, dynamic>();
-              parts.add('Measurements: ${m.entries.map((kv) => '${kv.key}=${kv.value}').join(', ')}');
+              parts.add(_formatMeasurementsForContext(m));
             } else if (e.category == 'actions') {
               final a = (jsonDecode(e.data) as List).cast<String>();
               if (a.isNotEmpty) parts.add('Actions: ${a.join('; ')}');
@@ -9070,7 +8798,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
           try {
             if (e.category == 'measurements') {
               final m = (jsonDecode(e.data) as Map).cast<String, dynamic>();
-              parts.add('Measurements: ${m.entries.map((kv) => '${kv.key}=${kv.value}').join(', ')}');
+              parts.add(_formatMeasurementsForContext(m));
             } else if (e.category == 'actions') {
               final a = (jsonDecode(e.data) as List).cast<String>();
               if (a.isNotEmpty) parts.add('Actions: ${a.join('; ')}');
@@ -9135,9 +8863,22 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
         final m = (jsonDecode(entry.data) as Map).cast<String, dynamic>();
         final parts = entry.date.split('-');
         final entryDate = DateTime(int.parse(parts[0]), int.parse(parts[1]), int.parse(parts[2]));
-        for (final e in m.entries) {
-          final canonical = _paramAliases[e.key.toLowerCase()];
-          if (canonical != null) raw[canonical] = (value: e.value.toString(), date: entryDate, deduced: false);
+        if (m.containsKey('_series')) {
+          // Series format: use the LAST series as the current/primary values
+          final seriesList = (m['_series'] as List).cast<Map<String, dynamic>>();
+          if (seriesList.isNotEmpty) {
+            final last = seriesList.last;
+            for (final e in last.entries) {
+              if (e.key == '_label') continue;
+              final canonical = _paramAliases[e.key.toLowerCase()];
+              if (canonical != null) raw[canonical] = (value: e.value.toString(), date: entryDate, deduced: false);
+            }
+          }
+        } else {
+          for (final e in m.entries) {
+            final canonical = _paramAliases[e.key.toLowerCase()];
+            if (canonical != null) raw[canonical] = (value: e.value.toString(), date: entryDate, deduced: false);
+          }
         }
       } catch (_) {}
     }
@@ -9195,6 +8936,28 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
     return result;
   }
 
+  /// Returns series data for dates that have labeled measurement series.
+  /// Key: date string, Value: list of (label, param→value map).
+  Map<String, List<({String? label, Map<String, dynamic> values})>> _journalSeries() {
+    final result = <String, List<({String? label, Map<String, dynamic> values})>>{};
+    final twoWeeksAgo = DateTime.now().subtract(const Duration(days: 14));
+    final twoWeeksKey = '${twoWeeksAgo.year}-${twoWeeksAgo.month.toString().padLeft(2,'0')}-${twoWeeksAgo.day.toString().padLeft(2,'0')}';
+    for (final entry in _journal.where((j) => j.category == 'measurements' && j.date.compareTo(twoWeeksKey) >= 0)) {
+      try {
+        final m = (jsonDecode(entry.data) as Map).cast<String, dynamic>();
+        if (m.containsKey('_series')) {
+          final seriesList = (m['_series'] as List).cast<Map<String, dynamic>>();
+          result[entry.date] = seriesList.map((s) {
+            final label = s['_label'] as String?;
+            final values = Map<String, dynamic>.from(s)..remove('_label');
+            return (label: label, values: values);
+          }).toList();
+        }
+      } catch (_) {}
+    }
+    return result;
+  }
+
   static String _formatParamDate(DateTime d) {
     const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
     final now = DateTime.now();
@@ -9208,6 +8971,33 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
   void _openDetail() {
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => TankDetailScreen(tank: _tank)),
+    );
+  }
+
+  /// Format measurement data (flat or _series) as text for AI context.
+  static String _formatMeasurementsForContext(Map<String, dynamic> m) {
+    if (m.containsKey('_series')) {
+      final seriesList = (m['_series'] as List).cast<Map<String, dynamic>>();
+      return seriesList.map((s) {
+        final label = s['_label'] as String?;
+        final vals = Map<String, dynamic>.from(s)..remove('_label');
+        final prefix = label != null ? 'Measurements ($label)' : 'Measurements';
+        return '$prefix: ${vals.entries.map((kv) => '${kv.key}=${kv.value}').join(', ')}';
+      }).join(' | ');
+    }
+    return 'Measurements: ${m.entries.map((kv) => '${kv.key}=${kv.value}').join(', ')}';
+  }
+
+  static Widget _buildParamPill(String label, String value, Color bgColor, Color textColor) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(color: bgColor, borderRadius: BorderRadius.circular(20)),
+      child: RichText(
+        text: TextSpan(children: [
+          TextSpan(text: '$label ', style: TextStyle(fontSize: 11, color: textColor.withOpacity(0.85), fontWeight: FontWeight.w600)),
+          TextSpan(text: value, style: TextStyle(fontSize: 12, color: textColor, fontWeight: FontWeight.w700)),
+        ]),
+      ),
     );
   }
 
@@ -10029,8 +9819,11 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
                         }
                         // Sort date groups newest first
                         final sortedDates = byDate.keys.toList()..sort((a, b) => b.compareTo(a));
+                        final seriesData = _journalSeries();
                         final sections = <Widget>[];
                         for (final date in sortedDates) {
+                          final dateKey = '${date.year}-${date.month.toString().padLeft(2,'0')}-${date.day.toString().padLeft(2,'0')}';
+                          final series = seriesData[dateKey];
                           sections.add(Padding(
                             padding: const EdgeInsets.only(top: 10, bottom: 4),
                             child: Text(
@@ -10039,6 +9832,34 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
                                   color: Color(0xFF757575), letterSpacing: 0.3),
                             ),
                           ));
+                          // If this date has series, show each series with its label
+                          if (series != null && series.length > 1) {
+                            for (final s in series) {
+                              if (s.label != null) {
+                                sections.add(Padding(
+                                  padding: const EdgeInsets.only(top: 6, bottom: 2, left: 4),
+                                  child: Text(
+                                    s.label!.toUpperCase(),
+                                    style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w700,
+                                        color: Color(0xFF9E9E9E), letterSpacing: 0.6),
+                                  ),
+                                ));
+                              }
+                              sections.add(Wrap(
+                                spacing: 6,
+                                runSpacing: 8,
+                                children: s.values.entries.map((e) {
+                                  final canonical = _paramAliases[e.key.toLowerCase()];
+                                  if (canonical == null) return const SizedBox.shrink();
+                                  final bgColor = _paramColors[canonical] ?? _cMint;
+                                  final label = _paramShortLabel(canonical);
+                                  final textColor = bgColor.computeLuminance() < 0.35 ? Colors.white : Colors.black;
+                                  return _buildParamPill(label, e.value.toString(), bgColor, textColor);
+                                }).toList(),
+                              ));
+                            }
+                          } else {
+                          // No series — show flat params as before
                           sections.add(Wrap(
                             spacing: 6,
                             runSpacing: 8,
@@ -10071,6 +9892,7 @@ class _TankJournalScreenState extends State<TankJournalScreen> {
                               );
                             }).toList(),
                           ));
+                          } // close else (no series)
                         }
                         // Deduced values section
                         if (deduced.isNotEmpty) {
@@ -10396,6 +10218,8 @@ class _ChatSheetState extends State<_ChatSheet> {
     widget.onLogsChanged();
   }
 
+  /// Re-parse a buffered message against a now-known tank.
+
   void _summarizeAndSaveSession() {
     // Only summarize if there were meaningful user messages (4+ messages total)
     final userMsgCount = _chatMessages.where((m) => m.role == 'user').length;
@@ -10685,204 +10509,8 @@ class _ChatSheetState extends State<_ChatSheet> {
     });
     _scrollToBottom();
 
-    // Fire log-parse and chat simultaneously; don't block chat on log parsing
-    final tankSnapshot = _selectedTank;
-    final logDateSnapshot = _logDate;
-
-    Future<void> parseAndSaveLog() async {
-      if (tankSnapshot == null) return;
-      try {
-        debugPrint('[ParseLog] Sending parse request for: "$text"');
-        // Build recent conversation context so the parser can resolve
-        // ambiguous references (e.g. "added to canister filter" → aragonite)
-        final recentContext = _chatMessages
-            .take(6)
-            .map((m) => '${m.role}: ${m.content}')
-            .join('\n');
-        final resp = await http
-            .post(Uri.parse('$_baseUrl/parse/tank-log'),
-                headers: _apiHeaders(),
-                body: jsonEncode({
-                  'text': text,
-                  if (recentContext.isNotEmpty) 'context': recentContext,
-                  'client_date': '${logDateSnapshot.year}-${logDateSnapshot.month.toString().padLeft(2, '0')}-${logDateSnapshot.day.toString().padLeft(2, '0')}',
-                }))
-            .timeout(const Duration(seconds: 20));
-        debugPrint('[ParseLog] Response status=${resp.statusCode}, body=${resp.body}');
-        if (resp.statusCode == 200) {
-          final parsed = jsonDecode(resp.body);
-          final logEntries = (parsed is Map && parsed['logs'] is List)
-              ? (parsed['logs'] as List).cast<Map<String, dynamic>>()
-              : <Map<String, dynamic>>[];
-          // Detect tap water mentions before saving
-          final isTapWater = RegExp(
-            r'\btap\s+water\b|\bfrom\s+the\s+tap\b|\bsource\s+water\b|\bfaucet\b|\bmunicipal\s+water\b',
-            caseSensitive: false,
-          ).hasMatch(text);
-
-          // Tag entries as tap water before persisting
-          if (isTapWater) {
-            for (final entry in logEntries) {
-              entry['source'] = 'tap_water';
-            }
-          }
-
-          for (int i = 0; i < logEntries.length; i++) {
-            final entry = logEntries[i];
-            // Skip entries with no measurements, actions, or notes.
-            // Tasks/reminders are handled separately by the chat task extraction path.
-            final hasMeasurements = (entry['measurements'] as Map?)?.isNotEmpty == true;
-            final hasActions = (entry['actions'] as List?)?.isNotEmpty == true;
-            final hasNotes = (entry['notes'] as List?)?.isNotEmpty == true;
-            debugPrint('[ParseLog] Entry $i: meas=$hasMeasurements, actions=$hasActions, notes=$hasNotes');
-            if (!hasMeasurements && !hasActions && !hasNotes) continue;
-            // Remove tasks from parse entries — chat path handles task saving
-            entry.remove('tasks');
-            final dateStr = entry['date'] as String?;
-            final logDate = (dateStr != null ? DateTime.tryParse(dateStr) : null) ?? logDateSnapshot;
-            final journalDate = '${logDate.year}-${logDate.month.toString().padLeft(2,'0')}-${logDate.day.toString().padLeft(2,'0')}';
-            debugPrint('[ParseLog] Saving log entry $i for tank ${tankSnapshot.id}');
-            // Save to audit log
-            await TankStore.instance.addLog(
-              tankId: tankSnapshot.id,
-              rawText: logEntries.length == 1 ? text : '',
-              parsedJson: jsonEncode(entry),
-              date: logDate,
-            );
-            // Save to journal (user-facing curated view)
-            if (hasMeasurements) {
-              final existing = await TankStore.instance.journalForDate(tankSnapshot.id, journalDate);
-              final measEntry = existing.where((e) => e.category == 'measurements').toList();
-              Map<String, dynamic> measurements = {};
-              if (measEntry.isNotEmpty) {
-                try { measurements = Map<String, dynamic>.from(jsonDecode(measEntry.first.data) as Map); } catch (_) {}
-              }
-              measurements.addAll((entry['measurements'] as Map).cast<String, dynamic>());
-              await TankStore.instance.upsertJournal(
-                tankId: tankSnapshot.id, date: journalDate, category: 'measurements', data: jsonEncode(measurements),
-              );
-            }
-            if (hasActions) {
-              final existing = await TankStore.instance.journalForDate(tankSnapshot.id, journalDate);
-              final actEntry = existing.where((e) => e.category == 'actions').toList();
-              List<String> actions = [];
-              if (actEntry.isNotEmpty) {
-                try { actions = (jsonDecode(actEntry.first.data) as List).cast<String>(); } catch (_) {}
-              }
-              for (final a in (entry['actions'] as List).cast<String>()) {
-                if (!actions.contains(a)) actions.add(a);
-              }
-              await TankStore.instance.upsertJournal(
-                tankId: tankSnapshot.id, date: journalDate, category: 'actions', data: jsonEncode(actions),
-              );
-            }
-            if (hasNotes) {
-              final existing = await TankStore.instance.journalForDate(tankSnapshot.id, journalDate);
-              final noteEntry = existing.where((e) => e.category == 'notes').toList();
-              List<String> notes = [];
-              if (noteEntry.isNotEmpty) {
-                try { notes = (jsonDecode(noteEntry.first.data) as List).cast<String>(); } catch (_) {}
-              }
-              for (final n in (entry['notes'] as List).cast<String>()) {
-                if (!notes.contains(n)) notes.add(n);
-              }
-              await TankStore.instance.upsertJournal(
-                tankId: tankSnapshot.id, date: journalDate, category: 'notes', data: jsonEncode(notes),
-              );
-            }
-            debugPrint('[ParseLog] Log entry $i saved successfully');
-            // Auto-complete matching tasks when actions are logged
-            if (hasActions) {
-              final actions = (entry['actions'] as List).cast<String>();
-              for (final action in actions) {
-                await TankStore.instance.completeMatchingTask(
-                  tankId: tankSnapshot.id,
-                  actionDescription: action,
-                );
-              }
-            }
-            if (i == logEntries.length - 1 && mounted) setState(() => _logDate = logDate);
-          }
-          if (mounted) widget.onLogsChanged();
-          // Refresh chat's own journal data so calculated params
-          // (magnesium_calc, ca_mg_ratio) are available in context
-          if (mounted) await _loadTankData(tankSnapshot);
-
-          // If tap water, also update the tap water profile
-          if (isTapWater) {
-            const logToTapKey = {
-              'pH': 'ph',
-              'GH': 'gh',
-              'KH': 'kh',
-              'ammonia': 'ammonia',
-              'nitrite': 'nitrite',
-              'nitrate': 'nitrate',
-              'potassium': 'potassium',
-              'Potassium': 'potassium',
-              'K': 'potassium',
-              'calcium': 'calcium',
-              'Calcium': 'calcium',
-              'Ca': 'calcium',
-              'magnesium': 'magnesium',
-              'Magnesium': 'magnesium',
-              'Mg': 'magnesium',
-              'TDS': 'tds',
-              'tds': 'tds',
-            };
-            final tapData = <String, dynamic>{};
-            for (final entry in logEntries) {
-              final measurements = entry['measurements'];
-              if (measurements is Map) {
-                for (final kv in measurements.entries) {
-                  final tapKey = logToTapKey[kv.key];
-                  if (tapKey != null && kv.value != null) {
-                    tapData[tapKey] = kv.value;
-                  }
-                }
-              }
-            }
-            if (tapData.isNotEmpty) {
-              final existing = _tapWaterJson != null
-                  ? Map<String, dynamic>.from(jsonDecode(_tapWaterJson!) as Map)
-                  : <String, dynamic>{};
-              existing.addAll(tapData);
-              final jsonStr = jsonEncode(existing);
-              await TankStore.instance.saveTapWater(tankSnapshot.id, jsonStr);
-              if (mounted) setState(() => _tapWaterJson = jsonStr);
-            }
-          }
-
-          // Observation alerts are handled by the AI task extraction path —
-          // no need to duplicate them here.
-        }
-      } catch (e) {
-        debugPrint('[ParseLog] ERROR: $e');
-      }
-      if (mounted) setState(() => _sending = false);
-    }
-
-    // Only parse for log data if the message looks like it contains aquarium info
-    // (measurements, observations, actions) — skip pure conversational messages.
-    final _logWordsRe = RegExp(
-      r'\b(ph|ammonia|nh3|nitrite|no2|nitrate|no3|kh|gh|temp|temperature|salinity|calcium|ca|'
-      r'magnesium|mg|phosphate|po4|alkalinity|alk|potassium|iron|fe|tds|ppm|dkh|sg|'
-      r'water\s*change|dose[d]?|dosing|fed|feed|clean|trim|prune|'
-      r'test|tested|measure|reading|parameters|levels|results|'
-      r'added|removed|replaced|installed|treated|'
-      r'cloudy|clear|brown|yellow|green|murky|hazy|milky|foamy|smelly|odor|algae|bloom|sick|dead|died|spawn|'
-      r'curly|curling|spots|spotted|melting|wilting|drooping|stunted|twisted|holes|pinholes|pale|'
-      r'yellowing|browning|rotting|shedding|losing\s+leaves|plant|plants|'
-      r'lethargic|gasping|hiding|aggressive|bloated|swollen|scratching|flashing|fin\s*rot|ich|ick|fungus|'
-      r'ill|injured|infected|disease|parasite|worm|wormy|listless|clamped|erratic|darting|'
-      r'terrible|awful|bad|worse|weird|strange|odd|unusual|abnormal|struggling|suffering|distressed|stressed|'
-      r'not\s+eating|won.t\s+eat|stopped\s+eating|lost\s+color|losing\s+color|faded|discolored|'
-      r'filter|heater|light|pump|skimmer)\b'
-      r'|\b[kK]\s*[:=]?\s*\d',  // K followed by a number = potassium measurement
-      caseSensitive: false,
-    );
-    if (_logWordsRe.hasMatch(text)) {
-      parseAndSaveLog();
-    }
+    // Log saving is now handled by the chat response's log_entries —
+    // no separate parse endpoint call needed.
 
     // Get AI chat response
     try {
@@ -10918,6 +10546,7 @@ class _ChatSheetState extends State<_ChatSheet> {
                 'message': text,
                 'history': history,
                 'recent_logs': _recentLogs,
+                'client_date': '${DateTime.now().year}-${DateTime.now().month.toString().padLeft(2, '0')}-${DateTime.now().day.toString().padLeft(2, '0')}',
                 'health_profile': healthProfile,
                 'behavior_profile': behaviorProfile,
                 'experience_level': _experience,
@@ -10942,59 +10571,141 @@ class _ChatSheetState extends State<_ChatSheet> {
         _addMessage(_ChatMessage(role: 'assistant', content: reply));
         _scrollToBottom();
 
-        // Detect which tank Ariel identified from the reply or user message.
-        // Always check the user's message for a tank name (they may have typed
-        // the tank name to answer "which tank?"). Only check the reply when it
-        // is NOT purely a question — this prevents premature selection from
-        // "which tank?" replies while still detecting from confirming replies
-        // like "Added Amazon Sword to New Tank! Anything else?"
-        if (_allTanks.length > 1) {
-          final replyLower = reply.toLowerCase();
-          final msgLower = text.toLowerCase();
-          // A reply is "purely a question" only if it ends with ? AND does not
-          // contain action-confirming words (e.g. "added", "removed", "done").
-          final endsWithQ = reply.trimRight().endsWith('?');
-          final hasConfirm = RegExp(r'\b(added|removed|deleted|done|all set|created|updated|logged|taken care)\b')
-              .hasMatch(replyLower);
-          final checkReply = !endsWithQ || hasConfirm;
-
-          TankModel? detected;
-
-          // Check if the user replied with just a number (selecting from numbered list)
-          final numberMatch = RegExp(r'^\s*(\d+)\s*$').firstMatch(text);
-          if (numberMatch != null) {
-            final idx = int.parse(numberMatch.group(1)!) - 1; // 1-based to 0-based
-            if (idx >= 0 && idx < _allTanks.length) {
-              detected = _allTanks[idx];
-              debugPrint('[Chat] Tank selected by number: ${idx + 1} → ${detected.name}');
-            }
-          }
-
-          // Fall back to name matching
-          if (detected == null) {
-            // Sort by name length descending so "New Tank" matches before "Tank"
-            final sorted = List<TankModel>.from(_allTanks)
-              ..sort((a, b) => b.name.length.compareTo(a.name.length));
-            for (final t in sorted) {
-              final nameL = t.name.toLowerCase();
-              // Use word-boundary-aware matching to avoid substring false positives
-              final pattern = RegExp('\\b${RegExp.escape(nameL)}\\b');
-              if ((checkReply && pattern.hasMatch(replyLower)) || pattern.hasMatch(msgLower)) {
-                detected = t;
-                break;
-              }
-            }
-          }
-
-          if (detected != null && _selectedTank?.id != detected.id) {
-            debugPrint('[Chat] Tank detected: ${_selectedTank?.name} → ${detected.name}');
+        // Use the LLM's select_tank tool call to identify the tank
+        final selectedTankName = (data is Map) ? data['selected_tank'] as String? : null;
+        debugPrint('[Chat] selected_tank from response: $selectedTankName, _allTanks.length=${_allTanks.length}, _selectedTank=${_selectedTank?.name}');
+        if (selectedTankName != null && _allTanks.length > 1) {
+          final detected = _allTanks.firstWhere(
+            (t) => t.name.toLowerCase() == selectedTankName.toLowerCase(),
+            orElse: () => _allTanks.first,
+          );
+          if (_selectedTank?.id != detected.id) {
+            debugPrint('[Chat] Tank selected by LLM: ${_selectedTank?.name} → ${detected.name}');
             setState(() => _selectedTank = detected);
-            await _loadTankData(detected!);
+            await _loadTankData(detected);
           }
         } else if (_selectedTank == null && _allTanks.length == 1) {
           setState(() => _selectedTank = _allTanks.first);
+          await _loadTankData(_allTanks.first);
         }
         debugPrint('[Chat] After tank detection: _selectedTank=${_selectedTank?.name ?? "NULL"}');
+
+        // Save log entries returned by the chat LLM (measurements, actions, notes)
+        if (data is Map && data['log_entries'] != null && _selectedTank != null) {
+          try {
+            final logEntries = (data['log_entries'] as List).cast<Map<String, dynamic>>();
+            debugPrint('[Chat] Saving ${logEntries.length} log entries from chat response');
+            final tank = _selectedTank!;
+            for (final entry in logEntries) {
+              final dateStr = entry['date'] as String?;
+              final now = DateTime.now();
+              final logDate = (dateStr != null ? DateTime.tryParse(dateStr) : null) ?? now;
+              final journalDate = '${logDate.year}-${logDate.month.toString().padLeft(2, '0')}-${logDate.day.toString().padLeft(2, '0')}';
+
+              final hasMeas = (entry['measurements'] as Map?)?.isNotEmpty == true;
+              final hasAct = (entry['actions'] as List?)?.isNotEmpty == true;
+              final hasNotes = (entry['notes'] as List?)?.isNotEmpty == true;
+              if (!hasMeas && !hasAct && !hasNotes) continue;
+
+              // Save to audit log
+              await TankStore.instance.addLog(
+                tankId: tank.id,
+                rawText: text,
+                parsedJson: jsonEncode(entry),
+                date: logDate,
+              );
+
+              // Save measurements to journal (flat merge, no series)
+              if (hasMeas) {
+                final existing = await TankStore.instance.journalForDate(tank.id, journalDate);
+                final measEntry = existing.where((e) => e.category == 'measurements').toList();
+                Map<String, dynamic> measurements = {};
+                if (measEntry.isNotEmpty) {
+                  try { measurements = Map<String, dynamic>.from(jsonDecode(measEntry.first.data) as Map); } catch (_) {}
+                }
+                measurements.addAll((entry['measurements'] as Map).cast<String, dynamic>());
+                await TankStore.instance.upsertJournal(
+                  tankId: tank.id, date: journalDate, category: 'measurements', data: jsonEncode(measurements),
+                );
+              }
+
+              // Save actions to journal
+              if (hasAct) {
+                final existing = await TankStore.instance.journalForDate(tank.id, journalDate);
+                final actEntry = existing.where((e) => e.category == 'actions').toList();
+                List<String> actions = [];
+                if (actEntry.isNotEmpty) {
+                  try { actions = (jsonDecode(actEntry.first.data) as List).cast<String>(); } catch (_) {}
+                }
+                for (final a in (entry['actions'] as List).cast<String>()) {
+                  if (!actions.contains(a)) actions.add(a);
+                }
+                await TankStore.instance.upsertJournal(
+                  tankId: tank.id, date: journalDate, category: 'actions', data: jsonEncode(actions),
+                );
+              }
+
+              // Save notes to journal
+              if (hasNotes) {
+                final existing = await TankStore.instance.journalForDate(tank.id, journalDate);
+                final noteEntry = existing.where((e) => e.category == 'notes').toList();
+                List<String> notes = [];
+                if (noteEntry.isNotEmpty) {
+                  try { notes = (jsonDecode(noteEntry.first.data) as List).cast<String>(); } catch (_) {}
+                }
+                for (final n in (entry['notes'] as List).cast<String>()) {
+                  if (!notes.contains(n)) notes.add(n);
+                }
+                await TankStore.instance.upsertJournal(
+                  tankId: tank.id, date: journalDate, category: 'notes', data: jsonEncode(notes),
+                );
+              }
+
+              debugPrint('[Chat] Log entry saved: meas=$hasMeas, act=$hasAct, notes=$hasNotes, date=$journalDate');
+
+              // Auto-complete matching tasks
+              if (hasAct) {
+                for (final action in (entry['actions'] as List).cast<String>()) {
+                  await TankStore.instance.completeMatchingTask(tankId: tank.id, actionDescription: action);
+                }
+              }
+            }
+
+            // Update tap water profile if any entries are tap water
+            final isTapWater = logEntries.any((e) => e['source'] == 'tap_water');
+            if (isTapWater) {
+              const logToTapKey = {
+                'pH': 'ph', 'GH': 'gh', 'KH': 'kh', 'ammonia': 'ammonia',
+                'nitrite': 'nitrite', 'nitrate': 'nitrate', 'K': 'potassium',
+                'Ca': 'calcium', 'Mg': 'magnesium', 'TDS': 'tds', 'tds': 'tds',
+              };
+              final tapData = <String, dynamic>{};
+              for (final entry in logEntries.where((e) => e['source'] == 'tap_water')) {
+                final measurements = entry['measurements'];
+                if (measurements is Map) {
+                  for (final kv in measurements.entries) {
+                    final tapKey = logToTapKey[kv.key];
+                    if (tapKey != null && kv.value != null) tapData[tapKey] = kv.value;
+                  }
+                }
+              }
+              if (tapData.isNotEmpty) {
+                final existing = _tapWaterJson != null
+                    ? Map<String, dynamic>.from(jsonDecode(_tapWaterJson!) as Map)
+                    : <String, dynamic>{};
+                existing.addAll(tapData);
+                final jsonStr = jsonEncode(existing);
+                await TankStore.instance.saveTapWater(tank.id, jsonStr);
+                if (mounted) setState(() => _tapWaterJson = jsonStr);
+              }
+            }
+
+            if (mounted) widget.onLogsChanged();
+            if (mounted) await _loadTankData(tank);
+          } catch (e) {
+            debugPrint('[Chat] Error saving log entries: $e');
+          }
+        }
 
         // Create new tank if AI collected all details
         if (data is Map && data['new_tank'] != null) {
@@ -11249,6 +10960,99 @@ class _ChatSheetState extends State<_ChatSheet> {
           }
         }
 
+        // Handle remove_action from AI
+        if (data is Map && data['remove_action'] != null && _selectedTank != null) {
+          try {
+            final ra = data['remove_action'] as Map<String, dynamic>;
+            final actionText = ra['action'] as String? ?? '';
+            final actionDate = ra['date'] as String? ?? '${DateTime.now().year}-${DateTime.now().month.toString().padLeft(2, '0')}-${DateTime.now().day.toString().padLeft(2, '0')}';
+            final existing = await TankStore.instance.journalForDate(_selectedTank!.id, actionDate);
+            final actEntry = existing.where((e) => e.category == 'actions').toList();
+            if (actEntry.isNotEmpty) {
+              List<String> actions = [];
+              try { actions = (jsonDecode(actEntry.first.data) as List).cast<String>(); } catch (_) {}
+              actions.removeWhere((a) => a.toLowerCase().contains(actionText.toLowerCase()));
+              await TankStore.instance.upsertJournal(
+                tankId: _selectedTank!.id, date: actionDate, category: 'actions', data: jsonEncode(actions),
+              );
+              debugPrint('[Chat/RemoveAction] removed "$actionText" from $actionDate');
+              widget.onLogsChanged();
+            }
+          } catch (e) {
+            debugPrint('[Chat/RemoveAction] ERROR: $e');
+          }
+        }
+
+        // Handle remove_note from AI
+        if (data is Map && data['remove_note'] != null && _selectedTank != null) {
+          try {
+            final rn = data['remove_note'] as Map<String, dynamic>;
+            final noteText = rn['note'] as String? ?? '';
+            final noteDate = rn['date'] as String? ?? '${DateTime.now().year}-${DateTime.now().month.toString().padLeft(2, '0')}-${DateTime.now().day.toString().padLeft(2, '0')}';
+            final existing = await TankStore.instance.journalForDate(_selectedTank!.id, noteDate);
+            final noteEntry = existing.where((e) => e.category == 'notes').toList();
+            if (noteEntry.isNotEmpty) {
+              List<String> notes = [];
+              try { notes = (jsonDecode(noteEntry.first.data) as List).cast<String>(); } catch (_) {}
+              notes.removeWhere((n) => n.toLowerCase().contains(noteText.toLowerCase()));
+              await TankStore.instance.upsertJournal(
+                tankId: _selectedTank!.id, date: noteDate, category: 'notes', data: jsonEncode(notes),
+              );
+              debugPrint('[Chat/RemoveNote] removed "$noteText" from $noteDate');
+              widget.onLogsChanged();
+            }
+          } catch (e) {
+            debugPrint('[Chat/RemoveNote] ERROR: $e');
+          }
+        }
+
+        // Handle remove_task from AI
+        if (data is Map && data['remove_task'] != null && _selectedTank != null) {
+          try {
+            final rt = data['remove_task'] as Map<String, dynamic>;
+            final taskDesc = (rt['description'] as String? ?? '').toLowerCase();
+            final allTasks = await TankStore.instance.tasksForTank(_selectedTank!.id);
+            for (final t in allTasks) {
+              if (t.description.toLowerCase().contains(taskDesc)) {
+                await TankStore.instance.deleteTask(t.id);
+                debugPrint('[Chat/RemoveTask] deleted task "${t.description}"');
+                break;
+              }
+            }
+          } catch (e) {
+            debugPrint('[Chat/RemoveTask] ERROR: $e');
+          }
+        }
+
+        // Handle equipment_update from AI
+        if (data is Map && data['equipment_update'] != null && _selectedTank != null) {
+          try {
+            final eqUpdate = Map<String, dynamic>.from(data['equipment_update'] as Map);
+            Map<String, dynamic> existing = {};
+            if (_equipmentJson != null) {
+              try { existing = Map<String, dynamic>.from(jsonDecode(_equipmentJson!) as Map); } catch (_) {}
+            }
+            // Special handling for notes: append instead of replace
+            if (eqUpdate.containsKey('notes')) {
+              final newNote = eqUpdate['notes'] as String? ?? '';
+              final existingNotes = existing['notes'] as String? ?? '';
+              if (existingNotes.isNotEmpty && newNote.isNotEmpty) {
+                existing['notes'] = '$existingNotes\n$newNote';
+              } else if (newNote.isNotEmpty) {
+                existing['notes'] = newNote;
+              }
+              eqUpdate.remove('notes');
+            }
+            existing.addAll(eqUpdate);
+            final jsonStr = jsonEncode(existing);
+            await TankStore.instance.saveEquipment(_selectedTank!.id, jsonStr);
+            if (mounted) setState(() { _equipmentJson = jsonStr; });
+            debugPrint('[Chat/Equipment] updated: $existing');
+          } catch (e) {
+            debugPrint('[Chat/Equipment] ERROR: $e');
+          }
+        }
+
         // Save any tasks the AI confirmed scheduling
         debugPrint('[Chat] full response: $data');
         final rawTasks = data is Map ? (data['tasks'] as List?)?.cast<Map<String, dynamic>>() : null;
@@ -11317,33 +11121,6 @@ class _ChatSheetState extends State<_ChatSheet> {
     return tasks; // fail open on error
   }
 
-  static List<String> _observationAlerts(String text) {
-    final t = text.toLowerCase();
-    final alerts = <String>[];
-    if (RegExp(r'\balga[e]?\b').hasMatch(t)) {
-      alerts.add('Algae observed — consider water change or adjusting light duration');
-    }
-    if (RegExp(r'(leaves?|plant).{0,20}(dying|dead|yellow|brown|rot)|(dying|dead|yellow|brown|rot).{0,20}(leaves?|plant)').hasMatch(t)) {
-      alerts.add('Plant health issue — leaves dying or discolored, check nutrients and lighting');
-    }
-    if (RegExp(r'(fish|shrimp|snail|coral|inhabitant).{0,20}(sick|ill|dying|dead|lethargic|stress)|(sick|ill|dying|dead|lethargic|stress).{0,20}(fish|shrimp|snail|coral|inhabitant)').hasMatch(t)) {
-      alerts.add('Inhabitant health concern — monitor closely and check water parameters');
-    }
-    if (RegExp(r'\b(cloudy|murky|brown|yellow|green|hazy|milky|foamy)\b').hasMatch(t) &&
-        !RegExp(r'(leaves?|plant|fish|shrimp|coral).{0,15}(brown|yellow|green)').hasMatch(t)) {
-      alerts.add('Water clarity issue — water appears discolored or cloudy');
-    }
-    if (RegExp(r'\b(white\s*spot|ich|ick|velvet|fungus|disease)\b').hasMatch(t)) {
-      alerts.add('Possible disease detected — consider treatment and quarantine');
-    }
-    if (RegExp(r'\b(smell|odor|smells|stink|stinking)\b').hasMatch(t)) {
-      alerts.add('Water odor detected — check filtration and substrate');
-    }
-    if (RegExp(r'\b(fin\s*rot|torn\s*fin|damaged\s*fin)\b').hasMatch(t)) {
-      alerts.add('Fin damage observed — check for aggression or infection');
-    }
-    return alerts;
-  }
 
   Widget _bubble(_ChatMessage msg) {
     final isUser = msg.role == 'user';
@@ -15204,14 +14981,6 @@ class _FullScreenNetworkImageState extends State<_FullScreenNetworkImage> {
                             _showDiscordShareFlow(context, widget.photoStoragePath!);
                           },
                         ),
-                        ListTile(
-                          leading: const Icon(Icons.alternate_email, color: Colors.black87),
-                          title: const Text('Twitter / X'),
-                          onTap: () {
-                            Navigator.pop(ctx);
-                            _showTwitterShareFlow(context, widget.photoStoragePath!);
-                          },
-                        ),
                       ],
                     ),
                   ),
@@ -15388,27 +15157,6 @@ class _PhotoDetailScreenState extends State<_PhotoDetailScreen> {
                               if (mounted) {
                                 setState(() => _sharing = false);
                                 _showDiscordShareFlow(context, storagePath);
-                              }
-                            } catch (e) {
-                              if (mounted) {
-                                setState(() => _sharing = false);
-                                _showTopSnack(context, 'Failed to upload: $e');
-                              }
-                            }
-                          },
-                        ),
-                        ListTile(
-                          leading: const Icon(Icons.alternate_email, color: Colors.black87),
-                          title: const Text('Twitter / X'),
-                          subtitle: const Text('Post to your timeline'),
-                          onTap: () async {
-                            Navigator.pop(ctx);
-                            setState(() => _sharing = true);
-                            try {
-                              final storagePath = await SupabaseService.uploadCommunityPhoto(widget.photo.filePath);
-                              if (mounted) {
-                                setState(() => _sharing = false);
-                                _showTwitterShareFlow(context, storagePath);
                               }
                             } catch (e) {
                               if (mounted) {
@@ -15700,7 +15448,14 @@ class _AllChartsScreenState extends State<AllChartsScreen> {
         if (raw['source'] == 'tap_water') continue;
         final m = (raw['measurements'] as Map?)?.cast<String, dynamic>() ?? {};
         final date = DateTime(log.createdAt.toLocal().year, log.createdAt.toLocal().month, log.createdAt.toLocal().day);
-        for (final e in m.entries) {
+        Map<String, dynamic> flat;
+        if (m.containsKey('_series')) {
+          final seriesList = (m['_series'] as List).cast<Map<String, dynamic>>();
+          flat = seriesList.isNotEmpty ? (Map<String, dynamic>.from(seriesList.last)..remove('_label')) : {};
+        } else {
+          flat = m;
+        }
+        for (final e in flat.entries) {
           final canonical = _paramAliases[e.key.toLowerCase()];
           if (canonical == null) continue;
           final val = double.tryParse(e.value.toString().replaceAll(RegExp(r'[^\d.]'), ''));
@@ -15829,7 +15584,14 @@ class _ChartsScreenState extends State<ChartsScreen> {
         if (raw['source'] == 'tap_water') continue;
         final m = (raw['measurements'] as Map?)?.cast<String, dynamic>() ?? {};
         final date = DateTime(log.createdAt.toLocal().year, log.createdAt.toLocal().month, log.createdAt.toLocal().day);
-        for (final e in m.entries) {
+        Map<String, dynamic> flat;
+        if (m.containsKey('_series')) {
+          final seriesList = (m['_series'] as List).cast<Map<String, dynamic>>();
+          flat = seriesList.isNotEmpty ? (Map<String, dynamic>.from(seriesList.last)..remove('_label')) : {};
+        } else {
+          flat = m;
+        }
+        for (final e in flat.entries) {
           final canonical = _paramAliases[e.key.toLowerCase()];
           if (canonical == null) continue;
           final val = double.tryParse(e.value.toString().replaceAll(RegExp(r'[^\d.]'), ''));
@@ -17570,11 +17332,6 @@ class _CommunityScreenState extends State<_CommunityScreen> {
                                                       leading: const Icon(Icons.discord, color: Color(0xFF5865F2)),
                                                       title: const Text('Discord'),
                                                       onTap: () { Navigator.pop(ctx); _showDiscordShareFlow(context, photoPath); },
-                                                    ),
-                                                    ListTile(
-                                                      leading: const Icon(Icons.alternate_email, color: Colors.black87),
-                                                      title: const Text('Twitter / X'),
-                                                      onTap: () { Navigator.pop(ctx); _showTwitterShareFlow(context, photoPath); },
                                                     ),
                                                   ],
                                                 ),

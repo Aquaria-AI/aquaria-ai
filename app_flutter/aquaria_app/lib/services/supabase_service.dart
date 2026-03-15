@@ -55,6 +55,20 @@ class SupabaseService {
     await client.auth.signOut();
   }
 
+  /// Log one session per user per day for DAU tracking.
+  static Future<void> logSession() async {
+    final uid = userId;
+    if (uid == null) return;
+    try {
+      await client.from('app_sessions').upsert(
+        {'user_id': uid, 'email': userEmail, 'date': DateTime.now().toUtc().toIso8601String().substring(0, 10)},
+        onConflict: 'user_id,date',
+      );
+    } catch (e) {
+      debugPrint('[Session] logSession error: $e');
+    }
+  }
+
   static Future<AuthResponse> signInWithGoogle() async {
     const webClientId = '710206253790-t370vahqu6hrnh21ume0474ajqp1l7jt.apps.googleusercontent.com';
     const iosClientId = '710206253790-4qollfoaeal3bau5rhas3emqn9uhqpd2.apps.googleusercontent.com';

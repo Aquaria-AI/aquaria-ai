@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import os
 import re
@@ -15,6 +17,7 @@ from email.mime.base import MIMEBase
 from email import encoders
 
 import anthropic
+from google import genai
 import jwt
 import requests as http_requests
 import urllib.request
@@ -170,8 +173,22 @@ app.add_middleware(
 )
 
 
+# ---------------------------------------------------------------------------
+# LLM provider toggle: set LLM_PROVIDER=gemini to use Google Gemini
+# ---------------------------------------------------------------------------
+
+_LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "anthropic").lower()  # "anthropic" or "gemini"
+_GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
+
 _MODEL_HAIKU = "claude-haiku-4-5"
 _MODEL_SONNET = "claude-sonnet-4-20250514"
+
+# Gemini model mapping
+_GEMINI_MODEL_MAP = {
+    "claude-haiku-4-5": "gemini-2.5-flash",
+    "claude-sonnet-4-20250514": "gemini-2.5-flash",
+}
+_GEMINI_DEFAULT_MODEL = "gemini-2.5-flash"
 
 
 def _pick_model(experience: str = "", water_type: str = "", all_water_types: list = None) -> str:
@@ -179,12 +196,59 @@ def _pick_model(experience: str = "", water_type: str = "", all_water_types: lis
     return _MODEL_SONNET
 
 
-def _chat(client: anthropic.Anthropic, **kwargs):
-    """Call client.messages.create with retry on 529 overloaded errors."""
+def _get_llm_client():
+    """Return an LLM client and True if available, or (None, False).
+    For Gemini, the client is a dummy since _chat_gemini creates its own."""
+    if _LLM_PROVIDER == "gemini":
+        if not _GOOGLE_API_KEY:
+            return None, False
+        return "gemini", True  # placeholder; _chat_gemini uses the key directly
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return None, False
+    return anthropic.Anthropic(api_key=api_key), True
+
+
+class _LLMResponse:
+    """Provider-agnostic response wrapper so callers don't need to change."""
+    def __init__(self, text: str, model: str, input_tokens: int, output_tokens: int,
+                 tool_calls: list = None):
+        self.content = [type("Block", (), {"text": text})()]
+        self.model = model
+        self.usage = type("Usage", (), {"input_tokens": input_tokens, "output_tokens": output_tokens})()
+        self.tool_calls = tool_calls or []  # List of {"name": str, "input": dict}
+
+
+def _chat(client, **kwargs):
+    """Provider-agnostic LLM call. Dispatches to Anthropic or Gemini based on LLM_PROVIDER."""
+    if _LLM_PROVIDER == "gemini":
+        return _chat_gemini(**kwargs)
+    return _chat_anthropic(client, **kwargs)
+
+
+def _chat_anthropic(client: anthropic.Anthropic, **kwargs):
+    """Call Anthropic messages API with retry on 529."""
     for attempt in range(4):
         try:
             response = client.messages.create(**kwargs)
-            _log_api_usage(response)
+            _log_api_usage(response.model or kwargs.get("model", ""),
+                           response.usage.input_tokens, response.usage.output_tokens)
+            # If tools were used, wrap in _LLMResponse with tool_calls extracted
+            if kwargs.get("tools"):
+                text_parts = []
+                tool_calls = []
+                for block in response.content:
+                    if getattr(block, "type", None) == "text":
+                        text_parts.append(block.text)
+                    elif getattr(block, "type", None) == "tool_use":
+                        tool_calls.append({"name": block.name, "input": block.input})
+                return _LLMResponse(
+                    text="\n".join(text_parts),
+                    model=response.model or kwargs.get("model", ""),
+                    input_tokens=response.usage.input_tokens,
+                    output_tokens=response.usage.output_tokens,
+                    tool_calls=tool_calls,
+                )
             return response
         except anthropic.APIStatusError as e:
             if e.status_code == 529 and attempt < 3:
@@ -193,29 +257,117 @@ def _chat(client: anthropic.Anthropic, **kwargs):
             raise
 
 
-# Cost per million tokens (as of 2025)
+def _chat_gemini(**kwargs):
+    """Call Google Gemini API, translating Anthropic-style kwargs."""
+    gemini_client = genai.Client(api_key=_GOOGLE_API_KEY)
+
+    # Map Anthropic model to Gemini model
+    anthropic_model = kwargs.get("model", _MODEL_SONNET)
+    gemini_model = _GEMINI_MODEL_MAP.get(anthropic_model, _GEMINI_DEFAULT_MODEL)
+
+    # Build system instruction from Anthropic's "system" kwarg
+    system = kwargs.get("system", "")
+    config = {}
+    if system:
+        # Anthropic sometimes passes system as list-of-dicts (with cache_control); flatten to string
+        if isinstance(system, list):
+            system = "\n".join(item.get("text", "") for item in system if isinstance(item, dict))
+        config["system_instruction"] = system
+    if kwargs.get("max_tokens"):
+        config["max_output_tokens"] = kwargs["max_tokens"]
+
+    # Translate Anthropic tools to Gemini function declarations
+    if kwargs.get("tools"):
+        func_decls = []
+        for t in kwargs["tools"]:
+            schema = t.get("input_schema", {})
+            func_decls.append(genai.types.FunctionDeclaration(
+                name=t["name"],
+                description=t.get("description", ""),
+                parameters=_anthropic_schema_to_gemini(schema),
+            ))
+        config["tools"] = [genai.types.Tool(function_declarations=func_decls)]
+        config["tool_config"] = genai.types.ToolConfig(
+            function_calling_config=genai.types.FunctionCallingConfig(mode="AUTO"),
+        )
+
+    # Convert Anthropic messages to Gemini contents
+    messages = kwargs.get("messages", [])
+    contents = []
+    for msg in messages:
+        role = "user" if msg["role"] == "user" else "model"
+        contents.append({"role": role, "parts": [{"text": msg["content"]}]})
+
+    response = gemini_client.models.generate_content(
+        model=gemini_model,
+        contents=contents,
+        config=config,
+    )
+
+    # Extract text and tool calls from response parts
+    text_parts = []
+    tool_calls = []
+    if response.candidates and response.candidates[0].content:
+        for part in response.candidates[0].content.parts:
+            if hasattr(part, "function_call") and part.function_call:
+                fc = part.function_call
+                tool_calls.append({"name": fc.name, "input": dict(fc.args) if fc.args else {}})
+            elif hasattr(part, "text") and part.text:
+                text_parts.append(part.text)
+
+    text = "\n".join(text_parts) if text_parts else (response.text or "")
+    input_tokens = getattr(response.usage_metadata, "prompt_token_count", 0) or 0
+    output_tokens = getattr(response.usage_metadata, "candidates_token_count", 0) or 0
+
+    _log_api_usage(gemini_model, input_tokens, output_tokens)
+
+    return _LLMResponse(text=text, model=gemini_model,
+                        input_tokens=input_tokens, output_tokens=output_tokens,
+                        tool_calls=tool_calls)
+
+
+def _anthropic_schema_to_gemini(schema: dict) -> dict:
+    """Convert Anthropic-style JSON Schema to Gemini-compatible schema dict."""
+    # Gemini accepts a subset of JSON Schema via genai.types.Schema
+    # but also accepts raw dicts — pass through with minor adjustments
+    result = {}
+    if "type" in schema:
+        result["type"] = schema["type"].upper()  # Gemini expects "OBJECT", "ARRAY", "STRING", etc.
+    if "properties" in schema:
+        result["properties"] = {
+            k: _anthropic_schema_to_gemini(v) for k, v in schema["properties"].items()
+        }
+    if "items" in schema:
+        result["items"] = _anthropic_schema_to_gemini(schema["items"])
+    if "required" in schema:
+        result["required"] = schema["required"]
+    if "enum" in schema:
+        result["enum"] = schema["enum"]
+    if "description" in schema:
+        result["description"] = schema["description"]
+    return result
+
+
+# Cost per million tokens
 _COST_PER_M = {
     "claude-haiku-4-5": {"input": 0.80, "output": 4.00},
     "claude-sonnet-4-20250514": {"input": 3.00, "output": 15.00},
+    "gemini-2.5-flash": {"input": 0.15, "output": 0.60},
 }
 
 
-def _log_api_usage(response):
+def _log_api_usage(model: str, input_tokens: int, output_tokens: int):
     """Log API token usage and cost to Supabase."""
     if not _SUPABASE_SERVICE_KEY:
         return
     try:
-        model = response.model or ""
-        input_tokens = response.usage.input_tokens
-        output_tokens = response.usage.output_tokens
-        # Find matching cost rates (prefix match for model variants)
         rates = None
         for key, val in _COST_PER_M.items():
             if key in model or model.startswith(key):
                 rates = val
                 break
         if rates is None:
-            rates = {"input": 3.00, "output": 15.00}  # default to sonnet pricing
+            rates = {"input": 3.00, "output": 15.00}
         cost = (input_tokens * rates["input"] + output_tokens * rates["output"]) / 1_000_000
         payload = json.dumps({
             "model": model,
@@ -444,6 +596,7 @@ class ChatRequest(BaseModel):
     session_summaries: Optional[List[str]] = None
     experience_level: Optional[str] = None  # 'beginner', 'intermediate', 'advanced'
     extract_tasks_only: Optional[bool] = False
+    client_date: Optional[str] = None  # Device-local date (YYYY-MM-DD)
 
 
 class SummarizeSessionRequest(BaseModel):
@@ -585,11 +738,10 @@ Rules:
 
 def _parse_inhabitants_with_llm(text: str) -> Optional[List[Dict[str, Any]]]:
     """Call Claude to parse and categorize inhabitants. Returns None on failure."""
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
+    client, available = _get_llm_client()
+    if not available:
         return None
     try:
-        client = anthropic.Anthropic(api_key=api_key)
         response = _chat(client,
             model="claude-haiku-4-5",
             max_tokens=512,
@@ -711,102 +863,129 @@ def _is_action(fragment: str) -> bool:
     return bool(_ACTION_VERBS.search(fragment) or _DOSE_QUANTITY.search(fragment))
 
 
-_LOG_SYSTEM_PROMPT = """You parse aquarium tank journal entries into three categories. Return ONLY valid JSON — no explanation, no markdown, no code fences.
+_LOG_SYSTEM_PROMPT = """You parse aquarium tank journal entries by calling the appropriate tools. You may call multiple tools in one response.
 
-RELEVANCE RULE — apply before anything else:
-Only log content that is directly related to the aquarium hobby: water parameters, fish/plant/coral/invertebrate health and behavior, tank equipment, feeding, maintenance, dosing, or scheduling aquarium-related tasks. If the user's message has nothing to do with their aquarium (e.g. personal reminders, jokes, unrelated life events), return all-empty output immediately.
+RULES:
+1. Only log content related to the aquarium hobby. Off-topic → call no tools.
+2. Questions are NEVER loggable. Numbers in questions are hypothetical, not readings. If a message mixes facts and questions, log only the factual parts.
+3. Short replies with no tank data ("yes", "ok", "no") → call no tools.
+4. Requests to create/name a tank or add inhabitants → call no tools (handled elsewhere).
+5. Actions: things the user physically DID. Use short form with quantities when available ("5ml Prime", "20% water change", "Cleaned filter").
+6. Notes: observations — visual, olfactory, behavioral, condition, deaths, smells, cloudiness, qualitative trends.
+7. Measurements: extract numeric values for known parameters (pH, KH, GH, Ca, Mg, ammonia, nitrite, nitrate, K, salinity, temp). If a sentence has both qualitative language AND a number (e.g. "GH went wild to 10"), log the number as a measurement AND the qualitative part as a note.
+8. Tasks: aquarium-related scheduling/reminders only. Compute absolute due dates from relative references.
+9. SINGLE-ENTRY: combine everything from a single date into one set of tool calls. Only use separate tool calls with different dates if the user explicitly references different dates.
+10. SERIES: When the user provides measurements from distinct contexts on the same day (e.g. before vs after a water change, morning vs evening, pre-dose vs post-dose), call log_measurements MULTIPLE times with different series_label values. For example: log_measurements(series_label="Before water change", ph=9, nitrate=35) and log_measurements(series_label="After water change", ph=8, nitrate=15). Only use series when the user clearly distinguishes contexts — do NOT create series for a single set of readings.
+11. If the message has no loggable content, respond with a short text explanation and call no tools.
+12. Parameter aliases: "General Hardness"/hardness = GH, "carbonate hardness" = KH, NH3 = ammonia, NO2 = nitrite, NO3 = nitrate, potassium = K, calcium = Ca, magnesium = Mg."""
 
-QUESTIONS ARE NEVER LOGGABLE — this overrides all other rules:
-If the user's message (or any sentence within it) is a question — asking for advice, asking about a product, wondering about a cause, requesting information, or exploring hypotheticals — do NOT log ANY part of it as a measurement, note, or action. Numbers mentioned in questions are hypothetical, not actual readings. For example, "what would my Ca:Mg ratio be if I change GH to 10?" must NOT log GH=10 as a measurement. Questions are conversation with the assistant, not journal data. Only log STATEMENTS of fact: things the user observed, measured, or did. When a message mixes statements and questions, log only the statement parts and discard the questions entirely — including any numbers within the question.
 
-CATEGORY RULES — read carefully:
+def _build_parse_tools(today: str) -> list:
+    """Build tool definitions for the parse endpoint."""
+    return [
+        {
+            "name": "log_measurements",
+            "description": f"Log numeric water parameter measurements. Today is {today}. "
+                "Use standard keys: pH, KH, GH, Ca, Mg, ammonia, nitrite, nitrate, K, salinity, temp. "
+                "Temp should include unit like '78°F' or '26°C'. All others are numeric. "
+                "If measurements reference a past date, set the date field. "
+                "Relative dates: 'last week' = 7 days ago, 'yesterday' = 1 day ago, etc. "
+                "Use series_label when the user provides distinct measurement contexts on the same day "
+                "(e.g. 'Before water change', 'After water change', 'Morning', 'Evening'). "
+                "Call this tool MULTIPLE times with different series_label values to create separate series.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "measurements": {
+                        "type": "object",
+                        "description": "Key-value pairs of parameter name to value. Keys: pH, KH, GH, Ca, Mg, ammonia, nitrite, nitrate, K, salinity, temp.",
+                    },
+                    "date": {
+                        "type": "string",
+                        "description": "YYYY-MM-DD date for these measurements. null if not specified.",
+                        "nullable": True,
+                    },
+                    "series_label": {
+                        "type": "string",
+                        "description": "Label for this measurement series (e.g. 'Before water change', 'After water change', 'Morning', 'Evening'). Omit if only one set of readings.",
+                        "nullable": True,
+                    },
+                    "is_tap_water": {
+                        "type": "boolean",
+                        "description": "Set to true if these measurements are from tap/source/municipal/faucet water (not tank water). Omit or false for normal tank readings.",
+                        "nullable": True,
+                    },
+                },
+                "required": ["measurements"],
+            },
+        },
+        {
+            "name": "log_actions",
+            "description": "Log maintenance actions the user physically performed on the tank. "
+                "Use short, concise descriptions. Include quantities when provided. "
+                "Examples: '5ml Prime', '20% water change', 'Cleaned filter', 'Fed fish', 'Trimmed plants'.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "actions": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of action descriptions in short form.",
+                    },
+                    "date": {
+                        "type": "string",
+                        "description": "YYYY-MM-DD date for these actions. null if not specified.",
+                        "nullable": True,
+                    },
+                },
+                "required": ["actions"],
+            },
+        },
+        {
+            "name": "log_notes",
+            "description": "Log observations the user noticed about their tank. "
+                "Visual, olfactory, behavioral, condition notes. Includes deaths, smells, cloudiness, qualitative trends. "
+                "NEVER log questions as notes.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "notes": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of observation strings.",
+                    },
+                    "date": {
+                        "type": "string",
+                        "description": "YYYY-MM-DD date for these notes. null if not specified.",
+                        "nullable": True,
+                    },
+                },
+                "required": ["notes"],
+            },
+        },
+        {
+            "name": "schedule_task",
+            "description": f"Schedule an aquarium-related reminder or task. Today is {today}. "
+                "Compute absolute due dates: tomorrow = today+1, next week = today+7, in N days = today+N. "
+                "Only for aquarium care tasks — not personal reminders.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "description": {
+                        "type": "string",
+                        "description": "Short task description.",
+                    },
+                    "due_date": {
+                        "type": "string",
+                        "description": "YYYY-MM-DD due date. null if vague or unspecified.",
+                        "nullable": True,
+                    },
+                },
+                "required": ["description"],
+            },
+        },
+    ]
 
-"actions" — Things the user physically did to the tank. Must involve the user performing an activity.
-  When a quantity is provided, include it concisely: "added 5ml of Prime" → "5ml Prime", "20% water change" → "20% water change".
-  When NO quantity is given, still log the action in short form: "did a water change" → "Water change", "cleaned the filter" → "Cleaned filter", "moved plants" → "Moved plants", "fed fish" → "Fed fish", "trimmed plants" → "Trimmed plants".
-  YES: "5ml Prime", "20% water change", "Water change", "Cleaned filter", "Fed fish", "Trimmed plants", "Moved plants", "Topped off with RO water"
-  NO: general condition statements, descriptions of what the tank looks/smells like, things the user noticed
-  NO: questions — if the user is ASKING whether they did something, asking about a product, or phrasing something as a question (contains "?", starts with "do", "does", "could", "can", "would", "should", "is", "are", "how", "why", "what"), it is NOT an action. Questions are conversation, not loggable data.
-
-"notes" — Anything the user noticed: visual, olfactory, behavioral, or general condition. Includes deaths, smells, appearances, and qualitative trends described. When a qualitative statement is made with a number, record the qualitative part as an observation and the number as a measurement (see below).
-
-  YES: "everything looks bad", "fish seem stressed", "green algae on glass", "oily film on surface", "plant leaves yellowing", "tank looks cloudy", "debris floating", "fish looks pale"
-  YES: "tank smells bad", "tank smells off", "sulfur smell", "foul odor"
-  YES: "fish dead", "found a dead fish", "shrimp dying", "snail not moving"
-  YES: "hardness spiked", "pH crashed", "ammonia spike", "parameters look off" — qualitative trend statements with NO numeric value go here
-  YES: "GH went crazy", "GH went wild", "pH spiked", "ammonia shot up to" — phrases that combine a qualitative description AND a number: put the qualitative part in notes AND extract the number into measurements
-  NO: things the user did (those go in actions).
-  NO: number measurements (those go in measurements).
-  NO: questions, requests for advice, or anything phrased as a question directed at the assistant — NEVER put a question into notes or actions. If the text contains "?", or starts with/contains question words (how, why, what, could, can, would, should, do, does, is, are), it is a question — not a note. Examples of what must NOT be logged:
-    "how much potassium can fluval stratum leach?" → NOT a note (it's a question)
-    "could potassium precipitate out of the water column?" → NOT a note (it's a question)
-    "do fertilizer tabs contain potassium too?" → NOT an action (it's a question)
-    "I was dosing potassium more than necessary. could it sit in the gravel?" → The first sentence is a note ("Was dosing potassium more than necessary"). The question part must be dropped.
-
-"measurements" — Numeric values for known parameters. A number must be explicitly present in the text.
-  If a measurement references a past event without a specific date (e.g. "previously raised ca:mg to 4:1", "last week GH was 10"), still extract the measurement. If a relative time is given (e.g. "last week"), compute the date as YYYY-MM-DD relative to today. If no time reference is given but the phrasing implies a past measurement (e.g. "previously", "before"), set the date to null — the chat assistant will ask the user for the date.
-  Look for keys like: pH, KH, GH, Ca, Mg, ammonia, nitrite, nitrate, K, salinity
-  Keys may be separated from their number. Example "GH went wild to 10" should extract GH 10 (GH went wild should be an observation, and GH 10 should be a measurement). Example: "pH: 7.4", "KH is 3", "nitrate 20", "ammonia spiked to 5", "NO2 at 1.5", "calcium 400 ppm".
-  For temperature use key "temp" with value like "78°F" or "26°C".
-  "General Hardness" or hardness is GH, "carbonate hardness" is KH. Ammonia can be "ammonia" or "NH3", nitrite can be "nitrite" or "NO2", nitrate can be "nitrate" or "NO3". Potassium can be "potassium" or "K".
-  Magnesium can be "magnesium" or "Mg". Calcium can be "calcium" or "Ca". Salinity can be "salinity".
-  IMPORTANT: if a sentence mentions a parameter name and a number — even phrased as "GH went wild to 10" — extract the measurement of GH 10. Do not ignore measurements just because the sentence is phrased qualitatively. The qualitative part should be logged as an observation.
-
-Return this exact shape — always a "logs" array, even for a single entry:
-{
-  "logs": [
-    {
-      "measurements": { "pH": 7.4, "temp": "78°F" },
-      "actions": ["added 5ml of Prime", "20% water change"],
-      "notes": ["everything looks bad", "fish seem stressed", "GH went wild"],
-      "tasks": [{"description": "check nitrates", "due_date": "2026-03-12"}],
-      "date": "2026-02-21"
-    }
-  ]
-}
-
-SINGLE-ENTRY RULE: Combine ALL measurements, actions, and notes from a single message into ONE log object. Do NOT split a single message into multiple log entries unless the user explicitly references different dates.
-
-BEFORE/AFTER WATER CHANGE ON SAME DAY: When a user CLEARLY indicates two sets of measurements on the same day — one taken BEFORE a water change and one AFTER — combine them into a single log entry for that date. If it is ambiguous which readings are before vs after, return all-empty output and let the chat assistant ask for clarification.
-- "measurements": should contain ONLY the AFTER water change readings (these are the current tank state).
-- "notes": should include the BEFORE water change readings as text, e.g. "Before water change: pH 7.8, nitrate 40, GH 12". Also add a note: "Measurements above recorded after water change."
-- "actions": should include the water change action as usual.
-This ensures the journal shows the current (post-change) values as the official measurements while preserving the pre-change readings as context in the notes.
-
-MULTI-DATE ENTRIES: If the user mentions measurements or events across multiple distinct dates (e.g. "ca was 50ppm 2.22.26 next day 65 next day 75", or "on Monday pH was 7.2, Tuesday pH was 7.4"), create a SEPARATE log object for each date inside the "logs" array. Each entry should only contain the measurements/actions/notes relevant to that specific date. Relative day references like "next day" mean +1 day from the preceding date.
-
-"tasks" — scheduling or reminder requests from the user, ONLY if they relate to aquarium care.
-  YES: "remind me to check nitrates next week", "test phosphates tomorrow", "schedule water change in 3 days", "remind me to add fertilizer Friday"
-  NO: anything unrelated to the aquarium hobby — personal reminders, self-deprecating jokes, random life tasks, or anything that has nothing to do with fish, water, plants, equipment, or tank maintenance. If the reminder is not about aquarium care, return an empty tasks array.
-  Extract a short description and compute the absolute due date as YYYY-MM-DD using today's date (injected below).
-  Conversions: "tomorrow" = today+1, "next week"/"in 1 week" = today+7, "in 2 weeks" = today+14, "in N days" = today+N, "in N months" ≈ today+N*30.
-  If no time is given or it is vague (e.g. "soon"), set due_date to null.
-
-"date" — If the user specifies a past or present date for this entry (e.g. "2.21.26", "2/21/26", "Feb 21", "February 21 2026", "last Tuesday"), return it as YYYY-MM-DD. Today's date will be provided. Return null if no date is mentioned. IMPORTANT: task due dates (e.g. "next week", "tomorrow", "in 3 days") are NOT log dates — always return null for the date field when the only time reference is a future task due date.
-
-IMPORTANT — do NOT log questions or requests for advice:
-- Never put a question or advisory request into "notes". Questions are not observations.
-- If the entire message is a question or request for guidance directed at the assistant (with no tank observations, measurements, or actions), return empty arrays/objects for all categories.
-- If a message mixes a tank observation WITH a question (e.g. "my fish looks stressed, what should I do?"), log only the factual observation ("Fish looks stressed") — not the question part.
-- Short affirmative replies ("yes", "sure", "ok", "no") with no tank data should also produce all-empty output.
-- Requests to create/name/set up a new tank, add inhabitants, or manage app settings are NOT loggable — return all-empty output silently.
-  Examples that produce all-empty output:
-    "what should my next steps be?"
-    "is that normal?"
-    "what do I do now?"
-    "create a new tank"
-    "I want to add a tank called Betta"
-    "set up a new aquarium"
-
-CRITICAL: You MUST ALWAYS return valid JSON matching the shape above. NEVER return an explanation, error message, or any prose — even if the message is off-topic or not loggable. Return the all-empty JSON structure instead.
-    "any suggestions?"
-    "should I be worried?"
-    "what would you recommend?"
-    "yes"
-    "sure"
-    "no"
-
-Empty categories should be empty objects/arrays. Never omit a key."""
 
 
 _MONTH_NAMES = {
@@ -817,9 +996,9 @@ _MONTH_NAMES = {
 }
 
 
-def _extract_date_regex(text: str) -> Optional[str]:
+def _extract_date_regex(text: str, client_date: Optional[str] = None) -> Optional[str]:
     """Extract a date from common formats like 2.21.26, 2/21/2026, Feb 21, etc."""
-    today = date.today()
+    today = date.fromisoformat(client_date) if client_date else date.today()
 
     # M.D.YY, M/D/YY, M-D-YY, M.D.YYYY etc.
     m = re.search(r'\b(\d{1,2})[./\-](\d{1,2})[./\-](\d{2,4})\b', text)
@@ -858,42 +1037,78 @@ def _sentence_case(s: str) -> str:
 
 
 def _parse_with_llm(text: str, today: str, context: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
-    """Call Claude to parse the log entry. Returns a list of log dicts, or None on failure."""
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        print("[LLM] ANTHROPIC_API_KEY not set — using regex fallback")
+    """Call LLM with tool calling to parse the log entry. Returns a list of log dicts, or None on failure."""
+    client, available = _get_llm_client()
+    if not available:
+        print("[LLM] No LLM API key set — using regex fallback")
         return None
     try:
-        client = anthropic.Anthropic(api_key=api_key)
         system = _LOG_SYSTEM_PROMPT + f"\n\nToday's date is {today}."
         if context:
             system += f"\n\nRecent conversation context (use this to resolve ambiguous references in the user's message):\n{context}"
+        tools = _build_parse_tools(today)
         response = _chat(client,
             model="claude-haiku-4-5",
             max_tokens=1024,
             system=system,
             messages=[{"role": "user", "content": text}],
+            tools=tools,
+            tool_choice={"type": "auto"},
         )
-        raw = response.content[0].text.strip()
-        raw = re.sub(r"^```(?:json)?\s*", "", raw)
-        raw = re.sub(r"\s*```$", "", raw).strip()
-        # If the model returned prose instead of JSON, treat as no loggable content
-        if not raw.startswith("{") and not raw.startswith("["):
-            print(f"[LLM] non-JSON response (ignored): {raw[:120]}")
-            return None
-        parsed = json.loads(raw)
-        # Support both new {"logs": [...]} and legacy single-entry format
-        entries = parsed.get("logs") if isinstance(parsed.get("logs"), list) else [parsed]
-        result = []
-        for entry in entries:
-            result.append({
-                "schemaVersion": 1,
-                "measurements": entry.get("measurements", {}),
-                "actions": [_sentence_case(a) for a in entry.get("actions", [])],
-                "notes": [_sentence_case(n) for n in entry.get("notes", [])],
-                "tasks": entry.get("tasks", []),
-                "date": entry.get("date"),
-            })
+        tool_calls = getattr(response, "tool_calls", []) or []
+        if not tool_calls:
+            # No tools called = nothing loggable (question, off-topic, etc.)
+            print(f"[LLM parse] no tools called — nothing to log")
+            return [{"schemaVersion": 1, "measurements": {}, "actions": [], "notes": [], "tasks": [], "date": None}]
+
+        # Group tool calls by date to support multi-date entries
+        date_entries: Dict[Optional[str], Dict[str, Any]] = {}
+        # Track measurement series per date: date -> list of (label, measurements)
+        date_series: Dict[Optional[str], list] = {}
+
+        def _get_entry(d: Optional[str]) -> Dict[str, Any]:
+            if d not in date_entries:
+                date_entries[d] = {"schemaVersion": 1, "measurements": {}, "actions": [], "notes": [], "tasks": [], "date": d}
+            return date_entries[d]
+
+        for tc in tool_calls:
+            name = tc["name"]
+            inp = tc.get("input", {})
+            entry_date = inp.get("date")
+
+            if name == "log_measurements" and inp.get("measurements"):
+                entry = _get_entry(entry_date)
+                if inp.get("is_tap_water"):
+                    entry["source"] = "tap_water"
+                series_label = inp.get("series_label")
+                if entry_date not in date_series:
+                    date_series[entry_date] = []
+                date_series[entry_date].append({"_label": series_label, **inp["measurements"]})
+            elif name == "log_actions" and inp.get("actions"):
+                entry = _get_entry(entry_date)
+                entry["actions"].extend([_sentence_case(a) for a in inp["actions"]])
+            elif name == "log_notes" and inp.get("notes"):
+                entry = _get_entry(entry_date)
+                entry["notes"].extend([_sentence_case(n) for n in inp["notes"]])
+            elif name == "schedule_task":
+                entry = _get_entry(None)  # tasks go on the "no date" entry
+                entry["tasks"].append({
+                    "description": inp.get("description", ""),
+                    "due_date": inp.get("due_date"),
+                })
+
+        # Build measurements: use _series format if multiple series exist, flat otherwise
+        for d, series_list in date_series.items():
+            entry = date_entries[d]
+            has_labels = any(s.get("_label") for s in series_list)
+            if len(series_list) > 1 or has_labels:
+                entry["measurements"] = {"_series": series_list}
+            else:
+                # Single unlabeled series — keep flat for backward compatibility
+                flat = {k: v for k, v in series_list[0].items() if k != "_label"}
+                entry["measurements"] = flat
+
+        result = list(date_entries.values())
         return result if result else None
     except Exception as e:
         print(f"[LLM] error: {e} — using regex fallback")
@@ -924,7 +1139,7 @@ def parse_tank_log(request: Request, req: ParseRequest, user_id: str = Depends(_
     logs = _parse_with_llm(text, today, context=req.context)
     if logs is None:
         logs = _parse_with_regex(text)
-        logs[0]["date"] = _extract_date_regex(text)
+        logs[0]["date"] = _extract_date_regex(text, client_date=req.client_date)
     return {"logs": logs}
 
 
@@ -1048,12 +1263,11 @@ def summarize_tank_logs(request: Request, req: SummaryRequest, user_id: str = De
     if not entries.strip():
         return {"summary": None}
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
+    client, available = _get_llm_client()
+    if not available:
         return {"summary": None}
 
     try:
-        client = anthropic.Anthropic(api_key=api_key)
         system_prompt = _SUMMARY_SYSTEM_PROMPT
         if req.water_type:
             system_prompt += f"\n\nThis is a {req.water_type} tank"
@@ -1147,7 +1361,7 @@ Rules:
 - Use these reference ranges (same as the summary endpoint):
 
   FRESHWATER: ammonia 0, nitrite 0, nitrate 0-20 ppm, pH 6.5-8.2, KH 4-8, GH 4-12, temp 74-80°F
-  PLANTED: CO2 25-35 ppm, nitrate 5-15, phosphate 0.5-2, GH 4-7, KH 1-4, Ca:Mg ratio 3:1-4:1
+  PLANTED: CO2 25-35 ppm, nitrate 5-15, phosphate 0.5-2, GH 4-7, KH 1-4, potassium 15-25 ppm (>30 causes lockout), iron ~0.1 ppm, Ca:Mg ratio 3:1-4:1
   SALTWATER/REEF: salinity 1.024-1.026, KH 8-9, Ca 400-450, Mg 1280-1400, nitrate 1-10, PO4 0.01-0.10
 """
 
@@ -1186,12 +1400,11 @@ def tank_suggestions(request: Request, req: SummaryRequest, user_id: str = Depen
     if not entries.strip():
         return {"suggestions": ["Add your latest test results so I can evaluate your water quality."]}
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
+    client, has_llm = _get_llm_client()
+    if not has_llm:
         return {"suggestions": []}
 
     try:
-        client = anthropic.Anthropic(api_key=api_key)
         system_prompt = _SUGGESTIONS_SYSTEM_PROMPT
         if req.water_type:
             system_prompt += f"\n\nThis is a {req.water_type} tank"
@@ -1260,7 +1473,7 @@ Safety rules:
 - When discussing any chemical, medication, or equipment, present a balanced view including potential downsides and common misconceptions. Avoid one-sided recommendations.
 - When unsure whether a recommendation is safe for the specific inhabitants, say so and recommend the most conservative approach.
 - Flag dangerous conditions clearly but calmly: ammonia or nitrite above 0, extreme pH swings, temperature shock, copper exposure to invertebrates, overstocking, mixing incompatible species. Avoid alarming or intense language like "immediately", "urgent", "emergency", "ASAP", "extremely", "severely", "massively", "dangerously", or "critically" — inform the user without creating panic. Use moderate words like "high", "low", "a bit elevated", "on the low side" instead.
-- When a user reports a concern (fish gasping, acting strange, looking sick), FIRST confirm the observation was logged (per the ABSOLUTE RULE above), THEN ask diagnostic questions before suggesting actions. Start by asking if they have tested water parameters recently (ammonia, nitrite, nitrate). Only after understanding the situation should you suggest possible actions — and frame them as options, not directives.
+- When a user reports a concern (fish gasping, acting strange, looking sick), FIRST confirm the observation was logged (per Priority 2 above), THEN ask diagnostic questions before suggesting actions. Start by asking if they have tested water parameters recently (ammonia, nitrite, nitrate). Only after understanding the situation should you suggest possible actions — and frame them as options, not directives.
 - If the user has ALREADY shared recent test results in the conversation or logs showing dangerous levels (ammonia/nitrite > 0), then you may suggest a water change as one option — but still frame it gently ("a water change could help" not "do a water change now").
 - Only skip the diagnostic step for true emergencies where the user explicitly describes an immediate chemical spill or equipment failure — not for general symptoms like gasping or lethargy.
 - Never recommend mixing chemicals (e.g. pH up + pH down, multiple medications simultaneously) without warning about interactions.
@@ -1279,13 +1492,14 @@ Your full capabilities include:
 - Summarizing tank health from recent journal entries
 Do NOT tell the user you cannot do any of the above. These are all things you can and should do.
 
-ABSOLUTE RULE — always follow this first, before anything else:
-If the user's message contains any loggable aquarium information (a measurement, an observation, an action, an aquarium-related reminder), your FIRST sentence MUST be a confirmation that it was logged. Use "Logged." or "Got it." or "Noted." — one word or short phrase, nothing else on that line. Do NOT ask a clarifying question first. Do NOT give advice first. Do NOT greet first. Log confirmation always comes first, no exceptions.
-EXCEPTIONS — ask BEFORE confirming in these cases:
-1. MULTI-TANK SESSION: If the context indicates multiple tanks and none pre-selected, and it is not clear from the conversation which tank the data applies to, you MUST ask which tank BEFORE confirming or taking ANY action. This applies to ALL tank-specific operations: logging measurements, adding/removing inhabitants or plants, setting tasks/reminders, recording observations, dosing, water changes — EVERYTHING that touches a specific tank. Do NOT confirm, do NOT say "added", do NOT say "removed" until the user has told you which tank. Just ask: "Which tank is this for?" and list the tank names.
+PRIORITY 1 — ASK BEFORE LOGGING when info is missing:
+These checks come FIRST, before any log confirmation. Do NOT say "Logged", "Got it", "Noted", or call any tool until the missing info is resolved.
+1. WHICH TANK: If the context indicates multiple tanks and none is pre-selected, and it is not clear from the conversation which tank the data applies to, you MUST ask which tank BEFORE confirming or taking ANY action. This applies to ALL tank-specific operations: logging measurements, adding/removing inhabitants or plants, setting tasks/reminders, recording observations, dosing, water changes — EVERYTHING that touches a specific tank. Do NOT confirm, do NOT say "added", do NOT say "removed", do NOT call any tool until the user has told you which tank. Just ask: "Which tank is this for?" and list the tank names.
 2. MISSING DATE: When the user reports an action they took (water change, dosing, feeding, cleaning, adding/removing livestock, etc.) without specifying when it happened, ask when they did it BEFORE confirming the log. Do NOT assume today. Keep it concise — e.g. "When did you do the water change?" If the user says "today", "yesterday", "this morning", "just now", or includes a specific date, that counts as specifying — no need to ask.
 3. PAST MEASUREMENT WITHOUT DATE: When the user mentions a measurement from the past without a specific date (e.g. "I previously raised ca:mg to 4:1", "GH used to be 10", "before the water change pH was 7.8"), ask when that reading was taken BEFORE confirming the log — e.g. "When was that reading?" If they give a relative time like "last week" or "a few days ago", use that to compute the date. Once the date is provided, confirm the log and record the measurement for that date.
-Once the missing info is provided, confirm normally.
+
+PRIORITY 2 — LOG CONFIRMATION:
+Once all required info is known (tank, date), and the user's message contains loggable aquarium information (a measurement, an observation, an action, a reminder), your FIRST sentence MUST be a confirmation that it was logged. Use "Logged." or "Got it." or "Noted." — one word or short phrase, nothing else on that line. Do NOT ask a clarifying question first. Do NOT give advice first. Do NOT greet first. Log confirmation always comes first after Priority 1 is satisfied.
 
 TONE RULE — always redirect positively, never negatively:
 Never say "I can't", "I don't have access to", "I'm unable to", or "that's outside my scope." If a request is off-topic or you can't help with something specific, redirect toward what you CAN do instead.
@@ -1315,6 +1529,8 @@ Your other jobs (after the log confirmation, if applicable):
 7. HARD RULE — one question per response, maximum. Never ask two questions in a single reply, even as an "or" choice or follow-up. If you have multiple things to ask, pick the single most important one and wait for the answer before asking the next. Violating this rule is not allowed.
 8. Only ask a question when genuinely necessary (e.g. missing critical info, ambiguous input). Do not force a question into every response. When you do give corrective advice, you may optionally offer to set a reminder — but only if it's relevant and natural, not as a required closer.
 9. FERTILIZER DOSING — before giving any dosage recommendation for fertilizers or supplements, ask the user which brand and product they are using. Different products have vastly different concentrations. If the product is well-known (e.g. Seachem Flourish, APT Complete, Easy Green), use your training knowledge for dosing guidance. If the product is unfamiliar or you are unsure of its concentration, ask the user to share the dosing instructions from the product label.
+
+MEASUREMENT SERIES — when the user provides measurements from distinct time contexts on the same day (e.g. before vs after a water change, morning vs evening), log ONLY the most recent readings via log_measurements (e.g. the "after" values). Earlier readings (the "before" values) should be logged as notes via log_notes with context, e.g. "Before water change: GH 16, nitrate 20, Ca 100". This keeps the measurement section clean with only the current state.
 
 CORRECTIVE ACTIONS — always check notes and actions before assessing parameters:
 When the user's notes or actions mention corrective measures taken AFTER measurements (e.g., "added epsom salt", "dosed magnesium", "did a water change after testing"), you MUST factor these into your assessment. Do NOT flag a parameter as needing attention if the user has already taken corrective action for it. For example, if measurements show low magnesium but a note says "added epsom salt after testing", acknowledge the correction rather than warning about low magnesium. If the user tells you they took an action after their readings, remember this context for the rest of the conversation and reflect it in any summaries or advice.
@@ -1507,305 +1723,508 @@ When the user wants to add or set up a new tank (e.g. "add a tank", "I have a ne
 4. What fish or other inhabitants does it have? (optional — user can say "none" or "skip")
 5. Any plants? (optional)
 
-Once you have at minimum a name, size, and water type, summarize the details in one short sentence and say "I'll create this tank for you now." — then the app will handle saving it. Do NOT ask "Ready to create this tank?" — just confirm you're creating it. Do NOT ask all questions at once."""
+Once you have at minimum a name, size, and water type, summarize the details in one short sentence and say "I'll create this tank for you now." — then the app will handle saving it. Do NOT ask "Ready to create this tank?" — just confirm you're creating it. Do NOT ask all questions at once.
+
+TOOL USE — CRITICAL INSTRUCTIONS:
+You have tools available to execute actions (add/remove inhabitants, add/remove plants, create tasks, correct measurements, update tap water, create tanks). You MUST follow these rules:
+- When you CONFIRM an action (add, remove, rename, create, correct), call the appropriate tool AND confirm in your text response.
+- You may call MULTIPLE tools in one response (e.g. remove_plants + add_plants for a correction/swap like "not hornwort, water sprite").
+- Only call tools when you are CONFIRMING an action — NOT when asking clarifying questions or merely discussing.
+- If the user affirms a prior offer (e.g. "yes", "sure", "add them"), call the tool to execute.
+- If unsure whether the user wants an action taken, ask first — do not call a tool.
+- When creating a task/reminder, call create_task only after you've confirmed it with the user.
+- NEVER say you created a reminder/task unless you ALSO called the create_task tool in the same response. If you say "I've set a reminder" without calling the tool, the reminder does NOT exist. The tool call is what actually creates it.
+- NEVER call a tool and then say you didn't do it, or vice versa.
+- Reminders and tasks are the same thing. A reminder is a task that hasn't been completed yet."""
 
 
-def _quick_extract_task(message: str, today: date) -> Optional[Dict[str, Any]]:
-    """Try to extract a task directly from a user message."""
-    from datetime import timedelta
-    msg = message.strip()
-    msg_lower = msg.lower()
-
-    # Prefix patterns: "remind me to", or bare actions
-    prefix = r"(?:remind\s+me\s+to\s+|set\s+(?:a\s+)?reminder\s+to\s+)?"
-
-    # Match "<action> in N days/weeks/months"
-    m = re.search(prefix + r"(.+?)\s+in\s+(\d+)\s+(day|week|month)s?", msg_lower, re.IGNORECASE)
-    if m:
-        desc = m.group(1).strip().rstrip(".,!?")
-        n = int(m.group(2))
-        unit = m.group(3)
-        if unit == "day":
-            due = today + timedelta(days=n)
-        elif unit == "week":
-            due = today + timedelta(weeks=n)
-        else:
-            due = today + timedelta(days=n * 30)
-        return {"description": desc.capitalize(), "due_date": due.isoformat()}
-
-    # Match "<action> tomorrow"
-    m = re.search(prefix + r"(.+?)\s+tomorrow", msg_lower, re.IGNORECASE)
-    if m:
-        desc = m.group(1).strip().rstrip(".,!?")
-        if desc and len(desc) > 2:
-            due = today + timedelta(days=1)
-            return {"description": desc.capitalize(), "due_date": due.isoformat()}
-
-    # Match "<action> next week/month"
-    m = re.search(prefix + r"(.+?)\s+next\s+(week|month)", msg_lower, re.IGNORECASE)
-    if m:
-        desc = m.group(1).strip().rstrip(".,!?")
-        unit = m.group(2)
-        due = today + (timedelta(weeks=1) if unit == "week" else timedelta(days=30))
-        return {"description": desc.capitalize(), "due_date": due.isoformat()}
-
-    # Match "remind me to <action>" (no timeframe — default 1 week)
-    m = re.search(r"remind\s+me\s+to\s+(.+?)(?:\s*[.!?]?\s*$)", msg_lower, re.IGNORECASE)
-    if m:
-        desc = m.group(1).strip().rstrip(".,!?")
-        if desc and len(desc) > 3:
-            due = today + timedelta(days=7)
-            return {"description": desc.capitalize(), "due_date": due.isoformat()}
-
-    return None
 
 
-_TASK_EXTRACT_PROMPT = """Extract ONLY confirmed reminders/tasks from this conversation.
+# ---------------------------------------------------------------------------
+# Tool definitions for LLM function calling
+# ---------------------------------------------------------------------------
 
-Today's date is {today}.
+def _build_chat_tools(client_date: str, plants: list = None) -> list:
+    """Build Anthropic-format tool definitions with runtime context injected."""
+    return [
+        {
+            "name": "add_inhabitants",
+            "description": (
+                "Add new inhabitant(s) to the user's tank profile. "
+                "Call this when the user asks to add fish/invertebrates/corals, "
+                "or when you confirm adding them after the user affirms your offer. "
+                "Rules: use the most specific common name (e.g. 'Otocinclus' not 'fish'). "
+                "Title Case names. type must be fish|invertebrate|coral|polyp|anemone. "
+                "Default count to 1 if not mentioned. "
+                "Do NOT include plants — plants are tracked separately. "
+                "Examples of PLANTS to exclude: java fern, java moss, anubias, amazon sword, "
+                "water sprite, hornwort, duckweed, frogbit, monte carlo, vallisneria, "
+                "cryptocoryne, bucephalandra, rotala, ludwigia, cabomba, elodea, salvinia, marimo. "
+                "Only include inhabitants the user explicitly asked to add."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "inhabitants": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string", "description": "Species common name in Title Case"},
+                                "type": {"type": "string", "enum": ["fish", "invertebrate", "coral", "polyp", "anemone"]},
+                                "count": {"type": "integer", "description": "Number to add, default 1"},
+                            },
+                            "required": ["name", "type", "count"],
+                        },
+                    },
+                },
+                "required": ["inhabitants"],
+            },
+        },
+        {
+            "name": "remove_inhabitants",
+            "description": (
+                "Remove inhabitant(s) from the user's tank profile. "
+                "Call this for explicit removals AND corrections/swaps. Examples: "
+                "'remove the guppies' → remove guppies. "
+                "'they weren't neon tetras, they were glofish danios' → remove neon tetras. "
+                "'I meant mollies not guppies' → remove guppies. "
+                "'replace the tetras with barbs' → remove tetras. "
+                "'sorry, not hornwort, water sprite' — if the item being removed is a plant, "
+                "use remove_plants instead. "
+                "Only include the OLD/incorrect items being removed — not the new ones being added. "
+                "Use count -1 to mean 'remove all' when no count specified."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "inhabitants": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string", "description": "Name as user mentioned, Title Case"},
+                                "count": {"type": "integer", "description": "Number to remove, -1 for all"},
+                            },
+                            "required": ["name", "count"],
+                        },
+                    },
+                },
+                "required": ["inhabitants"],
+            },
+        },
+        {
+            "name": "add_plants",
+            "description": (
+                "Add new plant(s) to the user's tank profile. "
+                "Call this when the user asks to add plants, lists their plants, "
+                "or affirms your offer to add plants. "
+                "Use the most specific common name in Title Case. "
+                "Only include aquatic/aquarium plants. "
+                "Current plants in tank: " + (", ".join(plants) if plants else "none") + "."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "plants": {
+                        "type": "array",
+                        "items": {"type": "string", "description": "Plant name in Title Case"},
+                    },
+                },
+                "required": ["plants"],
+            },
+        },
+        {
+            "name": "remove_plants",
+            "description": (
+                "Remove plant(s) from the user's tank profile. "
+                "Call this for explicit removals AND corrections. Examples: "
+                "'remove hornwort' → remove hornwort. "
+                "'not hornwort, water sprite' → remove hornwort (add water sprite via add_plants). "
+                "'remove duplicates' → return ALL duplicate plant names so the app can deduplicate. "
+                "Use Title Case for plant names. "
+                "Current plants in tank: " + (", ".join(plants) if plants else "none") + "."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "plants": {
+                        "type": "array",
+                        "items": {"type": "string", "description": "Plant name to remove, Title Case"},
+                    },
+                },
+                "required": ["plants"],
+            },
+        },
+        {
+            "name": "rename_plant",
+            "description": (
+                "Rename/correct a plant name in the user's tank profile. "
+                "Call when the user asks to correct a plant name (e.g. 'rename that to Water Sprite Lace Leaf'). "
+                "Current plants: " + (", ".join(plants) if plants else "none") + "."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "old_name": {"type": "string", "description": "Current name in the plant list"},
+                    "new_name": {"type": "string", "description": "Corrected name in Title Case"},
+                },
+                "required": ["old_name", "new_name"],
+            },
+        },
+        {
+            "name": "create_task",
+            "description": (
+                "Create a reminder or task for the user. "
+                "Call this ONLY when you have CONFIRMED setting a reminder — not when merely offering. "
+                "If the user asks 'remind me to...' or affirms your offer, call this. "
+                f"Today's date is {client_date}. Compute due_date as absolute YYYY-MM-DD. "
+                "'tomorrow' = today + 1, 'next week' = today + 7, 'next month' = today + 30. "
+                "Default to tomorrow if no timeframe given. "
+                "repeat_days: set for recurring reminders (7=weekly, 14=biweekly, 30=monthly). null if one-time. "
+                "You may include MULTIPLE tasks in a single call when the user asks for several reminders."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "tasks": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "description": {"type": "string", "description": "Short action phrase"},
+                                "due_date": {"type": "string", "description": "YYYY-MM-DD"},
+                                "repeat_days": {"type": "integer", "description": "Days between repeats, or null"},
+                            },
+                            "required": ["description", "due_date"],
+                        },
+                    },
+                },
+                "required": ["tasks"],
+            },
+        },
+        {
+            "name": "measurement_correction",
+            "description": (
+                "Correct or remove a measurement from the user's journal. "
+                "Call when the user says they made a mistake or wants to remove a reading. "
+                "Examples: 'that was nitrate not nitrite' → remove nitrite, add nitrate with same value. "
+                "'remove the ammonia reading' → remove ammonia, add nothing. "
+                f"Today's date is {client_date}. Use the most recent date from conversation context, "
+                "or today if discussing current readings. Format: YYYY-MM-DD. "
+                "Use lowercase parameter names: ammonia, nitrite, nitrate, ph, kh, gh, tds, "
+                "temperature, salinity, calcium, magnesium, phosphate, alkalinity, iron, potassium."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "date": {"type": "string", "description": "YYYY-MM-DD"},
+                    "remove": {
+                        "type": "object",
+                        "description": "Parameter names and values to remove",
+                    },
+                    "add": {
+                        "type": "object",
+                        "description": "Parameter names and new values to add (empty {} if remove-only)",
+                    },
+                    "series_label": {
+                        "type": "string",
+                        "description": "If correcting within a specific series (e.g. 'Before water change'), specify the label. Omit if no series.",
+                        "nullable": True,
+                    },
+                },
+                "required": ["date", "remove", "add"],
+            },
+        },
+        {
+            "name": "tap_water_update",
+            "description": (
+                "Update the user's tap water profile with parameter values. "
+                "Call when the user shares tap water test results. "
+                "Use these exact keys: ph, gh, kh, ammonia, nitrite, nitrate, "
+                "potassium, calcium, magnesium, phosphate, silicate, tds, "
+                "chlorine, chloramine, copper, iron, temp. "
+                "The user may say 'K' for potassium, 'Ca' for calcium, 'Mg' for magnesium. "
+                "GH/KH as dGH/dKH numeric. Temp in Fahrenheit. "
+                "'no ammonia' = 0, 'doesn't have nitrates' = 0."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "ph": {"type": "number"},
+                    "gh": {"type": "number"},
+                    "kh": {"type": "number"},
+                    "ammonia": {"type": "number"},
+                    "nitrite": {"type": "number"},
+                    "nitrate": {"type": "number"},
+                    "potassium": {"type": "number"},
+                    "calcium": {"type": "number"},
+                    "magnesium": {"type": "number"},
+                    "phosphate": {"type": "number"},
+                    "silicate": {"type": "number"},
+                    "tds": {"type": "number"},
+                    "chlorine": {"type": "number"},
+                    "chloramine": {"type": "number"},
+                    "copper": {"type": "number"},
+                    "iron": {"type": "number"},
+                    "temp": {"type": "number"},
+                },
+            },
+        },
+        {
+            "name": "create_tank",
+            "description": (
+                "Create a new tank profile. Call when you have collected at minimum "
+                "a name, size (gallons), and water type and are confirming creation. "
+                "Convert liters to gallons if needed (1 liter = 0.264 gallons), round to nearest integer. "
+                "waterType must be exactly 'freshwater', 'saltwater', or 'reef'. "
+                "Use Title Case for species and plant names. "
+                "inhabitant type: fish|invertebrate|coral|polyp|anemone. Default count to 1."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "tank": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "gallons": {"type": "integer"},
+                            "waterType": {"type": "string", "enum": ["freshwater", "saltwater", "reef"]},
+                        },
+                        "required": ["name", "gallons", "waterType"],
+                    },
+                    "initial": {
+                        "type": "object",
+                        "properties": {
+                            "inhabitants": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "name": {"type": "string"},
+                                        "type": {"type": "string", "enum": ["fish", "invertebrate", "coral", "polyp", "anemone"]},
+                                        "count": {"type": "integer"},
+                                    },
+                                    "required": ["name", "type", "count"],
+                                },
+                            },
+                            "plants": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                        },
+                    },
+                },
+                "required": ["tank"],
+            },
+        },
+        {
+            "name": "remove_action",
+            "description": (
+                "Remove an action from the user's journal for a given date. "
+                "Call when the user says they didn't actually do something, or wants to remove a logged action. "
+                "Examples: 'I didn't do a water change today', 'remove the feeding entry', "
+                "'that water change was yesterday not today'. "
+                f"Today's date is {client_date}. Use YYYY-MM-DD format."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "description": "The action text to remove (match as closely as possible to what was logged)"},
+                    "date": {"type": "string", "description": "YYYY-MM-DD date of the journal entry"},
+                },
+                "required": ["action", "date"],
+            },
+        },
+        {
+            "name": "remove_note",
+            "description": (
+                "Remove a note/observation from the user's journal for a given date. "
+                "Call when the user wants to retract or correct an observation. "
+                "Examples: 'remove the cloudy note', 'actually the fish aren't stressed'. "
+                f"Today's date is {client_date}. Use YYYY-MM-DD format."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "note": {"type": "string", "description": "The note text to remove (match as closely as possible)"},
+                    "date": {"type": "string", "description": "YYYY-MM-DD date of the journal entry"},
+                },
+                "required": ["note", "date"],
+            },
+        },
+        {
+            "name": "remove_task",
+            "description": (
+                "Remove or cancel a scheduled task/reminder. "
+                "Call when the user wants to cancel a reminder or says a task is no longer needed. "
+                "Examples: 'cancel the nitrate test reminder', 'remove that task', 'I don't need that reminder'."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "description": {"type": "string", "description": "The task description to match (partial match is fine)"},
+                },
+                "required": ["description"],
+            },
+        },
+        {
+            "name": "update_equipment",
+            "description": (
+                "Add, remove, or change equipment on the user's tank. "
+                "Call when the user mentions equipment changes: adding/removing/upgrading gear, "
+                "changing substrate, filter, lighting, CO2, etc. "
+                "Also call this when the user mentions equipment details that don't fit elsewhere — "
+                "store those in the 'notes' field (e.g. brand names, model numbers, custom setups). "
+                "Fields: substrate (list: sand, gravel, bare_bottom, soil, crushed_coral, other), "
+                "substrate_other (string, custom substrate name when 'other' is in substrate list), "
+                "filter_type (canister, hob, sponge, internal, undergravel, sump), "
+                "filter_media (list: carbon, phosphate_pad, aragonite, bio_media, sponge, filter_floss, ceramic_rings, zeolite, ion_exchange_resin), "
+                "lighting_type (led, t5, metal_halide, none), "
+                "has_heater, has_air_pump, has_co2, has_protein_skimmer, has_ato, "
+                "has_dosing_pump, has_live_rock, has_calcium_reactor (all booleans), "
+                "notes (free-text for brand/model details, custom info). "
+                "Set boolean fields to false to indicate removal. "
+                "For 'notes', the value will be APPENDED to existing notes (not replaced)."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "substrate": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": ["sand", "gravel", "bare_bottom", "soil", "crushed_coral", "other"]},
+                        "description": "Full substrate list (replaces existing)",
+                    },
+                    "substrate_other": {"type": "string", "description": "Custom substrate name when 'other' is selected"},
+                    "filter_type": {"type": "string", "enum": ["canister", "hob", "sponge", "internal", "undergravel", "sump"]},
+                    "filter_media": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": ["carbon", "phosphate_pad", "aragonite", "bio_media", "sponge", "filter_floss", "ceramic_rings", "zeolite", "ion_exchange_resin"]},
+                        "description": "Full filter media list (replaces existing)",
+                    },
+                    "lighting_type": {"type": "string", "enum": ["led", "t5", "metal_halide", "none"]},
+                    "has_heater": {"type": "boolean"},
+                    "has_air_pump": {"type": "boolean"},
+                    "has_co2": {"type": "boolean"},
+                    "has_protein_skimmer": {"type": "boolean"},
+                    "has_ato": {"type": "boolean"},
+                    "has_dosing_pump": {"type": "boolean"},
+                    "has_live_rock": {"type": "boolean"},
+                    "has_calcium_reactor": {"type": "boolean"},
+                    "notes": {"type": "string", "description": "Additional equipment details (brand, model, specs). Appended to existing notes."},
+                },
+            },
+        },
+        {
+            "name": "select_tank",
+            "description": (
+                "Select which tank the conversation is about. "
+                "Call this as soon as the user indicates which tank they're referring to — "
+                "by name, by number from the list, or by description. "
+                "This MUST be called before any other tool when the tank isn't pre-selected. "
+                "Use the exact tank name from the available tanks list."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "tank_name": {"type": "string", "description": "Exact name of the selected tank from the available tanks list"},
+                },
+                "required": ["tank_name"],
+            },
+        },
+        {
+            "name": "log_measurements",
+            "description": (
+                f"Log numeric water parameter measurements to the user's journal. Today is {client_date}. "
+                "Use standard keys: pH, KH, GH, Ca, Mg, ammonia, nitrite, nitrate, K, salinity, temp. "
+                "Temp should include unit like '78°F' or '26°C'. All others are numeric. "
+                "Call this EVERY TIME the user shares water test results — this is how data gets saved. "
+                "You MUST call this tool to actually log measurements; just saying 'Logged' is not enough. "
+                "When the user provides before/after readings, log ONLY the most recent set here. "
+                "Earlier readings go into log_notes with context."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "measurements": {
+                        "type": "object",
+                        "description": "Key-value pairs of parameter name to value.",
+                    },
+                    "date": {
+                        "type": "string",
+                        "description": "YYYY-MM-DD date for these measurements. Use today if not specified.",
+                        "nullable": True,
+                    },
+                    "is_tap_water": {
+                        "type": "boolean",
+                        "description": "True if these are tap/source water readings, not tank water.",
+                        "nullable": True,
+                    },
+                },
+                "required": ["measurements"],
+            },
+        },
+        {
+            "name": "log_actions",
+            "description": (
+                "Log maintenance actions the user performed on their tank. "
+                "Use short descriptions with quantities: '5ml Prime', '20% water change', 'Fed fish'. "
+                "Call this EVERY TIME the user describes maintenance they did."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "actions": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of action descriptions.",
+                    },
+                    "date": {
+                        "type": "string",
+                        "description": "YYYY-MM-DD date. Use today if not specified.",
+                        "nullable": True,
+                    },
+                },
+                "required": ["actions"],
+            },
+        },
+        {
+            "name": "log_notes",
+            "description": (
+                "Log observations about the tank — visual, behavioral, condition notes. "
+                "Deaths, smells, cloudiness, qualitative trends. NEVER log questions as notes. "
+                "Call this EVERY TIME the user shares observations. "
+                "Also use this for earlier/before measurements when the user provides before/after readings."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "notes": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of observation descriptions.",
+                    },
+                    "date": {
+                        "type": "string",
+                        "description": "YYYY-MM-DD date. Use today if not specified.",
+                        "nullable": True,
+                    },
+                },
+                "required": ["notes"],
+            },
+        },
+    ]
 
-Return ONLY valid JSON (no markdown, no explanation):
-{{"tasks": [{{"description": "short action description", "due_date": "YYYY-MM-DD", "repeat_days": null}}]}}
-
-Rules:
-- Extract ONLY tasks that the assistant has EXPLICITLY CONFIRMED as set/scheduled in its FINAL message
-- If the assistant merely OFFERED or SUGGESTED a reminder but the user hasn't confirmed yet, return {{"tasks": []}}
-- If the assistant is asking a follow-up question, return {{"tasks": []}}
-- Extract at most ONE task — the single most recent confirmed task
-- Do NOT re-extract tasks that were already confirmed in earlier turns
-- due_date must be an absolute date (YYYY-MM-DD), computed from today's date
-- "tomorrow" = today + 1 day, "in N days" = today + N days, "next week" = today + 7 days
-- If no specific timeframe was mentioned, default to tomorrow
-- description should be a short, clear action phrase (e.g. "Check ammonia", "Water change")
-- repeat_days: if the user asked for a RECURRING reminder (e.g. "every week", "every 3 days", "weekly", "biweekly"), set this to the number of days between repeats (7 for weekly, 14 for biweekly, 30 for monthly, etc.). If not recurring, set to null.
-- When in doubt, return {{"tasks": []}} — it's better to miss a task than create a duplicate"""
-
-
-_NEW_INHABITANT_EXTRACT_PROMPT = """Based on this conversation, extract the new inhabitant(s) the user wants to add to their tank profile.
-
-Return ONLY valid JSON — no markdown, no explanation:
-{"inhabitants": [{"name": "Otocinclus", "type": "fish", "count": 3}]}
-
-Rules:
-- name: use the most specific common name mentioned (e.g. "Otocinclus" not just "fish"). Capitalize properly.
-- type: "fish" | "invertebrate" | "coral" | "polyp" | "anemone"
-- count: integer. Use the count the user specified. Default to 1 if not mentioned.
-- Only include inhabitants the user explicitly said to add — not ones already in the tank profile.
-- Do NOT include plants. Plants are tracked separately. Examples of plants to EXCLUDE: java fern, java moss, anubias, amazon sword, water sprite, water wisteria, hornwort, duckweed, frogbit, monte carlo, dwarf hairgrass, vallisneria, cryptocoryne, bucephalandra, marimo, moss ball, pogostemon, rotala, ludwigia, cabomba, elodea, salvinia, riccia, tiger lotus. If it's a plant, return {"inhabitants": []}.
-- If the conversation is just a question or clarification with no clear species to add, return {"inhabitants": []}"""
-
-_REMOVE_INHABITANT_EXTRACT_PROMPT = """Based on this conversation, extract the inhabitant(s) the user wants to REMOVE from their tank profile.
-
-This includes explicit removals AND corrections/swaps. For example:
-- "remove the guppies" → remove guppies
-- "they weren't neon tetras, they were glofish danios" → remove neon tetras (the NEW species is handled separately)
-- "I meant mollies not guppies" → remove guppies
-- "replace the tetras with barbs" → remove tetras
-- "actually those are danios" → remove whatever the previous species was that's being corrected
-
-Return ONLY valid JSON — no markdown, no explanation:
-{"inhabitants": [{"name": "Guppy", "count": 2}]}
-
-Rules:
-- name: use the name as closely as the user mentioned it. Capitalize properly.
-- count: integer. The number to remove. If the user says "remove guppies" without a count, use -1 to mean "remove all".
-- Only include the OLD/incorrect inhabitants being removed or replaced — not the new ones being added.
-- If no removal or correction was requested, return {"inhabitants": []}"""
-
-
-_NEW_TANK_EXTRACT_PROMPT = """Based on this conversation, extract the new tank details into JSON.
-
-Return ONLY valid JSON — no markdown, no explanation:
-{
-  "tank": {
-    "name": "Tank Name",
-    "gallons": 20,
-    "waterType": "freshwater"
-  },
-  "initial": {
-    "inhabitants": [
-      {"name": "Neon Tetra", "type": "fish", "count": 6}
-    ],
-    "plants": ["Java Fern"]
-  }
-}
-
-Rules:
-- gallons: integer. Convert liters to gallons if needed (1 liter = 0.264 gallons), round to nearest whole number.
-- waterType: must be exactly "freshwater", "saltwater", or "reef"
-- inhabitant type: "fish" | "invertebrate" | "coral" | "polyp" | "anemone"
-- If no inhabitants mentioned, use empty array. If no plants, use empty array.
-- Use Title Case for all species and plant names (e.g. "Neon Tetra", "Java Fern").
-- count: integer, default to 1 if not specified.
-- If the conversation is NOT about creating a new tank (e.g. the user is asking about an existing tank), return {"tank": {}, "initial": {}}"""
-
-
-_NEW_PLANT_EXTRACT_PROMPT = """Based on this conversation, extract the new plant(s) the user wants to add to their tank profile.
-
-Return ONLY valid JSON — no markdown, no explanation:
-{"plants": ["Java Fern", "Anubias Nana"]}
-
-Rules:
-- Use the most specific common name mentioned (e.g. "Anubias Nana" not just "plant"). Capitalize properly using Title Case.
-- Include plants the user explicitly asked to add, OR plants the user affirmed adding when the assistant offered (e.g. user said "yes" after assistant offered to add them).
-- Only include aquatic/aquarium plants. Ignore non-aquatic plants.
-- If the user listed plants they have (e.g. "I have java fern and anubias") and the assistant confirmed adding them, include those plants.
-- If the conversation is just a question or clarification with no clear plant to add, return {"plants": []}"""
-
-
-_REMOVE_PLANT_EXTRACT_PROMPT = """Based on this conversation, extract the plant(s) the user wants to REMOVE from their tank profile.
-
-Return ONLY valid JSON — no markdown, no explanation:
-{"plants": ["Java Fern", "Anubias Nana"]}
-
-Rules:
-- Use the plant name as closely as the user mentioned it. Capitalize properly using Title Case.
-- Include plants the user explicitly asked to remove, delete, or get rid of.
-- If the user says "remove duplicates" or "remove the duplicate plants/entries", identify which plants appear multiple times in the tank profile and return ALL instances of those plant names — the app will handle deduplication.
-- If the conversation is just a question or clarification with no clear plant to remove, return {"plants": []}"""
-
-_RENAME_PLANT_EXTRACT_PROMPT = """Based on this conversation, extract the plant name correction the user requested.
-
-Return ONLY valid JSON — no markdown, no explanation:
-{"old_name": "Sprite Lace Leaf", "new_name": "Water Sprite Lace Leaf"}
-
-Rules:
-- old_name: the name currently in the plant list that should be changed.
-- new_name: the corrected name the user wants. Use Title Case.
-- If the conversation does not involve renaming or correcting a plant name, return {"old_name": "", "new_name": ""}"""
-
-_MEASUREMENT_CORRECTION_PROMPT = """Based on this conversation, extract the measurement correction or removal the user requested.
-
-Return ONLY valid JSON — no markdown, no explanation.
-
-Examples:
-- Swap parameter: {"date": "2026-03-13", "remove": {"nitrite": 5}, "add": {"nitrate": 5}}
-- Remove only: {"date": "2026-03-13", "remove": {"nitrite": 5}, "add": {}}
-- Change value: {"date": "2026-03-13", "remove": {"ph": 7.4}, "add": {"ph": 7.2}}
-
-Rules:
-- date: the date of the measurement to correct. Use the most recent date from the conversation context, or today's date if discussing current readings. Format: YYYY-MM-DD. Today is """ + date.today().isoformat() + """.
-- remove: a dict of parameter names and values to DELETE from the journal for that date. Use lowercase parameter names (ammonia, nitrite, nitrate, ph, kh, gh, tds, temperature, salinity, calcium, magnesium, phosphate, alkalinity, iron, potassium).
-- add: a dict of parameter names and new values to ADD/UPDATE in the journal for that date. Same naming convention. Can be empty {} if the user only wants to remove.
-- If the user just wants to remove a measurement (e.g. "remove nitrite", "delete the ammonia reading"), set remove with the parameter and its current value, and leave add empty.
-- If the user says "that was nitrate not nitrite" with a value, remove the wrong parameter and add the correct one with the same value.
-- If the conversation does not involve correcting or removing a measurement, return {"date": "", "remove": {}, "add": {}}"""
-
-
-def _is_affirmation(text: str) -> bool:
-    t = text.lower().strip().rstrip("!.")
-    affirmations = ["yes", "yeah", "sure", "ok", "okay", "please", "yep", "yup",
-                    "go ahead", "do it", "add it", "add them", "set it", "sounds good",
-                    "that would be great", "yes please", "sure thing", "absolutely",
-                    "go for it", "why not", "i said yes", "that's what i asked",
-                    "that's what i said", "just add", "add anyway", "add it anyway"]
-    # Also match implicit references to prior offers
-    implicit = ["you offered", "you said you would", "you already offered",
-                "you just offered", "you mentioned", "you suggested",
-                "didn't you offer", "thought you were going to"]
-    return (any(t == a or t.startswith(a + " ") or t.startswith(a + ",") for a in affirmations)
-            or any(k in t for k in implicit))
-
-
-def _history_has_tank_creation_offer(history: list) -> tuple[bool, str]:
-    """Returns (has_offer, full_conversation_text) if the last AI message was a tank creation confirmation."""
-    for msg in reversed(history or []):
-        if msg.get("role") == "assistant":
-            content = msg.get("content", "").lower()
-            if any(k in content for k in [
-                "ready to create", "create this tank", "shall i create",
-                "want me to create", "go ahead and create",
-                "i'll create", "i will create", "creating this tank", "creating your tank",
-                "set this up", "set it up for you",
-            ]):
-                return True, msg.get("content", "")
-            return False, ""
-    return False, ""
-
-
-def _history_has_reminder_offer(history: list) -> tuple[bool, str]:
-    """Returns (has_offer, ai_message_text) if a recent AI message explicitly offered to set a reminder."""
-    # Only check the last 4 messages (2 exchanges) for an explicit AI offer
-    recent = (history or [])[-4:]
-    for msg in reversed(recent):
-        if msg.get("role") != "assistant":
-            continue
-        content = msg.get("content", "")
-        lower = content.lower()
-        # Must be an explicit offer from the AI to set/create a reminder
-        if any(k in lower for k in [
-            "would you like me to set",
-            "would you like a reminder",
-            "want me to set a reminder",
-            "shall i set a reminder",
-            "i can set a reminder",
-            "i can remind you",
-            "want me to remind",
-            "shall i remind",
-        ]):
-            return True, content
-    return False, ""
-
-
-def _history_has_inhabitant_add_offer(history: list) -> tuple[bool, str]:
-    """Returns (has_offer, ai_message_text) if a recent AI message offered to add an inhabitant."""
-    checked = 0
-    for msg in reversed(history or []):
-        if msg.get("role") == "assistant":
-            content = msg.get("content", "")
-            lower = content.lower()
-            if any(k in lower for k in [
-                "add it to your", "add them to your", "add to your tank profile",
-                "want me to add", "shall i add", "add your", "update your profile",
-                "log it as", "add it as",
-                "would you like me to add", "like me to log",
-                "want me to log", "shall i log",
-                # Broader patterns — Ariel discussing a species in context of adding
-                "which species", "which type", "what kind", "what species",
-                "are you sure", "they can be aggressive", "they are aggressive",
-                "compatible", "compatibility", "still want to add", "still like to add",
-                "go ahead and add", "proceed with adding",
-                "which tank",  # asking which tank implies an upcoming add action
-            ]):
-                return True, content
-            checked += 1
-            if checked >= 3:
-                break
-    return False, ""
-
-
-def _history_has_plant_add_offer(history: list) -> tuple[bool, str]:
-    """Returns (has_offer, ai_message_text) if a recent AI message offered to add a plant."""
-    checked = 0
-    for msg in reversed(history or []):
-        if msg.get("role") == "assistant":
-            content = msg.get("content", "")
-            lower = content.lower()
-            if any(k in lower for k in [
-                "add it to your plant", "add them to your plant",
-                "add to your plant list", "want me to add",
-                "shall i add", "add it as a plant",
-                "don't see", "not in your plant",
-                "would you like me to add", "like me to log",
-                "want me to log", "shall i log",
-                "which tank",  # asking which tank implies an upcoming add action
-            ]):
-                return True, content
-            checked += 1
-            if checked >= 3:  # check last 3 assistant messages
-                break
-    return False, ""
 
 
 @app.post("/chat/summarize")
 @limiter.limit("20/minute")
 def chat_summarize(request: Request, req: SummarizeSessionRequest, user_id: str = Depends(_get_user_id)):
     """Generate a 1-2 sentence summary of a chat session."""
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
+    client, has_llm = _get_llm_client()
+    if not has_llm:
         return {"summary": ""}
     try:
-        client = anthropic.Anthropic(api_key=api_key)
         # Filter to just user/assistant messages with content
         msgs = [{"role": m.get("role", "user"), "content": m.get("content", "")}
                 for m in req.messages if m.get("content")]
@@ -1830,8 +2249,8 @@ def chat_summarize(request: Request, req: SummarizeSessionRequest, user_id: str 
 @app.post("/chat/tank")
 @limiter.limit("20/minute")
 def chat_tank(request: Request, req: ChatRequest, user_id: str = Depends(_get_user_id)):
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
+    client, has_llm = _get_llm_client()
+    if not has_llm:
         return {"response": "AI chat is unavailable (no API key configured).", "tasks": []}
 
     tank = req.tank or {}
@@ -1868,6 +2287,8 @@ def chat_tank(request: Request, req: ChatRequest, user_id: str = Depends(_get_us
         return str(t)
 
     print(f"[Chat] tank={'set' if tank else 'none'} available_tanks={[_tank_name(t) for t in available_tanks]} no_tank_context={no_tank_context}")
+    print(f"[Chat] req.tank raw={req.tank}")
+    print(f"[Chat] tank after or={{}}={tank}")
 
     if no_tank_context and len(available_tanks) > 1:
         # Build a numbered list so Ariel can present it and user can reply by number
@@ -2135,11 +2556,9 @@ def chat_tank(request: Request, req: ChatRequest, user_id: str = Depends(_get_us
     messages.append({"role": "user", "content": req.message})
 
     try:
-        client = anthropic.Anthropic(api_key=api_key)
-
         # Fast path: extract tasks from a manual note without generating a chat reply
         if req.extract_tasks_only:
-            today_str = date.today().isoformat()
+            today_str = req.client_date or date.today().isoformat()
             note_extract_prompt = (
                 "Analyze this aquarium journal note. If the note describes a problem or "
                 "concern that clearly warrants a follow-up action, extract ONE concise task. "
@@ -2180,574 +2599,89 @@ def chat_tank(request: Request, req: ChatRequest, user_id: str = Depends(_get_us
 
         chat_water_type = (tank.get("water_type") or tank.get("waterType") or "") if tank else ""
         all_wt = [t.get("water_type", "") for t in (req.available_tanks_detail or [])]
+        today_str = req.client_date or date.today().isoformat()
+
+        # Build tools for LLM function calling
+        tools = _build_chat_tools(client_date=today_str, plants=plants)
+
         response = _chat(client,
             model=_pick_model(experience=req.experience_level or "", water_type=chat_water_type, all_water_types=all_wt),
             max_tokens=1024,
             system=_CHAT_SYSTEM_PROMPT + f"\n\n{tank_context}" + (f"\n\n{req.system_context}" if req.system_context else ""),
             messages=messages,
+            tools=tools,
+            tool_choice={"type": "auto"},
         )
         reply = response.content[0].text.strip()
-        reply_lower = reply.lower()
+        tool_calls = getattr(response, "tool_calls", []) or []
 
-        # Extract tasks — three triggers:
-        # 1. User affirmed a prior reminder offer
-        # 2. AI reply confirms it scheduled/set a reminder
-        # 3. User explicitly requested a reminder/task
-        extracted_tasks: List[Dict[str, Any]] = []
+        print(f"[Chat] reply={reply[:100]}... tool_calls={[tc['name'] for tc in tool_calls]}")
 
-        # Only match phrases that confirm a task/reminder WAS set (past tense / done),
-        # NOT future offers like "I'll remind you" or "would you like a reminder?"
-        reply_confirms_task_set = any(k in reply_lower for k in [
-            "i've set", "i have set", "reminder set", "reminder scheduled",
-            "scheduled a reminder", "added a reminder", "task set",
-            "i've added a reminder", "i've created a reminder", "i have created a reminder",
-            "i've scheduled", "i have scheduled", "done! i'll remind",
-            "all set", "reminder added", "task added", "task created",
-        ])
-
-        user_explicit_task_request = bool(re.search(
-            r"\b(remind me|remind .*(tomorrow|next|monday|tuesday|wednesday|thursday|friday|saturday|sunday|week|month|day)|"
-            r"set (a |an )?reminder|schedule (a |an )?reminder|"
-            r"daily reminder|weekly reminder|monthly reminder|create (a |an )?reminder|"
-            r"add (a |an )?reminder|set (a |an )?task|"
-            r"reminder (for |to |tomorrow|next))\b",
-            req.message, re.IGNORECASE,
-        ))
-
-        # Also trigger if the AI reply confirms a reminder AND history had a reminder discussion
-        history_has_reminder = _history_has_reminder_offer(req.history or [])[0]
-        # Only extract tasks when the AI reply confirms a reminder was set.
-        # Don't extract on the first turn if AI is asking a follow-up question.
-        reply_is_question = reply.rstrip().endswith("?")
-        should_extract_tasks = (
-            (_is_affirmation(req.message) and history_has_reminder)
-            or reply_confirms_task_set
-            or (user_explicit_task_request and not reply_is_question)
-        )
-
-        print(f"[TaskExtract] should_extract={should_extract_tasks} reply_confirms={reply_confirms_task_set} user_explicit={user_explicit_task_request} is_affirmation={_is_affirmation(req.message)} user_msg='{req.message[:80]}' reply_snippet='{reply_lower[:80]}'")
-        print(f"[TaskExtract] history_len={len(req.history or [])}")
-
-        if should_extract_tasks:
-            today_str = date.today().isoformat()
-            extraction_prompt = _TASK_EXTRACT_PROMPT.format(today=today_str)
-            # Build conversation for extraction — skip leading assistant messages
-            # (Anthropic API requires first message to be 'user')
-            convo_parts = []
-            for h in (req.history or []):
-                role = h.get("role", "user")
-                content = h.get("content", "")
-                # Skip assistant messages before the first user message
-                if not convo_parts and role == "assistant":
-                    continue
-                convo_parts.append({"role": role, "content": content})
-            convo_parts.append({"role": "user", "content": req.message})
-            convo_parts.append({"role": "assistant", "content": reply})
-            # Ensure we have at least a user message
-            if not any(m["role"] == "user" for m in convo_parts):
-                convo_parts.insert(0, {"role": "user", "content": req.message})
-            extraction_error = None
-            extraction_raw = None
-            try:
-                print(f"[TaskExtract] convo_parts: {convo_parts}")
-                ex_response = _chat(client,
-                    model="claude-haiku-4-5",
-                    max_tokens=256,
-                    system=extraction_prompt,
-                    messages=convo_parts,
-                )
-                raw = ex_response.content[0].text.strip()
-                extraction_raw = raw
-                # Strip everything before the first { and after the last }
-                json_match = re.search(r"\{.*\}", raw, flags=re.DOTALL)
-                if json_match:
-                    raw = json_match.group(0)
-                parsed = json.loads(raw)
-                extracted_tasks = parsed.get("tasks", [])
-                print(f"[TaskExtract] AI raw response: {raw}")
-                print(f"[TaskExtract] AI extracted {len(extracted_tasks)} task(s): {extracted_tasks}")
-            except Exception as e:
-                import traceback
-                extraction_error = str(e)
-                print(f"[Chat/TaskExtract] error: {e}")
-                traceback.print_exc()
-
-        # Extract new tank — three triggers:
-        # 1. User affirmed a prior offer ("yes, create it")
-        # 2. AI reply itself claims to have created the tank (AI skipped the offer step)
-        # 3. User explicitly asked to create ("create a tank called X")
+        # Map tool calls to response fields
         new_tank = None
-
-        reply_confirms_tank_created = any(k in reply_lower for k in [
-            "tank has been created", "i've created", "i have created", "created your tank",
-            "tank is ready", "added to your tanks", "set up your tank",
-            "tank has been set up", "tank has been added",
-            "i'll create this tank", "i will create this tank",
-            "creating this tank", "creating your tank",
-        ])
-
-        user_explicit_tank_create = bool(re.search(
-            r"\b(create|add|set up|setup)\b.{0,60}(tank|aquarium)",
-            req.message, re.IGNORECASE,
-        ))
-
-        should_extract_tank = (
-            (_is_affirmation(req.message) and _history_has_tank_creation_offer(req.history or [])[0])
-            or reply_confirms_tank_created
-            or user_explicit_tank_create
-        )
-
-        print(f"[TankExtract] should_extract={should_extract_tank} reply_confirms={reply_confirms_tank_created} user_explicit={user_explicit_tank_create} is_affirmation={_is_affirmation(req.message)}")
-        if should_extract_tank:
-            # Build full conversation for extraction context
-            convo = "\n".join(
-                f"{m['role'].upper()}: {m['content']}"
-                for m in (req.history or [])
-                if m.get("role") in ("user", "assistant")
-            )
-            convo += f"\nUSER: {req.message}\nASSISTANT: {reply}"
-            try:
-                ex_response = _chat(client,
-                    model="claude-haiku-4-5",
-                    max_tokens=512,
-                    system=_NEW_TANK_EXTRACT_PROMPT,
-                    messages=[{"role": "user", "content": convo}],
-                )
-                raw = ex_response.content[0].text.strip()
-                raw = re.sub(r"^```(?:json)?\s*", "", raw)
-                raw = re.sub(r"\s*```$", "", raw).strip()
-                print(f"[TankExtract] raw={raw}")
-                parsed_tank = json.loads(raw)
-                # Only use result if it has at least a tank name
-                if parsed_tank.get("tank", {}).get("name"):
-                    new_tank = parsed_tank
-                    print(f"[TankExtract] extracted tank: {new_tank}")
-                else:
-                    print(f"[TankExtract] no tank name in parsed result: {parsed_tank}")
-            except Exception as e:
-                print(f"[Chat/TankExtract] error: {e}")
-
-        # Extract new inhabitants — three triggers:
-        # 1. User affirmed a prior offer ("yes, add it")
-        # 2. AI reply itself claims to have added something (AI skipped the offer step)
-        # 3. User explicitly asked to add ("add 3 otocinclus to my inhabitants")
         new_inhabitant = None
-
-        reply_confirms_added = any(k in reply_lower for k in [
-            "added to your", "i've added", "i have added", "added it to your",
-            "added them to your", "added the otocinclus", "added the fish",
-            "added to the tank", "adding to your",
-            "i've logged", "i have logged", "logged them to your",
-            "logged it to your", "now in your tank profile",
-            "updated your tank profile", "updated your inhabitant",
-            "updated your tank to include", "updated your tank",
-            "added to your crew", "to your tank", "added!",
-            "added ", "✅",
-        ])
-
-        user_explicit_add = bool(re.search(
-            r"\b(add|added)\b.{0,50}(to (my|the) (tank|inhabitants|list|profile)|to your (tank|list))"
-            r"|\b(added|add)\b.{0,20}\b(these|the|some|my|new) (fish|inhabitants|inverts)\b"
-            r"|\bmy (fish|inhabitants) (are|include)\b"
-            r"|\b(i have|i got|here are)\b.{0,30}\b(fish|inhabitants|inverts)\b"
-            r"|\badd (it|them|those)\b",
-            req.message, re.IGNORECASE,
-        ))
-
-        # Terse reply confirms guarded by history context
-        inhab_reply_terse = any(k in reply_lower for k in [
-            "done", "all done", "all set", "taken care", "you're right",
-            "got it", "no problem", "of course", "updated", "added",
-        ])
-        history_has_inhab_offer = _history_has_inhabitant_add_offer(req.history or [])[0]
-
-        should_extract = (
-            (_is_affirmation(req.message) and history_has_inhab_offer)
-            or reply_confirms_added
-            or user_explicit_add
-            or (inhab_reply_terse and history_has_inhab_offer)
-        )
-        print(f"[InhabitantExtract] triggers: affirm={_is_affirmation(req.message)}, history_offer={history_has_inhab_offer}, reply_confirms={reply_confirms_added}, reply_terse={inhab_reply_terse}, user_explicit={user_explicit_add} → should_extract={should_extract}")
-
-        if should_extract:
-            convo = "\n".join(
-                f"{m['role'].upper()}: {m['content']}"
-                for m in (req.history or [])
-                if m.get("role") in ("user", "assistant")
-            )
-            convo += f"\nUSER: {req.message}\nASSISTANT: {reply}"
-            try:
-                inh_response = _chat(client,
-                    model="claude-haiku-4-5",
-                    max_tokens=256,
-                    system=_NEW_INHABITANT_EXTRACT_PROMPT,
-                    messages=[{"role": "user", "content": convo}],
-                )
-                raw = inh_response.content[0].text.strip()
-                raw = re.sub(r"^```(?:json)?\s*", "", raw)
-                raw = re.sub(r"\s*```$", "", raw).strip()
-                parsed = json.loads(raw)
-                if parsed.get("inhabitants"):
-                    new_inhabitant = parsed
-            except Exception as e:
-                print(f"[Chat/InhabitantExtract] error: {e}")
-
-        # Extract inhabitant removals
         remove_inhabitants = None
-
-        reply_confirms_removal = any(k in reply_lower for k in [
-            "removed", "i've removed", "i have removed", "taken out",
-            "deleted", "i've deleted", "i have deleted",
-            "done", "all set", "taken care",
-            "swapped", "replaced", "updated", "changed",
-            "i've swapped", "i've replaced", "i've updated", "i've changed",
-        ])
-        user_requests_removal = bool(re.search(
-            r"\b(remove|delete|take out|get rid of|drop)\b.{0,50}(from|off|out)",
-            req.message, re.IGNORECASE,
-        )) or bool(re.search(
-            r"\b(remove|delete|take out|get rid of|drop)\b.{0,30}\b(guppy|guppies|fish|coral|shrimp|snail|tetra|neon|\w+)\b",
-            req.message, re.IGNORECASE,
-        ))
-        # Detect correction/swap requests ("they weren't X, they were Y", "I meant Y not X", "replace X with Y")
-        user_requests_correction = bool(re.search(
-            r"\b(weren't|weren't|were not|wasn't|wasn't|was not|not .{0,20}, (they|it|actually)|mistake|meant|actually|replace .{0,30} with|swap .{0,30} (for|with)|instead of|wrong|correction)\b",
-            req.message, re.IGNORECASE,
-        ))
-
-        # Also check history for removal keywords (multi-turn: user asked to remove, then confirmed tank name)
-        history_text = " ".join(m.get("content", "").lower() for m in (req.history or []))
-        all_text = req.message.lower() + " " + reply_lower + " " + history_text
-
-        should_extract_removal = (
-            (reply_confirms_removal or user_requests_removal) and any(
-                k in (req.message.lower() + " " + reply_lower + " " + history_text) for k in ["remove", "delete", "take out", "get rid", "drop"]
-            )
-        ) or (
-            (user_requests_correction or reply_confirms_removal) and any(
-                k in (req.message.lower() + " " + reply_lower + " " + history_text) for k in [
-                    "swap", "replace", "instead", "weren't", "weren't", "were not",
-                    "wasn't", "wasn't", "was not", "mistake", "meant", "actually",
-                    "not ", "wrong", "correction", "changed", "updated",
-                ]
-            )
-        )
-        print(f"[InhabitantRemove] triggers: reply_confirms={reply_confirms_removal}, user_requests={user_requests_removal} → should_extract={should_extract_removal}")
-
-        if should_extract_removal:
-            convo = "\n".join(
-                f"{m['role'].upper()}: {m['content']}"
-                for m in (req.history or [])
-                if m.get("role") in ("user", "assistant")
-            )
-            convo += f"\nUSER: {req.message}\nASSISTANT: {reply}"
-            try:
-                rem_response = _chat(client,
-                    model="claude-haiku-4-5",
-                    max_tokens=256,
-                    system=_REMOVE_INHABITANT_EXTRACT_PROMPT,
-                    messages=[{"role": "user", "content": convo}],
-                )
-                raw = rem_response.content[0].text.strip()
-                raw = re.sub(r"^```(?:json)?\s*", "", raw)
-                raw = re.sub(r"\s*```$", "", raw).strip()
-                parsed = json.loads(raw)
-                if parsed.get("inhabitants"):
-                    remove_inhabitants = parsed
-                    print(f"[InhabitantRemove] extracted: {remove_inhabitants}")
-            except Exception as e:
-                print(f"[Chat/InhabitantRemove] error: {e}")
-
-        # Extract new plants — same three triggers as inhabitants
         new_plants = None
-
-        reply_confirms_plant_added = any(k in reply_lower for k in [
-            "added to your plant", "i've added", "i have added",
-            "added it to your plant", "added them to your plant",
-            "added to the plant list", "adding to your plant",
-            "i've logged", "i have logged", "logged them to your",
-            "logged it to your", "now in your plant", "updated your plant",
-            "they're in your plant", "they are in your plant",
-            "added all", "added these", "added everything",
-            "to your plant list", "in your plant list",
-            "added to your tank", "added it to your tank",
-            "added them to your tank",
-        ])
-
-        user_explicit_plant_add = bool(re.search(
-            r"\b(add|log)\b.{0,50}(to (my|the) (plants|plant list))"
-            r"|\b(added|add)\b.{0,20}\b(these|the|some|my|new) plants\b"
-            r"|\bmy plants (are|include)\b"
-            r"|\b(i have|i got|i planted|here are)\b.{0,30}\bplants?\b",
-            req.message, re.IGNORECASE,
-        ))
-
-        # Terse reply confirms ("done", "all set") only count when history has a plant add offer
-        reply_terse_confirm = any(k in reply_lower for k in [
-            "done", "all done", "all set", "taken care", "you're right",
-            "got it", "no problem", "of course",
-        ])
-        history_has_plant_offer = _history_has_plant_add_offer(req.history or [])[0]
-
-        # Suppress plant add when user is asking to remove/delete plants
-        user_removing_plants = bool(re.search(
-            r"\b(remove|delete|take out|get rid of|drop|clean up)\b.{0,50}\b(plant|plants|duplicate|duplicates|entry|entries)\b",
-            req.message, re.IGNORECASE,
-        ))
-
-        # Also trigger plant extraction when inhabitant extraction ran but found nothing
-        # (the user likely mentioned a plant that the inhabitant extractor correctly excluded)
-        inhab_ran_empty = should_extract and (new_inhabitant is None or not new_inhabitant.get("inhabitants"))
-
-        should_extract_plants = not user_removing_plants and (
-            (_is_affirmation(req.message) and history_has_plant_offer)
-            or reply_confirms_plant_added
-            or user_explicit_plant_add
-            or (reply_terse_confirm and history_has_plant_offer)
-            or inhab_ran_empty
-        )
-        print(f"[PlantExtract] triggers: affirm={_is_affirmation(req.message)}, history_offer={history_has_plant_offer}, reply_confirms={reply_confirms_plant_added}, reply_terse={reply_terse_confirm}, user_explicit={user_explicit_plant_add} → should_extract={should_extract_plants}")
-
-        if should_extract_plants:
-            convo = "\n".join(
-                f"{m['role'].upper()}: {m['content']}"
-                for m in (req.history or [])
-                if m.get("role") in ("user", "assistant")
-            )
-            convo += f"\nUSER: {req.message}\nASSISTANT: {reply}"
-            try:
-                plant_response = _chat(client,
-                    model="claude-haiku-4-5",
-                    max_tokens=256,
-                    system=_NEW_PLANT_EXTRACT_PROMPT,
-                    messages=[{"role": "user", "content": convo}],
-                )
-                raw = plant_response.content[0].text.strip()
-                raw = re.sub(r"^```(?:json)?\s*", "", raw)
-                raw = re.sub(r"\s*```$", "", raw).strip()
-                parsed = json.loads(raw)
-                if parsed.get("plants"):
-                    new_plants = parsed
-                    print(f"[PlantExtract] extracted plants: {new_plants}")
-            except Exception as e:
-                print(f"[Chat/PlantExtract] error: {e}")
-
-        # Extract plant removal — triggered when user asks to remove/delete plants
         remove_plants = None
-
-        # Reply confirms removal — no longer requires "plant" keyword in reply
-        # (AI may say "Removed S. Repens from New Tank!" without the word "plant")
-        reply_confirms_plant_removed = any(k in reply_lower for k in [
-            "removed", "i've removed", "i have removed", "deleted",
-            "i've deleted", "i have deleted", "taken out",
-            "cleaned up", "deduplicated", "removed the duplicate",
-            "removed duplicate",
-        ]) and any(k in (reply_lower + " " + history_text) for k in [
-            "plant", "your plant list", "entry", "entries", "duplicate",
-            # Also match specific plant names being discussed in history
-            "repens", "fern", "moss", "anubias", "sword", "hornwort",
-            "vallisneria", "crypto", "bucephalandra", "rotala", "ludwigia",
-            "cabomba", "monte carlo", "hairgrass", "duckweed", "frogbit",
-            "salvinia", "riccia", "wisteria", "sprite", "pogostemon",
-            "elodea", "lotus", "marimo",
-        ])
-
-        user_requests_plant_removal = bool(re.search(
-            r"\b(remove|delete|take out|get rid of|drop|clean up)\b.{0,50}\b(plant|plants|duplicate|duplicates|entry|entries)\b",
-            req.message, re.IGNORECASE,
-        ))
-
-        # Also check history for plant removal keywords (multi-turn: user asked to remove, then confirmed tank name)
-        history_requests_plant_removal = bool(re.search(
-            r"\b(remove|delete|take out|get rid of|drop|clean up)\b",
-            history_text, re.IGNORECASE,
-        )) and any(k in history_text for k in [
-            "plant", "repens", "fern", "moss", "anubias", "sword", "hornwort",
-            "vallisneria", "crypto", "rotala", "ludwigia", "duckweed",
-        ])
-
-        should_extract_plant_removal = (
-            reply_confirms_plant_removed
-            or user_requests_plant_removal
-            or (history_requests_plant_removal and (reply_confirms_plant_removed or
-                any(k in reply_lower for k in ["done", "removed", "deleted", "all set", "taken care"])))
-        )
-        print(f"[PlantRemove] triggers: reply_confirms={reply_confirms_plant_removed}, user_requests={user_requests_plant_removal}, history_requests={history_requests_plant_removal} → should_extract={should_extract_plant_removal}")
-
-        if should_extract_plant_removal:
-            convo = "\n".join(
-                f"{m['role'].upper()}: {m['content']}"
-                for m in (req.history or [])
-                if m.get("role") in ("user", "assistant")
-            )
-            convo += f"\nUSER: {req.message}\nASSISTANT: {reply}"
-            if plants:
-                convo += f"\n\nCurrent plants in tank: {', '.join(plants)}"
-            try:
-                rem_response = _chat(client,
-                    model="claude-haiku-4-5",
-                    max_tokens=256,
-                    system=_REMOVE_PLANT_EXTRACT_PROMPT,
-                    messages=[{"role": "user", "content": convo}],
-                )
-                raw = rem_response.content[0].text.strip()
-                raw = re.sub(r"^```(?:json)?\s*", "", raw)
-                raw = re.sub(r"\s*```$", "", raw).strip()
-                parsed = json.loads(raw)
-                if parsed.get("plants"):
-                    remove_plants = parsed
-                    print(f"[PlantRemove] extracted: {remove_plants}")
-            except Exception as e:
-                print(f"[Chat/PlantRemove] error: {e}")
-
-        # Extract plant rename — triggered when AI confirms a name correction
         rename_plant = None
-
-        reply_confirms_rename = any(k in reply_lower for k in [
-            "updated", "renamed", "corrected", "changed the name",
-            "updated the name", "i've updated", "i have updated",
-        ]) and any(k in reply_lower for k in ["plant", "your plant list"])
-
-        user_explicit_rename = bool(re.search(
-            r"\b(rename|correct|change|update)\b.{0,30}(plant|name)",
-            req.message, re.IGNORECASE,
-        ))
-
-        should_extract_rename = (
-            reply_confirms_rename
-            or user_explicit_rename
-        ) and plants  # only if there are existing plants to rename
-
-        if should_extract_rename:
-            convo = "\n".join(
-                f"{m['role'].upper()}: {m['content']}"
-                for m in (req.history or [])
-                if m.get("role") in ("user", "assistant")
-            )
-            convo += f"\nUSER: {req.message}\nASSISTANT: {reply}"
-            convo += f"\n\nCurrent plants in tank: {', '.join(plants)}"
-            try:
-                rename_response = _chat(client,
-                    model="claude-haiku-4-5",
-                    max_tokens=256,
-                    system=_RENAME_PLANT_EXTRACT_PROMPT,
-                    messages=[{"role": "user", "content": convo}],
-                )
-                raw = rename_response.content[0].text.strip()
-                raw = re.sub(r"^```(?:json)?\s*", "", raw)
-                raw = re.sub(r"\s*```$", "", raw).strip()
-                parsed = json.loads(raw)
-                if parsed.get("old_name") and parsed.get("new_name"):
-                    rename_plant = parsed
-                    print(f"[PlantRename] {rename_plant}")
-            except Exception as e:
-                print(f"[Chat/PlantRename] error: {e}")
-
-        # Extract measurement correction — triggered when AI confirms a correction
         measurement_correction = None
-
-        reply_confirms_correction = any(k in reply_lower for k in [
-            "i've corrected", "i have corrected", "i've updated your record",
-            "i have updated your record", "corrected your", "updated your record",
-            "removed nitri", "removed ammonia", "removed ph", "removed the nitri",
-            "removed the ammonia", "removed the ph", "removed calcium", "removed magnesium",
-            "changed it to", "fixed that", "i've fixed", "i've removed",
-            "i have removed", "deleted the", "removed it from",
-            "updated today", "corrected today", "fixed your",
-        ])
-
-        _meas_params = (r"nitrite|nitrate|ammonia|ph|kh|gh|tds|temperature|salinity"
-                        r"|calcium|magnesium|phosphate|alkalinity|iron|potassium")
-        user_requests_correction = bool(re.search(
-            r"\b(was|meant|should be|not|wrong|mistake|oops|actually|correct|remove|delete)\b.{0,40}"
-            rf"\b({_meas_params})\b"
-            rf"|\b({_meas_params})\b"
-            r".{0,40}\b(was|meant|should be|not|wrong|mistake|oops|actually|correct|remove|delete)\b"
-            rf"|\b(remove|delete)\b.{0,20}\b({_meas_params})\b",
-            req.message, re.IGNORECASE,
-        ))
-
-        should_extract_correction = reply_confirms_correction or user_requests_correction
-        print(f"[MeasCorrection] triggers: reply_confirms={reply_confirms_correction}, user_requests={user_requests_correction} → should_extract={should_extract_correction}")
-
-        if should_extract_correction:
-            convo = "\n".join(
-                f"{m['role'].upper()}: {m['content']}"
-                for m in (req.history or [])
-                if m.get("role") in ("user", "assistant")
-            )
-            convo += f"\nUSER: {req.message}\nASSISTANT: {reply}"
-            # Include recent logs so the LLM knows the date and values
-            if req.recent_logs:
-                convo += f"\n\nRecent logs:\n" + "\n".join(req.recent_logs[:5])
-            try:
-                corr_response = _chat(client,
-                    model="claude-haiku-4-5",
-                    max_tokens=256,
-                    system=_MEASUREMENT_CORRECTION_PROMPT,
-                    messages=[{"role": "user", "content": convo}],
-                )
-                raw = corr_response.content[0].text.strip()
-                raw = re.sub(r"^```(?:json)?\s*", "", raw)
-                raw = re.sub(r"\s*```$", "", raw).strip()
-                parsed = json.loads(raw)
-                if parsed.get("date") and (parsed.get("remove") or parsed.get("add")):
-                    measurement_correction = parsed
-                    print(f"[MeasCorrection] extracted: {measurement_correction}")
-            except Exception as e:
-                print(f"[Chat/MeasCorrection] error: {e}")
-
-        # Extract tap water parameters
         tap_water_update = None
-        convo_text = (req.message + " " + reply).lower()
-        tap_mentioned = "tap water" in convo_text or "tap" in convo_text and any(
-            k in convo_text for k in ["ammonia", "nitrate", "nitrite", "ph", "gh", "kh", "chlorine", "chloramine", "phosphate", "silicate", "tds"]
-        )
-        # Also trigger when user answers a question about their tap water (e.g. "no ammonia", "it's 7.2")
-        history_asked_tap = any(
-            "tap" in (m.get("content", "")).lower() and m.get("role") == "assistant"
-            for m in (req.history or [])[-3:]
-        )
-        should_extract_tap = tap_mentioned or history_asked_tap
+        remove_action = None
+        remove_note = None
+        remove_task = None
+        equipment_update = None
+        selected_tank = None
+        extracted_tasks: List[Dict[str, Any]] = []
+        log_entries: List[Dict[str, Any]] = []
 
-        if should_extract_tap:
-            convo = "\n".join(
-                f"{m['role'].upper()}: {m['content']}"
-                for m in (req.history or [])
-                if m.get("role") in ("user", "assistant")
-            )
-            convo += f"\nUSER: {req.message}\nASSISTANT: {reply}"
-            try:
-                tap_response = _chat(client,
-                    model="claude-haiku-4-5",
-                    max_tokens=256,
-                    system=(
-                        "Extract any tap water parameter values mentioned in this conversation. "
-                        "The user may state values directly (e.g. 'my tap pH is 7.4') or indirectly "
-                        "(e.g. 'no ammonia in my tap' means ammonia=0, 'it doesn't have nitrates' means nitrate=0). "
-                        "Return ONLY a JSON object with parameter keys and numeric values. "
-                        "Use these exact keys where applicable: ph, gh, kh, ammonia, nitrite, nitrate, "
-                        "potassium, calcium, magnesium, phosphate, silicate, tds, chlorine, chloramine, copper, iron, temp. "
-                        "The user may refer to potassium as 'K', calcium as 'Ca', magnesium as 'Mg'. "
-                        "For GH/KH, use dGH/dKH numeric values. For temp, use Fahrenheit. "
-                        "If no tap water parameters can be extracted, return an empty object: {}\n"
-                        "Examples:\n"
-                        '- "my tap has no ammonia" → {"ammonia": 0}\n'
-                        '- "tap pH is 7.6 and GH is about 12" → {"ph": 7.6, "gh": 12}\n'
-                        '- "no nitrates or ammonia in my tap water" → {"ammonia": 0, "nitrate": 0}\n'
-                        "Return ONLY the JSON object, no explanation."
-                    ),
-                    messages=[{"role": "user", "content": convo}],
-                )
-                raw = tap_response.content[0].text.strip()
-                raw = re.sub(r"^```(?:json)?\s*", "", raw)
-                raw = re.sub(r"\s*```$", "", raw).strip()
-                parsed = json.loads(raw)
-                if parsed and isinstance(parsed, dict) and len(parsed) > 0:
-                    tap_water_update = parsed
-                    print(f"[TapWater] extracted: {tap_water_update}")
-            except Exception as e:
-                print(f"[Chat/TapWater] error: {e}")
+        for tc in tool_calls:
+            name = tc["name"]
+            inp = tc.get("input", {})
+            print(f"[ToolCall] {name}: {inp}")
+
+            if name == "add_inhabitants" and inp.get("inhabitants"):
+                new_inhabitant = inp
+            elif name == "remove_inhabitants" and inp.get("inhabitants"):
+                remove_inhabitants = inp
+            elif name == "add_plants" and inp.get("plants"):
+                new_plants = inp
+            elif name == "remove_plants" and inp.get("plants"):
+                remove_plants = inp
+            elif name == "rename_plant" and inp.get("old_name") and inp.get("new_name"):
+                rename_plant = inp
+            elif name == "create_task" and inp.get("tasks"):
+                extracted_tasks = inp["tasks"]
+            elif name == "measurement_correction" and inp.get("date"):
+                measurement_correction = inp
+            elif name == "tap_water_update":
+                # Filter to only numeric values
+                tap_water_update = {k: v for k, v in inp.items() if isinstance(v, (int, float))}
+                if not tap_water_update:
+                    tap_water_update = None
+            elif name == "create_tank" and inp.get("tank", {}).get("name"):
+                new_tank = inp
+            elif name == "remove_action" and inp.get("action"):
+                remove_action = inp
+            elif name == "remove_note" and inp.get("note"):
+                remove_note = inp
+            elif name == "remove_task" and inp.get("description"):
+                remove_task = inp
+            elif name == "update_equipment" and inp:
+                equipment_update = inp
+            elif name == "select_tank" and inp.get("tank_name"):
+                selected_tank = inp["tank_name"]
+            elif name == "log_measurements" and inp.get("measurements"):
+                entry_date = inp.get("date") or today_str
+                entry = {"measurements": inp["measurements"], "date": entry_date}
+                if inp.get("is_tap_water"):
+                    entry["source"] = "tap_water"
+                log_entries.append(entry)
+            elif name == "log_actions" and inp.get("actions"):
+                entry_date = inp.get("date") or today_str
+                log_entries.append({"actions": [_sentence_case(a) for a in inp["actions"]], "date": entry_date})
+            elif name == "log_notes" and inp.get("notes"):
+                entry_date = inp.get("date") or today_str
+                log_entries.append({"notes": [_sentence_case(n) for n in inp["notes"]], "date": entry_date})
 
         return {
             "response": reply,
@@ -2760,14 +2694,15 @@ def chat_tank(request: Request, req: ChatRequest, user_id: str = Depends(_get_us
             "rename_plant": rename_plant,
             "measurement_correction": measurement_correction,
             "tap_water_update": tap_water_update,
+            "remove_action": remove_action,
+            "remove_note": remove_note,
+            "remove_task": remove_task,
+            "equipment_update": equipment_update,
+            "selected_tank": selected_tank,
+            "log_entries": log_entries if log_entries else None,
+            "_log_debug": [{"name": tc["name"], "input": tc.get("input", {})} for tc in tool_calls] if tool_calls else None,
             "_debug": {
-                "should_extract": should_extract_tasks,
-                "reply_confirms": reply_confirms_task_set,
-                "user_explicit": user_explicit_task_request,
-                "is_affirmation": _is_affirmation(req.message),
-                "history_has_reminder": history_has_reminder,
-                "extraction_raw": extraction_raw if should_extract_tasks else None,
-                "extraction_error": extraction_error if should_extract_tasks else None,
+                "tool_calls": [tc["name"] for tc in tool_calls],
             },
         }
     except Exception as e:
@@ -2828,11 +2763,10 @@ The results array must be the same length as the input list, in the same order. 
 def moderate_tasks(request: Request, req: ModerationRequest, user_id: str = Depends(_get_user_id)):
     if not req.tasks:
         return {"results": []}
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
+    client, has_llm = _get_llm_client()
+    if not has_llm:
         return {"results": [True] * len(req.tasks)}
     try:
-        client = anthropic.Anthropic(api_key=api_key)
         task_list = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(req.tasks))
         response = _chat(client,
             model="claude-haiku-4-5",
