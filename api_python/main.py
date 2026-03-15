@@ -72,8 +72,8 @@ _TWITTER_CLIENT_ID = os.environ.get("TWITTER_CLIENT_ID", "")
 _TWITTER_CLIENT_SECRET = os.environ.get("TWITTER_CLIENT_SECRET", "")
 _TWITTER_REDIRECT_URI = os.environ.get("TWITTER_REDIRECT_URI", "https://aquaria-ai-production.up.railway.app/twitter/callback")
 _TWITTER_API = "https://api.x.com/2"
-_TWITTER_UPLOAD_API = "https://upload.x.com/1.1"
-_TWITTER_SCOPES = "tweet.read tweet.write users.read offline.access"
+_TWITTER_UPLOAD_API = "https://upload.twitter.com/1.1"
+_TWITTER_SCOPES = "tweet.read tweet.write users.read media.write offline.access"
 
 def _get_jwks_client() -> PyJWKClient:
     global _jwks_client
