@@ -68,9 +68,9 @@ def _pop_oauth_state(state: str, provider: str) -> dict | None:
 # ---------------------------------------------------------------------------
 # Twitter/X integration
 # ---------------------------------------------------------------------------
-_TWITTER_CLIENT_ID = os.environ.get("TWITTER_CLIENT_ID", "").strip()
-_TWITTER_CLIENT_SECRET = os.environ.get("TWITTER_CLIENT_SECRET", "").strip()
-_TWITTER_REDIRECT_URI = os.environ.get("TWITTER_REDIRECT_URI", "https://aquaria-ai-production.up.railway.app/twitter/callback").strip()
+_TWITTER_CLIENT_ID = os.environ.get("TWITTER_CLIENT_ID", "")
+_TWITTER_CLIENT_SECRET = os.environ.get("TWITTER_CLIENT_SECRET", "")
+_TWITTER_REDIRECT_URI = os.environ.get("TWITTER_REDIRECT_URI", "https://aquaria-ai-production.up.railway.app/twitter/callback")
 _TWITTER_API = "https://api.x.com/2"
 _TWITTER_UPLOAD_API = "https://upload.x.com/1.1"
 _TWITTER_SCOPES = "tweet.read tweet.write users.read offline.access"
@@ -3567,9 +3567,10 @@ def twitter_auth_url(request: Request, user_id: str = Depends(_get_user_id)):
     return {"url": url}
 
 
-@app.get("/twitter/callback")
+@app.api_route("/twitter/callback", methods=["GET", "POST"])
 def twitter_callback(request: Request, code: str = "", state: str = "", error: str = ""):
     """Handle the OAuth2 callback from Twitter."""
+    print(f"[Twitter] callback hit: method={request.method} url={request.url}", flush=True)
     try:
         if error:
             return HTMLResponse(f"<html><body><h2>Authorization failed</h2><p>{error}</p>"
