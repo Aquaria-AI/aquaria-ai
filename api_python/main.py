@@ -3732,7 +3732,7 @@ def twitter_share(request: Request, req: TwitterShareRequest, user_id: str = Dep
     )
     if media_resp.status_code not in (200, 201):
         print(f"[Twitter] media upload failed: {media_resp.status_code} {media_resp.text}", flush=True)
-        raise HTTPException(status_code=400, detail="Failed to upload image to Twitter")
+        raise HTTPException(status_code=400, detail=f"Media upload {media_resp.status_code}: {media_resp.text[:300]}")
     media_json = media_resp.json()
     media_id = media_json.get("id", "") or media_json.get("media_id_string", "")
 
