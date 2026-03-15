@@ -3720,27 +3720,21 @@ def twitter_share(request: Request, req: TwitterShareRequest, user_id: str = Dep
         print(f"[Twitter] watermark failed (using original): {e}", flush=True)
         watermarked = image_bytes
 
-    # Upload media to Twitter (v1.1 media upload endpoint — still required)
-    # Twitter OAuth2 tokens work with v1.1 media upload
+    # Upload media via X API v2 (supports OAuth 2.0)
     media_resp = http_requests.post(
-        f"{_TWITTER_UPLOAD_API}/media/upload.json",
+        f"{_TWITTER_API}/media/upload",
         headers={"Authorization": f"Bearer {token}"},
-        files={"media_data": ("photo.jpg", watermarked, "image/jpeg")},
+        files={
+            "media": ("photo.jpg", watermarked, "image/jpeg"),
+        },
+        data={"media_category": "tweet_image"},
         timeout=60,
     )
-    if media_resp.status_code != 200:
-        # Try alternate upload method with media parameter
-        import base64 as b64mod
-        media_resp = http_requests.post(
-            f"{_TWITTER_UPLOAD_API}/media/upload.json",
-            headers={"Authorization": f"Bearer {token}"},
-            data={"media_data": b64mod.b64encode(watermarked).decode()},
-            timeout=60,
-        )
-    if media_resp.status_code != 200:
-        print(f"[Twitter] media upload failed: {media_resp.text}", flush=True)
+    if media_resp.status_code not in (200, 201):
+        print(f"[Twitter] media upload failed: {media_resp.status_code} {media_resp.text}", flush=True)
         raise HTTPException(status_code=400, detail="Failed to upload image to Twitter")
-    media_id = media_resp.json().get("media_id_string", "")
+    media_json = media_resp.json()
+    media_id = media_json.get("id", "") or media_json.get("media_id_string", "")
 
     # Create tweet with media
     tweet_text = req.text.strip()
