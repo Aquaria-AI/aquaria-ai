@@ -3557,67 +3557,74 @@ def twitter_auth_url(request: Request, user_id: str = Depends(_get_user_id)):
 @app.get("/twitter/callback")
 def twitter_callback(request: Request, code: str = "", state: str = "", error: str = ""):
     """Handle the OAuth2 callback from Twitter."""
-    if error:
-        return HTMLResponse(f"<html><body><h2>Authorization failed</h2><p>{error}</p>"
-                            f"<p>You can close this window.</p></body></html>")
-    auth_data = _twitter_auth_states.pop(state, None)
-    if not auth_data:
-        return HTMLResponse("<html><body><h2>Invalid or expired session</h2>"
-                            "<p>Please try linking Twitter again from the app.</p></body></html>")
-    user_id = auth_data["user_id"]
-    code_verifier = auth_data["code_verifier"]
+    try:
+        if error:
+            return HTMLResponse(f"<html><body><h2>Authorization failed</h2><p>{error}</p>"
+                                f"<p>You can close this window.</p></body></html>")
+        auth_data = _twitter_auth_states.pop(state, None)
+        if not auth_data:
+            return HTMLResponse("<html><body><h2>Invalid or expired session</h2>"
+                                "<p>Please try linking Twitter again from the app.</p></body></html>")
+        user_id = auth_data["user_id"]
+        code_verifier = auth_data["code_verifier"]
 
-    # Exchange code for tokens
-    import base64
-    creds = base64.b64encode(f"{_TWITTER_CLIENT_ID}:{_TWITTER_CLIENT_SECRET}".encode()).decode()
-    resp = http_requests.post("https://api.twitter.com/2/oauth2/token", data={
-        "grant_type": "authorization_code",
-        "code": code,
-        "redirect_uri": _TWITTER_REDIRECT_URI,
-        "client_id": _TWITTER_CLIENT_ID,
-        "code_verifier": code_verifier,
-    }, headers={
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Authorization": f"Basic {creds}",
-    }, timeout=15)
-    if resp.status_code != 200:
-        print(f"[Twitter] token exchange failed: {resp.text}", flush=True)
-        return HTMLResponse("<html><body><h2>Token exchange failed</h2>"
-                            "<p>Please try again.</p></body></html>")
-    tokens = resp.json()
-    access_token = tokens["access_token"]
-    refresh_token = tokens.get("refresh_token", "")
+        # Exchange code for tokens
+        import base64
+        creds = base64.b64encode(f"{_TWITTER_CLIENT_ID}:{_TWITTER_CLIENT_SECRET}".encode()).decode()
+        resp = http_requests.post("https://api.twitter.com/2/oauth2/token", data={
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": _TWITTER_REDIRECT_URI,
+            "client_id": _TWITTER_CLIENT_ID,
+            "code_verifier": code_verifier,
+        }, headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Authorization": f"Basic {creds}",
+        }, timeout=15)
+        if resp.status_code != 200:
+            print(f"[Twitter] token exchange failed: {resp.status_code} {resp.text}", flush=True)
+            return HTMLResponse(f"<html><body><h2>Token exchange failed</h2>"
+                                f"<p>{resp.status_code}: {resp.text}</p></body></html>")
+        tokens = resp.json()
+        access_token = tokens["access_token"]
+        refresh_token = tokens.get("refresh_token", "")
 
-    # Get Twitter user info
-    me = _twitter_api("GET", f"{_TWITTER_API}/users/me", token=access_token)
-    twitter_username = me.get("data", {}).get("username", "unknown") if me else "unknown"
-    twitter_id = me.get("data", {}).get("id", "") if me else ""
+        # Get Twitter user info
+        me = _twitter_api("GET", f"{_TWITTER_API}/users/me", token=access_token)
+        twitter_username = me.get("data", {}).get("username", "unknown") if me else "unknown"
+        twitter_id = me.get("data", {}).get("id", "") if me else ""
 
-    from datetime import timedelta
-    expires_at = (datetime.utcnow() + timedelta(seconds=tokens.get("expires_in", 7200))).isoformat() + "Z"
+        from datetime import timedelta
+        expires_at = (datetime.utcnow() + timedelta(seconds=tokens.get("expires_in", 7200))).isoformat() + "Z"
 
-    # Upsert into Supabase
-    _supabase_rest("POST", "twitter_accounts",
-                   params="on_conflict=user_id",
-                   body={
-                       "user_id": user_id,
-                       "twitter_id": twitter_id,
-                       "twitter_username": twitter_username,
-                       "access_token": access_token,
-                       "refresh_token": refresh_token,
-                       "token_expires_at": expires_at,
-                       "scopes": _TWITTER_SCOPES,
-                       "updated_at": datetime.utcnow().isoformat() + "Z",
-                   }, prefer="resolution=merge-duplicates,return=minimal")
+        # Upsert into Supabase
+        _supabase_rest("POST", "twitter_accounts",
+                       params="on_conflict=user_id",
+                       body={
+                           "user_id": user_id,
+                           "twitter_id": twitter_id,
+                           "twitter_username": twitter_username,
+                           "access_token": access_token,
+                           "refresh_token": refresh_token,
+                           "token_expires_at": expires_at,
+                           "scopes": _TWITTER_SCOPES,
+                           "updated_at": datetime.utcnow().isoformat() + "Z",
+                       }, prefer="resolution=merge-duplicates,return=minimal")
 
-    print(f"[Twitter] linked user {user_id} → @{twitter_username} ({twitter_id})", flush=True)
-    return HTMLResponse(
-        "<html><body style='font-family: system-ui; text-align: center; padding: 60px;'>"
-        "<h2>✅ Twitter linked!</h2>"
-        f"<p>Connected as <strong>@{twitter_username}</strong></p>"
-        "<p>You can close this window and return to Aquaria.</p>"
-        "</body></html>"
-    )
+        print(f"[Twitter] linked user {user_id} → @{twitter_username} ({twitter_id})", flush=True)
+        return HTMLResponse(
+            "<html><body style='font-family: system-ui; text-align: center; padding: 60px;'>"
+            "<h2>✅ Twitter linked!</h2>"
+            f"<p>Connected as <strong>@{twitter_username}</strong></p>"
+            "<p>You can close this window and return to Aquaria.</p>"
+            "</body></html>"
+        )
+    except Exception as e:
+        print(f"[Twitter] callback error: {e}", flush=True)
+        return HTMLResponse(
+            f"<html><body><h2>Error</h2><p>{e}</p>"
+            f"<p>Please try again.</p></body></html>"
+        )
 
 
 @app.get("/twitter/status")
