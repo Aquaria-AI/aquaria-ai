@@ -3500,6 +3500,34 @@ def _refresh_twitter_token(user_id: str) -> str:
 
 # --- Twitter OAuth Flow (PKCE) ---
 
+@app.get("/twitter/debug-config")
+def twitter_debug_config():
+    """Temporary debug endpoint — remove after testing."""
+    import hashlib, base64
+    code_verifier = secrets.token_urlsafe(64)
+    code_challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(code_verifier.encode()).digest()
+    ).decode().rstrip("=")
+    url = (
+        f"https://twitter.com/i/oauth2/authorize"
+        f"?response_type=code"
+        f"&client_id={_TWITTER_CLIENT_ID}"
+        f"&redirect_uri={urllib.request.quote(_TWITTER_REDIRECT_URI, safe='')}"
+        f"&scope={urllib.request.quote(_TWITTER_SCOPES, safe='')}"
+        f"&state=debug_test"
+        f"&code_challenge={code_challenge}"
+        f"&code_challenge_method=S256"
+    )
+    return {
+        "client_id_set": bool(_TWITTER_CLIENT_ID),
+        "client_id_first4": _TWITTER_CLIENT_ID[:4] if _TWITTER_CLIENT_ID else "",
+        "client_id_last4": _TWITTER_CLIENT_ID[-4:] if _TWITTER_CLIENT_ID else "",
+        "client_id_length": len(_TWITTER_CLIENT_ID),
+        "redirect_uri": _TWITTER_REDIRECT_URI,
+        "scopes": _TWITTER_SCOPES,
+        "generated_url": url,
+    }
+
 @app.get("/twitter/auth-url")
 @limiter.limit("10/minute")
 def twitter_auth_url(request: Request, user_id: str = Depends(_get_user_id)):
