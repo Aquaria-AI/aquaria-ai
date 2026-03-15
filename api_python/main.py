@@ -55,9 +55,9 @@ _discord_auth_states: dict[str, str] = {}  # state -> user_id
 # ---------------------------------------------------------------------------
 # Twitter/X integration
 # ---------------------------------------------------------------------------
-_TWITTER_CLIENT_ID = os.environ.get("TWITTER_CLIENT_ID", "")
-_TWITTER_CLIENT_SECRET = os.environ.get("TWITTER_CLIENT_SECRET", "")
-_TWITTER_REDIRECT_URI = os.environ.get("TWITTER_REDIRECT_URI", "https://aquaria-ai-production.up.railway.app/twitter/callback")
+_TWITTER_CLIENT_ID = os.environ.get("TWITTER_CLIENT_ID", "").strip()
+_TWITTER_CLIENT_SECRET = os.environ.get("TWITTER_CLIENT_SECRET", "").strip()
+_TWITTER_REDIRECT_URI = os.environ.get("TWITTER_REDIRECT_URI", "https://aquaria-ai-production.up.railway.app/twitter/callback").strip()
 _TWITTER_API = "https://api.twitter.com/2"
 _TWITTER_UPLOAD_API = "https://upload.twitter.com/1.1"
 _TWITTER_SCOPES = "tweet.read tweet.write users.read offline.access"
