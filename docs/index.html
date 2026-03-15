@@ -266,26 +266,71 @@
   </div>
 
   <script>
+  var _SB = 'https://jdiwsvealnrzdxofomvz.supabase.co';
+  var _AK = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpkaXdzdmVhbG5yemR4b2ZvbXZ6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI4ODgyODgsImV4cCI6MjA4ODQ2NDI4OH0.NzNg9zyrqjzGNbjJRZN6oApu3e4xZY75Vq-SfocvGLk';
+
   function submitContact(e) {
     e.preventDefault();
     var email = document.getElementById('contact-email').value;
     var message = document.getElementById('contact-message').value;
-    var subject = encodeURIComponent('Aquaria AI Contact from ' + email);
-    var body = encodeURIComponent('From: ' + email + '\n\n' + message);
-    window.location.href = 'mailto:info@aquaria-ai.com?subject=' + subject + '&body=' + body;
-    document.getElementById('contact-form').style.display = 'none';
-    document.getElementById('contact-success').style.display = 'block';
+    var btn = e.target.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    btn.textContent = 'Sending...';
+    fetch(_SB + '/rest/v1/contact_submissions', {
+      method: 'POST',
+      headers: {
+        'apikey': _AK,
+        'Authorization': 'Bearer ' + _AK,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal'
+      },
+      body: JSON.stringify({ email: email, message: message })
+    }).then(function(r) {
+      if (r.ok) {
+        document.getElementById('contact-form').style.display = 'none';
+        document.getElementById('contact-success').style.display = 'block';
+      } else {
+        btn.disabled = false;
+        btn.textContent = 'Send Message';
+        alert('Something went wrong. Please try again.');
+      }
+    }).catch(function() {
+      btn.disabled = false;
+      btn.textContent = 'Send Message';
+      alert('Something went wrong. Please try again.');
+    });
     return false;
   }
 
   function submitBeta(e) {
     e.preventDefault();
     var email = document.getElementById('beta-email').value;
-    var subject = encodeURIComponent('Android Beta Signup');
-    var body = encodeURIComponent('Please add me to the Aquaria Android beta list.\n\nEmail: ' + email);
-    window.location.href = 'mailto:info@aquaria-ai.com?subject=' + subject + '&body=' + body;
-    document.getElementById('beta-form').style.display = 'none';
-    document.getElementById('beta-success').style.display = 'block';
+    var btn = e.target.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    btn.textContent = 'Signing up...';
+    fetch(_SB + '/rest/v1/beta_signups', {
+      method: 'POST',
+      headers: {
+        'apikey': _AK,
+        'Authorization': 'Bearer ' + _AK,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal'
+      },
+      body: JSON.stringify({ email: email })
+    }).then(function(r) {
+      if (r.ok) {
+        document.getElementById('beta-form').style.display = 'none';
+        document.getElementById('beta-success').style.display = 'block';
+      } else {
+        btn.disabled = false;
+        btn.textContent = 'Sign Up for Beta';
+        alert('Something went wrong. Please try again.');
+      }
+    }).catch(function() {
+      btn.disabled = false;
+      btn.textContent = 'Sign Up for Beta';
+      alert('Something went wrong. Please try again.');
+    });
     return false;
   }
   </script>
