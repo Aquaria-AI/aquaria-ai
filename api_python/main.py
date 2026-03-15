@@ -71,8 +71,8 @@ def _pop_oauth_state(state: str, provider: str) -> dict | None:
 _TWITTER_CLIENT_ID = os.environ.get("TWITTER_CLIENT_ID", "").strip()
 _TWITTER_CLIENT_SECRET = os.environ.get("TWITTER_CLIENT_SECRET", "").strip()
 _TWITTER_REDIRECT_URI = os.environ.get("TWITTER_REDIRECT_URI", "https://aquaria-ai-production.up.railway.app/twitter/callback").strip()
-_TWITTER_API = "https://api.twitter.com/2"
-_TWITTER_UPLOAD_API = "https://upload.twitter.com/1.1"
+_TWITTER_API = "https://api.x.com/2"
+_TWITTER_UPLOAD_API = "https://upload.x.com/1.1"
 _TWITTER_SCOPES = "tweet.read tweet.write users.read offline.access"
 
 def _get_jwks_client() -> PyJWKClient:
@@ -3486,7 +3486,7 @@ def _refresh_twitter_token(user_id: str) -> str:
     # Refresh
     import base64
     creds = base64.b64encode(f"{_TWITTER_CLIENT_ID}:{_TWITTER_CLIENT_SECRET}".encode()).decode()
-    resp = http_requests.post("https://api.twitter.com/2/oauth2/token", data={
+    resp = http_requests.post("https://api.x.com/2/oauth2/token", data={
         "grant_type": "refresh_token",
         "refresh_token": row["refresh_token"],
         "client_id": _TWITTER_CLIENT_ID,
@@ -3522,7 +3522,7 @@ def twitter_debug_config():
         hashlib.sha256(code_verifier.encode()).digest()
     ).decode().rstrip("=")
     url = (
-        f"https://twitter.com/i/oauth2/authorize"
+        f"https://x.com/i/oauth2/authorize"
         f"?response_type=code"
         f"&client_id={_TWITTER_CLIENT_ID}"
         f"&redirect_uri={urllib.request.quote(_TWITTER_REDIRECT_URI, safe='')}"
@@ -3555,7 +3555,7 @@ def twitter_auth_url(request: Request, user_id: str = Depends(_get_user_id)):
     ).decode().rstrip("=")
     _save_oauth_state(state, "twitter", user_id, code_verifier)
     url = (
-        f"https://twitter.com/i/oauth2/authorize"
+        f"https://x.com/i/oauth2/authorize"
         f"?response_type=code"
         f"&client_id={_TWITTER_CLIENT_ID}"
         f"&redirect_uri={urllib.request.quote(_TWITTER_REDIRECT_URI, safe='')}"
@@ -3584,7 +3584,7 @@ def twitter_callback(request: Request, code: str = "", state: str = "", error: s
         # Exchange code for tokens
         import base64
         creds = base64.b64encode(f"{_TWITTER_CLIENT_ID}:{_TWITTER_CLIENT_SECRET}".encode()).decode()
-        resp = http_requests.post("https://api.twitter.com/2/oauth2/token", data={
+        resp = http_requests.post("https://api.x.com/2/oauth2/token", data={
             "grant_type": "authorization_code",
             "code": code,
             "redirect_uri": _TWITTER_REDIRECT_URI,
@@ -3664,7 +3664,7 @@ def twitter_unlink(request: Request, user_id: str = Depends(_get_user_id)):
         if rows and rows[0].get("access_token"):
             import base64
             creds = base64.b64encode(f"{_TWITTER_CLIENT_ID}:{_TWITTER_CLIENT_SECRET}".encode()).decode()
-            http_requests.post("https://api.twitter.com/2/oauth2/token/revoke", data={
+            http_requests.post("https://api.x.com/2/oauth2/token/revoke", data={
                 "token": rows[0]["access_token"],
                 "client_id": _TWITTER_CLIENT_ID,
             }, headers={
