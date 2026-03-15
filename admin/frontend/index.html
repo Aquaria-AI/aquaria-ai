@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Aquaria Admin Console</title>
+  <link rel="stylesheet" href="/assets/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <!-- Login overlay -->
+  <div id="login-overlay">
+    <div class="login-box">
+      <h1>Aquaria Admin</h1>
+      <input type="password" id="login-password" placeholder="Admin password" autofocus>
+      <button id="login-btn">Sign In</button>
+      <p id="login-error" class="error"></p>
+    </div>
+  </div>
+
+  <!-- Main app (hidden until login) -->
+  <div id="app" class="hidden">
+    <nav class="sidebar">
+      <div class="sidebar-header">
+        <h2>Aquaria</h2>
+        <span class="subtitle">Admin Console</span>
+      </div>
+      <ul>
+        <li><a href="#" data-section="dashboard" class="nav-link active">Dashboard</a></li>
+        <li><a href="#" data-section="flagged" class="nav-link">Flagged Content <span id="flagged-badge" class="nav-badge hidden"></span></a></li>
+        <li><a href="#" data-section="feedback" class="nav-link">Feedback <span id="fb-badge" class="nav-badge hidden"></span></a></li>
+        <li><a href="#" data-section="activity" class="nav-link">Activity</a></li>
+        <li><a href="#" data-section="metrics" class="nav-link">Feature Metrics</a></li>
+        <li><a href="#" data-section="usage" class="nav-link">LLM API Calls</a></li>
+        <li><a href="#" data-section="security" class="nav-link">Security</a></li>
+        <li><a href="#" data-section="signups" class="nav-link">Beta Signups <span id="signups-badge" class="nav-badge hidden"></span></a></li>
+        <li><a href="#" data-section="contacts" class="nav-link">Contact Messages <span id="contacts-badge" class="nav-badge hidden"></span></a></li>
+      </ul>
+      <div class="sidebar-footer">
+        <button id="logout-btn">Logout</button>
+      </div>
+    </nav>
+
+    <main class="content">
+      <!-- DASHBOARD -->
+      <section id="sec-dashboard" class="section">
+        <h1>Dashboard</h1>
+        <div class="stat-grid" id="dash-stats"></div>
+        <div class="chart-wrap">
+          <h3>Daily Active Users — Last 30 Days</h3>
+          <canvas id="dash-dau-chart"></canvas>
+        </div>
+        <div class="chart-wrap">
+          <h3>Activity — Last 30 Days</h3>
+          <canvas id="dash-chart"></canvas>
+        </div>
+      </section>
+
+      <!-- FLAGGED CONTENT -->
+      <section id="sec-flagged" class="section hidden">
+        <h1>Flagged Content</h1>
+        <div id="flagged-list" class="card-list"></div>
+        <p id="flagged-empty" class="empty-msg hidden">No flagged posts.</p>
+      </section>
+
+      <!-- FEEDBACK / TICKETS -->
+      <section id="sec-feedback" class="section hidden">
+        <h1>Feedback Inbox</h1>
+        <div class="filter-bar">
+          <select id="fb-filter">
+            <option value="all">All</option>
+            <option value="new" selected>New</option>
+            <option value="in_progress">In Progress</option>
+            <option value="resolved">Resolved</option>
+          </select>
+        </div>
+        <table id="fb-table" class="data-table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Date</th>
+              <th>User</th>
+              <th>Message</th>
+              <th>Status</th>
+              <th>Notes</th>
+              <th>Attachment</th>
+            </tr>
+          </thead>
+          <tbody id="fb-body"></tbody>
+        </table>
+        <p id="fb-empty" class="empty-msg hidden">No feedback matching filter.</p>
+      </section>
+
+      <!-- ACTIVITY REPORTS -->
+      <section id="sec-activity" class="section hidden">
+        <h1>Activity Reports</h1>
+        <div class="chart-wrap">
+          <h3>Daily Active Users</h3>
+          <canvas id="chart-dau"></canvas>
+        </div>
+        <div class="chart-row">
+          <div class="chart-wrap half">
+            <h3>Logs Created</h3>
+            <canvas id="chart-logs"></canvas>
+          </div>
+          <div class="chart-wrap half">
+            <h3>New Users</h3>
+            <canvas id="chart-users"></canvas>
+          </div>
+        </div>
+        <div class="chart-row">
+          <div class="chart-wrap half">
+            <h3>Tanks Created</h3>
+            <canvas id="chart-tanks"></canvas>
+          </div>
+          <div class="chart-wrap half">
+            <h3>Community Posts</h3>
+            <canvas id="chart-posts"></canvas>
+          </div>
+        </div>
+      </section>
+
+      <!-- FEATURE METRICS -->
+      <section id="sec-metrics" class="section hidden">
+        <h1>Feature Metrics</h1>
+
+        <h3>Tasks</h3>
+        <div class="stat-grid" id="metrics-tasks"></div>
+        <div class="chart-row">
+          <div class="chart-wrap half"><h3>Task Source</h3><canvas id="chart-task-source"></canvas></div>
+          <div class="chart-wrap half"><h3>Task Outcome</h3><canvas id="chart-task-outcome"></canvas></div>
+        </div>
+
+        <h3 style="margin-top:2rem">AI</h3>
+        <div class="stat-grid" id="metrics-ai"></div>
+
+        <h3 style="margin-top:2rem">Community</h3>
+        <div class="stat-grid" id="metrics-community"></div>
+        <div class="chart-wrap" style="max-width:400px"><h3>Emoji Breakdown</h3><canvas id="chart-emoji"></canvas></div>
+
+        <h3 style="margin-top:2rem">Tank Setup</h3>
+        <div class="stat-grid" id="metrics-tank-setup"></div>
+        <div class="chart-row">
+          <div class="chart-wrap half"><h3>Inhabitant Types</h3><canvas id="chart-inhab-types"></canvas></div>
+          <div class="chart-wrap half"><h3>Tank Completeness</h3><canvas id="chart-tank-completeness"></canvas></div>
+        </div>
+
+        <h3 style="margin-top:2rem">Measurements (Last 30 Days)</h3>
+        <div class="stat-grid" id="metrics-measurements"></div>
+        <div class="chart-wrap"><h3>Parameter Frequency</h3><canvas id="chart-params"></canvas></div>
+
+        <h3 style="margin-top:2rem">Notes &amp; Photos</h3>
+        <div class="stat-grid" id="metrics-notes-photos"></div>
+      </section>
+
+      <!-- API USAGE -->
+      <section id="sec-usage" class="section hidden">
+        <h1>LLM API Calls</h1>
+        <div class="stat-grid" id="usage-stats"></div>
+        <div class="chart-wrap">
+          <h3>Daily Cost (USD)</h3>
+          <canvas id="chart-cost"></canvas>
+        </div>
+        <div class="chart-row">
+          <div class="chart-wrap half">
+            <h3>Daily API Calls</h3>
+            <canvas id="chart-calls"></canvas>
+          </div>
+          <div class="chart-wrap half">
+            <h3>Daily Tokens</h3>
+            <canvas id="chart-tokens"></canvas>
+          </div>
+        </div>
+        <div class="chart-wrap">
+          <h3>Cost by Model</h3>
+          <canvas id="chart-model-cost"></canvas>
+        </div>
+      </section>
+
+      <!-- SECURITY MONITOR -->
+      <section id="sec-security" class="section hidden">
+        <h1>Security Monitor</h1>
+        <h3>User Risk Assessment</h3>
+        <table class="data-table" id="security-table">
+          <thead>
+            <tr>
+              <th>User</th>
+              <th>Posts</th>
+              <th>Hidden</th>
+              <th>Flags Recv</th>
+              <th>Flags Cast</th>
+              <th>Blocked By</th>
+              <th>Risk Score</th>
+            </tr>
+          </thead>
+          <tbody id="security-body"></tbody>
+        </table>
+        <h3 style="margin-top:2rem">Block Relationships</h3>
+        <table class="data-table" id="blocked-table">
+          <thead>
+            <tr><th>Blocker</th><th>Blocked User</th><th>Date</th></tr>
+          </thead>
+          <tbody id="blocked-body"></tbody>
+        </table>
+      </section>
+
+      <!-- BETA SIGNUPS -->
+      <section id="sec-signups" class="section hidden">
+        <h1>Beta Signups</h1>
+        <div class="stat-grid" id="signups-stats"></div>
+        <table class="data-table">
+          <thead>
+            <tr><th>#</th><th>Email</th><th>Date</th></tr>
+          </thead>
+          <tbody id="signups-body"></tbody>
+        </table>
+        <p id="signups-empty" class="empty-msg hidden">No signups yet.</p>
+      </section>
+
+      <!-- CONTACT SUBMISSIONS -->
+      <section id="sec-contacts" class="section hidden">
+        <h1>Contact Messages</h1>
+        <div class="stat-grid" id="contacts-stats"></div>
+        <table class="data-table">
+          <thead>
+            <tr><th>#</th><th>Email</th><th>Message</th><th>Date</th></tr>
+          </thead>
+          <tbody id="contacts-body"></tbody>
+        </table>
+        <p id="contacts-empty" class="empty-msg hidden">No messages yet.</p>
+      </section>
+    </main>
+  </div>
+
+  <script src="/assets/app.js"></script>
+</body>
+</html>
